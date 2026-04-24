@@ -20,3 +20,17 @@
   - httpx.ASGITransport is the recommended way to test FastAPI apps with httpx >=0.28
   - mypy strict mode requires explicit return type annotations on all functions
 ---
+
+## 2026-04-24 18:19 - US-002
+- Created config.py (APP_DATA_DIR, DATABASE_PATH, SPACES_DIR)
+- Created db.py with full SQLite schema: spaces, papers, passages, knowledge_cards, notes, app_state
+- All space-scoped tables (papers, passages, knowledge_cards, notes) include space_id with FK constraint
+- `init_db()` is idempotent (uses CREATE TABLE IF NOT EXISTS)
+- get_connection() enables foreign keys and sets row_factory
+- 5 tests: table creation, idempotency, FK enforcement, space_id presence, app_state key-value
+- **Learnings for future iterations:**
+  - Use `tempfile.TemporaryDirectory` for isolated test databases
+  - Foreign keys must be enabled per-connection with `PRAGMA foreign_keys = ON`
+  - `sqlite3.Row` row_factory allows dict-style column access by name
+  - Use Path objects instead of raw strings for database paths
+---

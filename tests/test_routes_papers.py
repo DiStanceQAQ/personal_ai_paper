@@ -176,6 +176,83 @@ async def test_list_papers(client: AsyncClient) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) == 2
-    # Verify both have space_id
     for paper in data:
         assert "space_id" in paper
+
+
+@pytest.mark.asyncio
+async def test_get_paper(client: AsyncClient) -> None:
+    """Test getting a single paper by ID."""
+    await _create_and_activate_space(client)
+
+    resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+    paper_id = resp.json()["id"]
+
+    resp = await client.get(f"/api/papers/{paper_id}")
+    assert resp.status_code == 200
+    assert resp.json()["id"] == paper_id
+
+
+@pytest.mark.asyncio
+async def test_update_paper_metadata(client: AsyncClient) -> None:
+    """Test updating paper metadata fields."""
+    await _create_and_activate_space(client)
+
+    resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+    paper_id = resp.json()["id"]
+
+    resp = await client.patch(
+        f"/api/papers/{paper_id}",
+        json={
+            "title": "Test Paper Title",
+            "authors": "Jane Doe, John Smith",
+            "year": 2024,
+            "doi": "10.1234/test.1",
+            "abstract": "This is a test abstract.",
+            "relation_to_idea": "supports",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["title"] == "Test Paper Title"
+    assert data["authors"] == "Jane Doe, John Smith"
+    assert data["year"] == 2024
+    assert data["doi"] == "10.1234/test.1"
+    assert data["abstract"] == "This is a test abstract."
+    assert data["relation_to_idea"] == "supports"
+
+
+@pytest.mark.asyncio
+async def test_update_paper_partial(client: AsyncClient) -> None:
+    """Test partial metadata update preserves other fields."""
+    await _create_and_activate_space(client)
+
+    resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+    paper_id = resp.json()["id"]
+
+    # Set title first
+    await client.patch(f"/api/papers/{paper_id}", json={"title": "Initial Title"})
+    # Then update only authors
+    resp = await client.patch(
+        f"/api/papers/{paper_id}", json={"authors": "New Author"}
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["title"] == "Initial Title"  # preserved
+    assert data["authors"] == "New Author"
+
+
+@pytest.mark.asyncio
+async def test_get_nonexistent_paper_returns_404(client: AsyncClient) -> None:
+    """Test that requesting a nonexistent paper returns 404."""
+    resp = await client.get("/api/papers/nonexistent-id")
+    assert resp.status_code == 404

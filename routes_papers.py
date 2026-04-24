@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, Body, HTTPException, UploadFile
 
 from config import SPACES_DIR
 from db import get_connection
@@ -126,3 +126,77 @@ async def list_papers(space_id: str | None = None) -> list[dict[str, Any]]:
         return [_paper_row_to_dict(r) for r in rows]
     finally:
         conn.close()
+
+
+@router.get("/{paper_id}")
+async def get_paper(paper_id: str) -> dict[str, Any]:
+    """Get a single paper by ID."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM papers WHERE id = ?", (paper_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Paper not found")
+        return _paper_row_to_dict(row)
+    finally:
+        conn.close()
+
+
+@router.patch("/{paper_id}")
+async def update_paper(
+    paper_id: str,
+    title: str | None = Body(None),
+    authors: str | None = Body(None),
+    year: int | None = Body(None),
+    doi: str | None = Body(None),
+    arxiv_id: str | None = Body(None),
+    pubmed_id: str | None = Body(None),
+    venue: str | None = Body(None),
+    abstract: str | None = Body(None),
+    citation: str | None = Body(None),
+    user_tags: str | None = Body(None),
+    relation_to_idea: str | None = Body(None),
+) -> dict[str, Any]:
+    """Update paper metadata fields."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM papers WHERE id = ?", (paper_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Paper not found")
+
+        field_map: dict[str, str | int | None] = {
+            "title": title,
+            "authors": authors,
+            "year": year,
+            "doi": doi,
+            "arxiv_id": arxiv_id,
+            "pubmed_id": pubmed_id,
+            "venue": venue,
+            "abstract": abstract,
+            "citation": citation,
+            "user_tags": user_tags,
+            "relation_to_idea": relation_to_idea,
+        }
+
+        updates: list[str] = []
+        params: list[str | int] = []
+
+        for field, value in field_map.items():
+            if value is not None:
+                updates.append(f"{field} = ?")
+                params.append(value)
+
+        if updates:
+            params.append(paper_id)
+            conn.execute(
+                f"UPDATE papers SET {', '.join(updates)} WHERE id = ?",
+                params,
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+    return await get_paper(paper_id)

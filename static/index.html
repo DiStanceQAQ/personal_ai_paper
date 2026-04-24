@@ -260,6 +260,70 @@
         <ul class="space-list" id="papersList">
             <li class="empty-state"><p>No papers imported yet. Upload a PDF above.</p></li>
         </ul>
+        <!-- Paper Detail / Edit -->
+        <div id="paperDetail" style="display:none; background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:20px; margin-top:12px;">
+            <h2 id="paperDetailTitle" style="margin-bottom:16px;">Paper Detail</h2>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                <div class="form-group">
+                    <label>Title</label>
+                    <input type="text" id="editTitle">
+                </div>
+                <div class="form-group">
+                    <label>Authors</label>
+                    <input type="text" id="editAuthors" placeholder="e.g., Jane Doe, John Smith">
+                </div>
+                <div class="form-group">
+                    <label>Year</label>
+                    <input type="number" id="editYear" placeholder="2024">
+                </div>
+                <div class="form-group">
+                    <label>DOI</label>
+                    <input type="text" id="editDoi" placeholder="10.xxx/xxx">
+                </div>
+                <div class="form-group">
+                    <label>arXiv ID</label>
+                    <input type="text" id="editArxiv" placeholder="2301.xxxxx">
+                </div>
+                <div class="form-group">
+                    <label>PubMed ID</label>
+                    <input type="text" id="editPubmed" placeholder="12345678">
+                </div>
+            </div>
+            <div class="form-group" style="margin-top:12px;">
+                <label>Venue / Journal</label>
+                <input type="text" id="editVenue" placeholder="Conference or journal name">
+            </div>
+            <div class="form-group" style="margin-top:12px;">
+                <label>Abstract</label>
+                <textarea id="editAbstract" rows="3" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:6px; font-family:inherit; font-size:0.9rem;"></textarea>
+            </div>
+            <div class="form-group" style="margin-top:12px;">
+                <label>Citation / BibTeX</label>
+                <textarea id="editCitation" rows="2" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:6px; font-family:monospace; font-size:0.85rem;" placeholder="Paste BibTeX entry here"></textarea>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px;">
+                <div class="form-group">
+                    <label>User Tags (comma-separated)</label>
+                    <input type="text" id="editTags" placeholder="important, survey">
+                </div>
+                <div class="form-group">
+                    <label>Relation to Idea</label>
+                    <select id="editRelation" style="padding:8px; border:1px solid #ccc; border-radius:6px; font-size:0.9rem;">
+                        <option value="unclassified">Unclassified</option>
+                        <option value="supports">Supports</option>
+                        <option value="refutes">Refutes</option>
+                        <option value="inspires">Inspires</option>
+                        <option value="baseline">Baseline</option>
+                        <option value="method_source">Method Source</option>
+                        <option value="background">Background</option>
+                        <option value="result_comparison">Result Comparison</option>
+                    </select>
+                </div>
+            </div>
+            <div style="margin-top:16px; display:flex; gap:8px;">
+                <button class="btn-primary" onclick="savePaperMeta()">Save Metadata</button>
+            </div>
+        </div>
     </div>
 
     <!-- Space List -->
@@ -505,12 +569,15 @@
                 const list = document.getElementById('papersList');
                 if (papers.length === 0) {
                     list.innerHTML = '<li class="empty-state"><p>No papers imported yet. Upload a PDF above.</p></li>';
+                    document.getElementById('paperDetail').style.display = 'none';
                 } else {
                     list.innerHTML = papers.map(p => `
-                        <li class="paper-item">
+                        <li class="paper-item" onclick="viewPaper('${p.id}')" style="cursor:pointer;">
                             <div class="paper-info">
-                                <div class="paper-title">${esc(p.title || p.file_path.split('/').pop())}</div>
+                                <div class="paper-title">${esc(p.title || '(Untitled)')}</div>
                                 <div class="paper-meta">
+                                    ${p.authors ? esc(p.authors) + ' · ' : ''}
+                                    ${p.year || ''}
                                     Imported: ${p.imported_at}
                                     <span class="parse-badge parse-${p.parse_status}">${p.parse_status}</span>
                                 </div>
@@ -519,6 +586,64 @@
                     `).join('');
                 }
             } catch (e) { /* silently ignore */ }
+        }
+
+        // --- Paper Detail & Edit ---
+        let currentPaper = null;
+
+        async function viewPaper(paperId) {
+            try {
+                const res = await fetch('/api/papers/' + paperId);
+                if (!res.ok) return;
+                currentPaper = await res.json();
+                const detail = document.getElementById('paperDetail');
+                document.getElementById('paperDetailTitle').textContent = currentPaper.title || '(Untitled)';
+                document.getElementById('editTitle').value = currentPaper.title || '';
+                document.getElementById('editAuthors').value = currentPaper.authors || '';
+                document.getElementById('editYear').value = currentPaper.year || '';
+                document.getElementById('editDoi').value = currentPaper.doi || '';
+                document.getElementById('editArxiv').value = currentPaper.arxiv_id || '';
+                document.getElementById('editPubmed').value = currentPaper.pubmed_id || '';
+                document.getElementById('editVenue').value = currentPaper.venue || '';
+                document.getElementById('editAbstract').value = currentPaper.abstract || '';
+                document.getElementById('editCitation').value = currentPaper.citation || '';
+                document.getElementById('editTags').value = currentPaper.user_tags || '';
+                document.getElementById('editRelation').value = currentPaper.relation_to_idea || 'unclassified';
+                detail.style.display = 'block';
+                detail.scrollIntoView({ behavior: 'smooth' });
+            } catch (e) { showError(e.message); }
+        }
+
+        async function savePaperMeta() {
+            if (!currentPaper) return;
+            try {
+                const body = {
+                    title: document.getElementById('editTitle').value,
+                    authors: document.getElementById('editAuthors').value,
+                    year: parseInt(document.getElementById('editYear').value) || null,
+                    doi: document.getElementById('editDoi').value,
+                    arxiv_id: document.getElementById('editArxiv').value,
+                    pubmed_id: document.getElementById('editPubmed').value,
+                    venue: document.getElementById('editVenue').value,
+                    abstract: document.getElementById('editAbstract').value,
+                    citation: document.getElementById('editCitation').value,
+                    user_tags: document.getElementById('editTags').value,
+                    relation_to_idea: document.getElementById('editRelation').value,
+                };
+                const res = await fetch('/api/papers/' + currentPaper.id, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || 'Save failed');
+                }
+                currentPaper = await res.json();
+                document.getElementById('paperDetailTitle').textContent = currentPaper.title || '(Untitled)';
+                await loadPapers();
+                showError(''); // clear any previous error
+            } catch (e) { showError(e.message); }
         }
 
         // --- Update loadSpaces to show/hide papers section ---

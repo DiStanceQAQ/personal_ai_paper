@@ -171,6 +171,48 @@
             display: none;
             z-index: 1000;
         }
+
+        /* Upload Zone */
+        .upload-section { margin-bottom: 24px; }
+        .upload-zone {
+            border: 2px dashed #90caf9;
+            border-radius: 8px;
+            padding: 24px;
+            text-align: center;
+            background: #f8fbff;
+            color: #555;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .upload-zone:hover, .upload-zone.dragover { border-color: #1976d2; background: #e3f2fd; }
+        .upload-zone input[type="file"] { display: none; }
+
+        /* Paper List */
+        .paper-item {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .paper-info { flex: 1; min-width: 0; }
+        .paper-title { font-weight: 600; font-size: 0.9rem; }
+        .paper-meta { font-size: 0.78rem; color: #999; margin-top: 2px; }
+        .parse-badge {
+            font-size: 0.7rem;
+            padding: 2px 8px;
+            border-radius: 8px;
+            font-weight: 600;
+        }
+        .parse-pending { background: #fff3e0; color: #e65100; }
+        .parse-parsed { background: #e8f5e9; color: #2e7d32; }
+        .parse-error { background: #ffebee; color: #c62828; }
+
+        #papersSection { display: none; }
     </style>
 </head>
 <body>
@@ -202,6 +244,22 @@
             </div>
             <button class="btn-primary" onclick="createSpace()">+ Create</button>
         </div>
+    </div>
+
+    <!-- Papers Section (visible when space is active) -->
+    <div id="papersSection">
+        <div class="upload-section">
+            <h2>Import Papers</h2>
+            <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+                <p><strong>Drop PDF here</strong> or click to browse</p>
+                <p style="font-size:0.85rem;color:#999;margin-top:4px;">Only PDF files accepted</p>
+                <input type="file" id="fileInput" accept=".pdf,application/pdf" onchange="handleFileSelect(event)">
+            </div>
+        </div>
+        <h2>Papers</h2>
+        <ul class="space-list" id="papersList">
+            <li class="empty-state"><p>No papers imported yet. Upload a PDF above.</p></li>
+        </ul>
     </div>
 
     <!-- Space List -->
@@ -404,6 +462,78 @@
                 await loadSpaces();
             } catch (e) { showError(e.message); }
         }
+
+        // --- Drag and Drop ---
+        const uploadZone = document.getElementById('uploadZone');
+        uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+        uploadZone.addEventListener('dragleave', () => { uploadZone.classList.remove('dragover'); });
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) uploadFile(files[0]);
+        });
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) uploadFile(file);
+        }
+
+        async function uploadFile(file) {
+            if (!file.name.toLowerCase().endsWith('.pdf')) {
+                showError('Only PDF files are accepted.');
+                return;
+            }
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+                const res = await fetch('/api/papers/upload', { method: 'POST', body: formData });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || 'Upload failed');
+                }
+                await loadPapers();
+            } catch (e) { showError(e.message); }
+        }
+
+        // --- Paper List ---
+        async function loadPapers() {
+            try {
+                const res = await fetch('/api/papers');
+                if (!res.ok) return;
+                const papers = await res.json();
+                const list = document.getElementById('papersList');
+                if (papers.length === 0) {
+                    list.innerHTML = '<li class="empty-state"><p>No papers imported yet. Upload a PDF above.</p></li>';
+                } else {
+                    list.innerHTML = papers.map(p => `
+                        <li class="paper-item">
+                            <div class="paper-info">
+                                <div class="paper-title">${esc(p.title || p.file_path.split('/').pop())}</div>
+                                <div class="paper-meta">
+                                    Imported: ${p.imported_at}
+                                    <span class="parse-badge parse-${p.parse_status}">${p.parse_status}</span>
+                                </div>
+                            </div>
+                        </li>
+                    `).join('');
+                }
+            } catch (e) { /* silently ignore */ }
+        }
+
+        // --- Update loadSpaces to show/hide papers section ---
+        const originalLoadSpaces = loadSpaces;
+        loadSpaces = async function() {
+            await originalLoadSpaces();
+            // Show papers section only if there's an active space
+            try {
+                const aRes = await fetch('/api/spaces/active');
+                document.getElementById('papersSection').style.display = aRes.ok ? 'block' : 'none';
+                if (aRes.ok) await loadPapers();
+            } catch (e) {
+                document.getElementById('papersSection').style.display = 'none';
+            }
+        };
 
         // Initial load
         loadSpaces();

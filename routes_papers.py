@@ -1,0 +1,128 @@
+"""API routes for importing and managing papers."""
+
+import hashlib
+import uuid
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, UploadFile
+
+from config import SPACES_DIR
+from db import get_connection
+
+router = APIRouter(prefix="/api/papers", tags=["papers"])
+
+ACTIVE_SPACE_KEY = "active_space"
+
+
+def _get_active_space_id() -> str:
+    """Get the currently active space ID, or raise 400."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT value FROM app_state WHERE key = ?",
+            (ACTIVE_SPACE_KEY,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(
+                status_code=400,
+                detail="No active space selected. Please open a space first.",
+            )
+        return str(row["value"])
+    finally:
+        conn.close()
+
+
+def _paper_row_to_dict(row: Any) -> dict[str, Any]:
+    return dict(row)
+
+
+def _compute_sha256(file_path: Path) -> str:
+    """Compute SHA-256 hash of a file."""
+    sha256 = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+
+def _papers_dir(space_id: str) -> Path:
+    """Get the papers directory for a space, creating it if needed."""
+    p = SPACES_DIR / space_id / "papers"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+@router.post("/upload")
+async def upload_paper(file: UploadFile) -> dict[str, Any]:
+    """Upload a PDF paper to the active space."""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(
+            status_code=400, detail="Only PDF files are accepted"
+        )
+
+    space_id = _get_active_space_id()
+
+    # Read file content
+    content = await file.read()
+
+    # Save to temp file first to compute hash
+    paper_id = str(uuid.uuid4())
+    papers_dir = _papers_dir(space_id)
+    dest_path = papers_dir / f"{paper_id}.pdf"
+
+    with open(dest_path, "wb") as f:
+        f.write(content)
+
+    file_hash = _compute_sha256(dest_path)
+
+    # Check for duplicate by hash in the same space
+    conn = get_connection()
+    try:
+        existing = conn.execute(
+            "SELECT id, file_path FROM papers WHERE space_id = ? AND file_hash = ?",
+            (space_id, file_hash),
+        ).fetchone()
+        if existing is not None:
+            # Remove the just-saved duplicate file
+            dest_path.unlink()
+            raise HTTPException(
+                status_code=409,
+                detail=f"Duplicate PDF detected (paper id: {existing['id']}). "
+                       "This PDF has already been imported in this space.",
+            )
+
+        conn.execute(
+            """INSERT INTO papers (id, space_id, file_path, file_hash, parse_status)
+               VALUES (?, ?, ?, ?, 'pending')""",
+            (paper_id, space_id, str(dest_path), file_hash),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM papers WHERE id = ?", (paper_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=500, detail="Failed to create paper record")
+        result = _paper_row_to_dict(row)
+    finally:
+        conn.close()
+
+    return result
+
+
+@router.get("")
+async def list_papers(space_id: str | None = None) -> list[dict[str, Any]]:
+    """List papers in a space. Defaults to active space."""
+    if space_id is None:
+        space_id = _get_active_space_id()
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM papers WHERE space_id = ? ORDER BY imported_at DESC",
+            (space_id,),
+        ).fetchall()
+        return [_paper_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()

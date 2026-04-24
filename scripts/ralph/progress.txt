@@ -49,3 +49,21 @@
   - Module-level variable override pattern works for test DB isolation but is fragile — consider dependency injection later
   - `ON CONFLICT(key) DO UPDATE` is the SQLite upsert pattern
 ---
+
+## 2026-04-24 18:24 - US-004
+- Built full space management UI in static/index.html with vanilla JS
+- UI lists all spaces with status badges (Active/Archived)
+- Create space form with name and description fields
+- Inline rename with save/cancel
+- Description editing with textarea and save/cancel
+- Archive and delete buttons with confirmation dialogs
+- "Open" button sets active space; active space highlighted with blue border + "Current" badge
+- Active space banner always visible at top
+- Changed create_space and update_space to accept JSON Body instead of query params
+- **Learnings for future iterations:**
+  - FastAPI routes: use `Body(...)` for required fields, `Body("")` for optional defaults
+  - httpx test client: use `json={}` for JSON body, `params={}` for query params
+  - Vanilla JS SPA pattern: inline edit with display/edit toggle via CSS (display:none)
+  - UI uses `esc()` for XSS prevention on user-provided text
+  - Browser verification not performed (no browser tools available); manual verification needed
+---

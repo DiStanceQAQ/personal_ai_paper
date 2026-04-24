@@ -351,7 +351,7 @@
             <div id="paperCards" style="margin-top:16px;">
                 <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
                     <h3 style="font-size:1rem;">Knowledge Cards</h3>
-                    <button class="btn-outline btn-sm" onclick="showCreateCard()">+ Add Card</button>
+                    <button class="btn-outline btn-sm" onclick="showCreateCard()">+ Add Card</button> <button class="btn-outline btn-sm" onclick="extractCards()">Auto-Extract</button>
                 </div>
                 <div id="cardCreateForm" style="display:none; border:1px solid #1976d2; border-radius:6px; padding:12px; margin-bottom:8px;">
                     <div class="form-group" style="margin-bottom:8px;">
@@ -774,6 +774,18 @@
                 if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e.detail); }
                 document.getElementById('cardCreateForm').style.display = 'none';
                 document.getElementById('newCardSummary').value = '';
+                await loadPaperCards(currentPaper.id);
+            } catch (e) { showError(e.message); }
+        }
+
+
+        async function extractCards() {
+            if (!currentPaper) return;
+            try {
+                const res = await fetch('/api/cards/extract/' + currentPaper.id, { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Extraction failed');
+                alert('Extracted ' + data.card_count + ' cards.');
                 await loadPaperCards(currentPaper.id);
             } catch (e) { showError(e.message); }
         }

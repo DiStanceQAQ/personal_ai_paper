@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
+from card_extractor import extract_cards_from_passages
 from db import get_connection
 
 router = APIRouter(prefix="/api/cards", tags=["cards"])
@@ -189,5 +190,45 @@ async def delete_card(card_id: str) -> dict[str, str]:
         conn.execute("DELETE FROM knowledge_cards WHERE id = ?", (card_id,))
         conn.commit()
         return {"status": "deleted", "card_id": card_id}
+    finally:
+        conn.close()
+
+
+@router.post("/extract/{paper_id}")
+async def extract_cards(paper_id: str) -> dict[str, Any]:
+    """Extract knowledge cards from a paper's passages using rules-based extraction."""
+    space_id = _get_active_space_id()
+
+    conn = get_connection()
+    try:
+        paper = conn.execute(
+            "SELECT id FROM papers WHERE id = ? AND space_id = ?",
+            (paper_id, space_id),
+        ).fetchone()
+        if paper is None:
+            raise HTTPException(status_code=404, detail="Paper not found in active space")
+
+        passages = conn.execute(
+            "SELECT * FROM passages WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchall()
+
+        if not passages:
+            return {"status": "no_passages", "paper_id": paper_id, "card_count": 0}
+
+        passage_list = [dict(p) for p in passages]
+        cards = extract_cards_from_passages(passage_list, paper_id, space_id)
+
+        for c in cards:
+            conn.execute(
+                """INSERT OR IGNORE INTO knowledge_cards
+                   (id, space_id, paper_id, source_passage_id, card_type, summary, confidence, user_edited)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
+                (c["id"], c["space_id"], c["paper_id"], c["source_passage_id"],
+                 c["card_type"], c["summary"], c["confidence"]),
+            )
+
+        conn.commit()
+        return {"status": "extracted", "paper_id": paper_id, "card_count": len(cards)}
     finally:
         conn.close()

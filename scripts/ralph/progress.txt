@@ -197,3 +197,21 @@
   - Card type tabs use encodeURIComponent for types with spaces (e.g., "Failure Mode")
   - Views reuse existing list_cards API with card_type filter
 ---
+
+## 2026-04-24 18:50 - US-014 & US-015
+- Created mcp_server.py with FastMCP from mcp.server.fastmcp (v1.27.0+ API)
+- Core tools: list_spaces, get_active_space, list_papers, search_literature, get_paper_summary, get_citation
+- Specialized evidence tools: get_methods, get_metrics, get_limitations, find_failure_modes, find_similar_results, compare_with_literature, get_evidence_for_claim
+- Server entry point at `mcp_server:main` via `paper-engine-mcp` console script
+- All tools default to active space with optional space_id override
+- 9 MCP tests pass (62 total), mypy passes clean on 21 source files
+- **Learnings for future iterations:**
+  - mcp v1.27.0 uses FastMCP (not Server directly) for @tool() decorator support
+  - FastMCP.tool() decorates synchronous functions — no async needed
+  - MCP transport: `mcp.run(transport="stdio")` for local agent communication
+  - mcp library has no type stubs — needs `ignore_missing_imports` in mypy config
+  - _get_cards_by_type helper reduces duplication across 5 card-type tools
+  - search_literature and find_similar_results share search_passages backend
+  - compare_with_literature enriches search results with related cards from matching papers
+  - get_evidence_for_claim combines passage search with Evidence-type card lookup
+---

@@ -99,3 +99,20 @@
   - Paper title fallback display: `esc(p.title || '(Untitled)')` when title is empty
   - Use `parseInt(x) || null` to handle empty year field gracefully
 ---
+
+## 2026-04-24 18:32 - US-007
+- Created parser.py using PyMuPDF for PDF text extraction
+- Splits text by page, then section cues, then paragraph boundaries
+- Section detection via keyword matching in text (abstract, introduction, method, etc.)
+- Passage type mapping: abstract→abstract, method→method, etc.
+- POST /api/papers/{paper_id}/parse endpoint triggers parsing
+- On failure: paper parse_status set to 'error', paper record preserved
+- 6 parser tests, 2 parse endpoint tests, 35 total tests pass
+- Added PyMuPDF to dependencies and mypy config with no-untyped-call override
+- **Learnings for future iterations:**
+  - PyMuPDF lacks type stubs → need `[[tool.mypy.overrides]]` with `disable_error_code`
+  - Use `pymupdf.open()` to create test PDFs in memory for unit testing
+  - Parse status flow: pending → parsing → parsed (or error)
+  - `INSERT OR REPLACE` for passages avoids duplicates on re-parse
+  - `finally: doc.close()` critical to avoid resource leaks
+---

@@ -1,0 +1,22 @@
+## Codebase Patterns
+- Python 3.12 with FastAPI + uvicorn for backend, static HTML for frontend
+- `uv venv` for virtual environment management, `uv pip install` for dependencies
+- `mypy` with `strict = true` in pyproject.toml
+- `pytest` with `asyncio_mode = "auto"` and `httpx.ASGITransport` for FastAPI testing
+- `Makefile` provides `dev`, `test`, `typecheck`, and `check` targets
+- All source files under project root; tests in `tests/` directory
+- Static files served from `static/` via FastAPI `StaticFiles` mount
+- Use `pip install -e ".[dev]"` for editable install with dev dependencies
+
+## 2026-04-24 18:17 - US-001
+- Created project foundation: pyproject.toml, main.py (FastAPI), static/index.html (Web UI), tests/test_main.py
+- Health check endpoint at GET /health returns {"status": "healthy", "service": "..."}
+- UI entry point at GET / serves index.html with status indicator
+- Dev command: `make dev` (uvicorn with reload on port 8000)
+- Test command: `make test` (pytest -v), 2 tests pass
+- Typecheck: `make typecheck` (mypy strict), passes clean
+- **Learnings for future iterations:**
+  - Python environment is uv-managed, use `uv venv` + `uv pip install` instead of bare pip
+  - httpx.ASGITransport is the recommended way to test FastAPI apps with httpx >=0.28
+  - mypy strict mode requires explicit return type annotations on all functions
+---

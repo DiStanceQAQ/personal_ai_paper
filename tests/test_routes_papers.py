@@ -68,6 +68,21 @@ def _make_minimal_pdf() -> bytes:
     )
 
 
+def _make_text_pdf(text: str) -> bytes:
+    """Create a simple valid PDF with extractable text."""
+    import pymupdf
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+        doc = pymupdf.open()  # type: ignore[no-untyped-call]
+        page = doc.new_page()
+        page.insert_text((50, 50), text, fontsize=11)
+        doc.save(f.name)  # type: ignore[no-untyped-call]
+        doc.close()  # type: ignore[no-untyped-call]
+        pdf_bytes = Path(f.name).read_bytes()
+        Path(f.name).unlink()
+    return pdf_bytes
+
+
 @pytest.mark.asyncio
 async def test_upload_pdf_to_active_space(client: AsyncClient) -> None:
     """Test uploading a PDF to the active space."""
@@ -319,3 +334,49 @@ async def test_list_passages_nonexistent_paper(client: AsyncClient) -> None:
     """Test that listing passages for nonexistent paper returns 404."""
     resp = await client.get("/api/papers/nonexistent-id/passages")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reparsing_replaces_existing_passages_and_fts_rows(
+    client: AsyncClient,
+) -> None:
+    """Re-running parse on a paper should not duplicate passages or search results."""
+    await _create_and_activate_space(client)
+
+    resp = await client.post(
+        "/api/papers/upload",
+        files={
+            "file": (
+                "test.pdf",
+                _make_text_pdf("method transformer attention mechanism"),
+                "application/pdf",
+            )
+        },
+    )
+    paper_id = resp.json()["id"]
+
+    first_parse = await client.post(f"/api/papers/{paper_id}/parse")
+    assert first_parse.status_code == 200
+    assert first_parse.json()["status"] == "parsed"
+
+    first_passages = await client.get(f"/api/papers/{paper_id}/passages")
+    assert first_passages.status_code == 200
+    first_count = len(first_passages.json())
+    assert first_count > 0
+
+    first_search = await client.get("/api/search", params={"q": "transformer"})
+    assert first_search.status_code == 200
+    first_search_count = len(first_search.json())
+    assert first_search_count > 0
+
+    second_parse = await client.post(f"/api/papers/{paper_id}/parse")
+    assert second_parse.status_code == 200
+    assert second_parse.json()["status"] == "parsed"
+
+    second_passages = await client.get(f"/api/papers/{paper_id}/passages")
+    assert second_passages.status_code == 200
+    assert len(second_passages.json()) == first_count
+
+    second_search = await client.get("/api/search", params={"q": "transformer"})
+    assert second_search.status_code == 200
+    assert len(second_search.json()) == first_search_count

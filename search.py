@@ -63,7 +63,7 @@ def search_passages(
                 p.section,
                 p.page_number,
                 p.paragraph_index,
-                snippet({FTS_TABLE}, 1, '<mark>', '</mark>', '...', 32) AS snippet,
+                snippet({FTS_TABLE}, 4, '<mark>', '</mark>', '...', 32) AS snippet,
                 p.original_text,
                 papers.title AS paper_title
             FROM {FTS_TABLE} fts

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from db import DATABASE_PATH, init_db
+from db import DATABASE_PATH, get_connection, init_db
 from main import app
 
 
@@ -99,3 +99,41 @@ async def test_delete_card(client: AsyncClient, setup_space_and_paper: tuple[str
 
     resp = await client.get(f"/api/cards/{card_id}")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_create_card_rejects_source_passage_from_other_paper(
+    client: AsyncClient,
+    setup_space_and_paper: tuple[str, str],
+) -> None:
+    """A card source passage must belong to the same paper and active space."""
+    space_id, paper_id = setup_space_and_paper
+
+    conn = get_connection()
+    try:
+        conn.execute("INSERT INTO spaces (id, name) VALUES ('other-space', 'Other')")
+        conn.execute(
+            """INSERT INTO papers (id, space_id, title, parse_status)
+               VALUES ('other-paper', 'other-space', 'Other Paper', 'parsed')"""
+        )
+        conn.execute(
+            """INSERT INTO passages (id, paper_id, space_id, section, original_text)
+               VALUES ('foreign-passage', 'other-paper', 'other-space', 'method', 'foreign text')"""
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    resp = await client.post(
+        "/api/cards",
+        json={
+            "paper_id": paper_id,
+            "card_type": "Method",
+            "summary": "Uses a method",
+            "source_passage_id": "foreign-passage",
+            "confidence": 0.9,
+        },
+    )
+
+    assert resp.status_code == 422
+    assert "source_passage_id" in resp.json()["detail"]

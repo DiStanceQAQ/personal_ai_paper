@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, UploadFile
 
-from config import SPACES_DIR
+import config
 from db import get_connection
 from parser import extract_passages_from_pdf
 from search import FTS_TABLE
@@ -50,7 +50,7 @@ def _compute_sha256(file_path: Path) -> str:
 
 def _papers_dir(space_id: str) -> Path:
     """Get the papers directory for a space, creating it if needed."""
-    p = SPACES_DIR / space_id / "papers"
+    p = config.SPACES_DIR / space_id / "papers"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -244,6 +244,17 @@ async def parse_paper(paper_id: str) -> dict[str, Any]:
             )
             conn.commit()
             return {"status": "error", "paper_id": paper_id, "passage_count": 0}
+
+        # Replace existing parsed content for this paper after successful extraction.
+        # Passage IDs are regenerated on each parse, so stale rows must be cleared.
+        conn.execute(
+            """UPDATE knowledge_cards
+               SET source_passage_id = NULL, updated_at = datetime('now')
+               WHERE paper_id = ? AND source_passage_id IS NOT NULL""",
+            (paper_id,),
+        )
+        conn.execute(f"DELETE FROM {FTS_TABLE} WHERE paper_id = ?", (paper_id,))
+        conn.execute("DELETE FROM passages WHERE paper_id = ?", (paper_id,))
 
         # Insert passages and sync to FTS
         for p in passages:

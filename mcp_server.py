@@ -29,6 +29,16 @@ def _get_active_space_id() -> str:
         conn.close()
 
 
+def _resolve_active_space(requested_space_id: str = "") -> tuple[str, dict[str, str] | None]:
+    """Resolve an optional requested space to the active space only."""
+    active_space_id = _get_active_space_id()
+    if not active_space_id:
+        return "", {"error": "No active space set"}
+    if requested_space_id and requested_space_id != active_space_id:
+        return "", {"error": "MCP access is limited to the active space"}
+    return active_space_id, None
+
+
 def _check_access() -> dict[str, Any] | None:
     """Return an error dict if agent access is disabled, else None."""
     conn = get_connection()
@@ -52,14 +62,20 @@ def _check_access() -> dict[str, Any] | None:
 
 @mcp.tool()
 def list_spaces() -> list[dict[str, Any]]:
-    """List all available idea spaces."""
+    """Return the active idea space exposed to agents."""
     access_error = _check_access()
     if access_error:
         return [access_error]
+    space_id, space_error = _resolve_active_space()
+    if space_error:
+        return [space_error]
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT id, name, description, status, created_at, updated_at FROM spaces WHERE status != 'deleted' ORDER BY updated_at DESC"
+            """SELECT id, name, description, status, created_at, updated_at
+               FROM spaces
+               WHERE id = ? AND status != 'deleted'""",
+            (space_id,),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -91,9 +107,9 @@ def list_papers(space_id: str = "") -> list[dict[str, Any]]:
     access_error = _check_access()
     if access_error:
         return [access_error]
-    sid = space_id or _get_active_space_id()
-    if not sid:
-        return [{"error": "No space specified and no active space set"}]
+    sid, space_error = _resolve_active_space(space_id)
+    if space_error:
+        return [space_error]
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -113,9 +129,9 @@ def search_literature(query: str, space_id: str = "", limit: int = 20) -> list[d
     access_error = _check_access()
     if access_error:
         return [access_error]
-    sid = space_id or _get_active_space_id()
-    if not sid:
-        return [{"error": "No space specified"}]
+    sid, space_error = _resolve_active_space(space_id)
+    if space_error:
+        return [space_error]
     results = search_passages(query, sid, limit)
     for r in results:
         if "snippet" in r:
@@ -129,17 +145,26 @@ def get_paper_summary(paper_id: str) -> dict[str, Any]:
     access_error = _check_access()
     if access_error:
         return access_error
+    sid, space_error = _resolve_active_space()
+    if space_error:
+        return space_error
     conn = get_connection()
     try:
-        paper = conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+        paper = conn.execute(
+            "SELECT * FROM papers WHERE id = ? AND space_id = ?",
+            (paper_id, sid),
+        ).fetchone()
         if paper is None:
             return {"error": "Paper not found"}
         passages = conn.execute(
-            "SELECT * FROM passages WHERE paper_id = ? ORDER BY page_number, paragraph_index",
-            (paper_id,),
+            """SELECT * FROM passages
+               WHERE paper_id = ? AND space_id = ?
+               ORDER BY page_number, paragraph_index""",
+            (paper_id, sid),
         ).fetchall()
         cards = conn.execute(
-            "SELECT * FROM knowledge_cards WHERE paper_id = ?", (paper_id,)
+            "SELECT * FROM knowledge_cards WHERE paper_id = ? AND space_id = ?",
+            (paper_id, sid),
         ).fetchall()
         return {
             "paper": dict(paper),
@@ -157,9 +182,15 @@ def get_citation(paper_id: str) -> dict[str, str]:
     access_error = _check_access()
     if access_error:
         return access_error
+    sid, space_error = _resolve_active_space()
+    if space_error:
+        return space_error
     conn = get_connection()
     try:
-        paper = conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+        paper = conn.execute(
+            "SELECT * FROM papers WHERE id = ? AND space_id = ?",
+            (paper_id, sid),
+        ).fetchone()
         if paper is None:
             return {"error": "Paper not found"}
         return {
@@ -180,9 +211,9 @@ def get_citation(paper_id: str) -> dict[str, str]:
 
 
 def _get_cards_by_type(card_type: str, space_id: str = "") -> list[dict[str, Any]]:
-    sid = space_id or _get_active_space_id()
-    if not sid:
-        return [{"error": "No space specified"}]
+    sid, space_error = _resolve_active_space(space_id)
+    if space_error:
+        return [space_error]
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -240,9 +271,9 @@ def find_similar_results(query: str, space_id: str = "", limit: int = 10) -> lis
     access_error = _check_access()
     if access_error:
         return [access_error]
-    sid = space_id or _get_active_space_id()
-    if not sid:
-        return [{"error": "No space specified"}]
+    sid, space_error = _resolve_active_space(space_id)
+    if space_error:
+        return [space_error]
     results = search_passages(query, sid, limit)
     for r in results:
         if "snippet" in r:
@@ -258,9 +289,9 @@ def compare_with_literature(
     access_error = _check_access()
     if access_error:
         return access_error
-    sid = space_id or _get_active_space_id()
-    if not sid:
-        return {"error": "No space specified"}
+    sid, space_error = _resolve_active_space(space_id)
+    if space_error:
+        return space_error
 
     passages = search_passages(observation, sid, limit)
     card_results: list[dict[str, Any]] = []
@@ -271,8 +302,9 @@ def compare_with_literature(
         if paper_ids:
             placeholders = ",".join("?" * len(paper_ids))
             card_rows = conn.execute(
-                f"SELECT * FROM knowledge_cards WHERE paper_id IN ({placeholders})",
-                paper_ids,
+                f"""SELECT * FROM knowledge_cards
+                    WHERE space_id = ? AND paper_id IN ({placeholders})""",
+                [sid, *paper_ids],
             ).fetchall()
             card_results = [dict(r) for r in card_rows]
     finally:
@@ -293,9 +325,9 @@ def get_evidence_for_claim(
     access_error = _check_access()
     if access_error:
         return [access_error]
-    sid = space_id or _get_active_space_id()
-    if not sid:
-        return [{"error": "No space specified"}]
+    sid, space_error = _resolve_active_space(space_id)
+    if space_error:
+        return [space_error]
 
     passages = search_passages(claim, sid, limit)
 

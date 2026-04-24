@@ -116,6 +116,7 @@ def test_search_returns_results() -> None:
 
         results = search_passages("transformer", "space-1", database_path=db_path)
         assert len(results) >= 1
+        assert "transformer" in results[0]["snippet"].lower()
 
         conn.close()
 

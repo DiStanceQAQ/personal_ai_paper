@@ -66,6 +66,18 @@ async def create_card(
         if paper is None:
             raise HTTPException(status_code=404, detail="Paper not found in active space")
 
+        if source_passage_id is not None:
+            source = conn.execute(
+                """SELECT id FROM passages
+                   WHERE id = ? AND paper_id = ? AND space_id = ?""",
+                (source_passage_id, paper_id, space_id),
+            ).fetchone()
+            if source is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="source_passage_id must belong to the same paper and active space",
+                )
+
         conn.execute(
             """INSERT INTO knowledge_cards
                (id, space_id, paper_id, source_passage_id, card_type, summary, confidence)

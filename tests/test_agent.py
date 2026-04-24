@@ -187,11 +187,10 @@ def test_mcp_space_isolation_papers(db_path: str) -> None:
     assert "p1" in paper_ids
     assert "p2" not in paper_ids
 
-    # Explicitly query space-2
+    # Explicitly querying a non-active space should be refused.
     papers2 = list_papers(space_id="space-2")
-    paper_ids2 = {p["id"] for p in papers2}
-    assert "p2" in paper_ids2
-    assert "p1" not in paper_ids2
+    assert len(papers2) == 1
+    assert "error" in papers2[0]
 
     db_module.DATABASE_PATH = orig
 
@@ -219,11 +218,10 @@ def test_mcp_space_isolation_cards(db_path: str) -> None:
     assert "c1" in card_ids
     assert "c2" not in card_ids
 
-    # Explicitly query space-2
+    # Explicitly querying a non-active space should be refused.
     cards2 = get_methods(space_id="space-2")
-    card_ids2 = {c["id"] for c in cards2}
-    assert "c2" in card_ids2
-    assert "c1" not in card_ids2
+    assert len(cards2) == 1
+    assert "error" in cards2[0]
 
     db_module.DATABASE_PATH = orig
 
@@ -259,9 +257,57 @@ def test_mcp_space_isolation_search(db_path: str) -> None:
     assert "pass2" not in passage_ids
 
     results2 = search_literature("transformer", space_id="space-2")
-    passage_ids2 = {r["passage_id"] for r in results2}
-    assert "pass2" in passage_ids2
-    assert "pass1" not in passage_ids2
+    assert len(results2) == 1
+    assert "error" in results2[0]
+
+    db_module.DATABASE_PATH = orig
+
+
+def test_mcp_space_isolation_single_paper_tools(db_path: str) -> None:
+    """Single-paper MCP tools should reject papers outside the active space."""
+    import db as db_module
+    orig = db_module.DATABASE_PATH
+    db_module.DATABASE_PATH = Path(db_path)
+
+    conn = get_connection()
+    conn.execute("INSERT INTO spaces (id, name) VALUES ('space-1', 'A'), ('space-2', 'B')")
+    conn.execute(
+        "INSERT INTO papers (id, space_id, title, parse_status) VALUES "
+        "('p1', 'space-1', 'Paper A', 'parsed'),"
+        "('p2', 'space-2', 'Paper B', 'parsed')"
+    )
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('active_space', 'space-1')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('agent_access', 'enabled')")
+    conn.commit()
+    conn.close()
+
+    from mcp_server import get_citation, get_paper_summary
+
+    assert get_paper_summary("p1")["paper"]["id"] == "p1"
+    assert "error" in get_paper_summary("p2")
+    assert get_citation("p1")["title"] == "Paper A"
+    assert "error" in get_citation("p2")
+
+    db_module.DATABASE_PATH = orig
+
+
+def test_mcp_list_spaces_only_returns_active_space(db_path: str) -> None:
+    """Agent access exposes only the active space, not the whole project list."""
+    import db as db_module
+    orig = db_module.DATABASE_PATH
+    db_module.DATABASE_PATH = Path(db_path)
+
+    conn = get_connection()
+    conn.execute("INSERT INTO spaces (id, name) VALUES ('space-1', 'A'), ('space-2', 'B')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('active_space', 'space-1')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('agent_access', 'enabled')")
+    conn.commit()
+    conn.close()
+
+    from mcp_server import list_spaces
+
+    spaces = list_spaces()
+    assert [s["id"] for s in spaces] == ["space-1"]
 
     db_module.DATABASE_PATH = orig
 

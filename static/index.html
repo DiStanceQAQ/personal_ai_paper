@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Local Paper Knowledge Engine</title>
+    <title>本地论文知识引擎</title>
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         
@@ -262,24 +262,24 @@
     <div id="errorToast" class="error-toast"></div>
 
     <header>
-        <h1>&#x1F4DA; Local Paper Knowledge Engine</h1>
+        <h1>&#x1F4DA; 本地论文知识引擎</h1>
     </header>
 
     <!-- Active Space Banner -->
     <div class="active-banner" id="activeBanner">
         <div>
-            <span class="label">Active Space:</span>
-            <span class="name" id="activeSpaceName">None selected</span>
+            <span class="label">当前空间：</span>
+            <span class="name" id="activeSpaceName">未选择</span>
         </div>
     </div>
 
     <!-- Agent Access Controls -->
     <div class="agent-controls" id="agentControls">
         <div class="agent-info">
-            <div><strong>Agent Access (MCP)</strong> — Transport: <code>stdio</code></div>
-            <div style="margin-top:2px;">Exposing: <span class="space-exposed" id="agentExposedSpace">None</span></div>
+            <div><strong>智能代理访问（MCP）</strong> — 传输方式：<code>stdio</code></div>
+            <div style="margin-top:2px;">暴露空间：<span class="space-exposed" id="agentExposedSpace">无</span></div>
         </div>
-        <label class="toggle-switch" title="Enable/disable local agent access">
+        <label class="toggle-switch" title="启用或关闭本地智能代理访问">
             <input type="checkbox" id="agentToggle" onchange="toggleAgentAccess()">
             <span class="toggle-slider"></span>
         </label>
@@ -287,60 +287,60 @@
 
     <!-- Create Space Form -->
     <div class="create-form">
-        <h2>Create New Idea Space</h2>
+        <h2>创建新的想法空间</h2>
         <div class="form-row">
             <div class="form-group">
-                <label for="newName">Space Name *</label>
-                <input type="text" id="newName" placeholder="e.g., Attention Mechanism Survey" required>
+                <label for="newName">空间名称 *</label>
+                <input type="text" id="newName" placeholder="例如：注意力机制综述" required>
             </div>
             <div class="form-group">
-                <label for="newDesc">Description</label>
-                <input type="text" id="newDesc" placeholder="Research goals, hypotheses...">
+                <label for="newDesc">描述</label>
+                <input type="text" id="newDesc" placeholder="研究目标、假设或关注问题...">
             </div>
-            <button class="btn-primary" onclick="createSpace()">+ Create</button>
+            <button class="btn-primary" onclick="createSpace()">+ 创建</button>
         </div>
     </div>
 
     <!-- Papers Section (visible when space is active) -->
     <div id="papersSection">
         <div class="upload-section">
-            <h2>Import Papers</h2>
+            <h2>导入论文</h2>
             <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
-                <p><strong>Drop PDF here</strong> or click to browse</p>
-                <p style="font-size:0.85rem;color:#999;margin-top:4px;">Only PDF files accepted</p>
+                <p><strong>拖拽 PDF 到这里</strong>，或点击选择文件</p>
+                <p style="font-size:0.85rem;color:#999;margin-top:4px;">仅支持 PDF 文件</p>
                 <input type="file" id="fileInput" accept=".pdf,application/pdf" onchange="handleFileSelect(event)">
             </div>
         </div>
 
         <!-- Search -->
         <div style="margin-bottom:24px;">
-            <h2>Literature Search</h2>
+            <h2>文献检索</h2>
             <div style="display:flex; gap:8px;">
-                <input type="text" id="searchInput" placeholder="Search methods, metrics, results..." onkeydown="if(event.key==='Enter')searchLiterature()"
+                <input type="text" id="searchInput" placeholder="搜索方法、指标、结果..." onkeydown="if(event.key==='Enter')searchLiterature()"
                     style="flex:1; padding:8px 12px; border:1px solid #ccc; border-radius:6px; font-size:0.9rem;">
-                <button class="btn-primary" onclick="searchLiterature()">Search</button>
+                <button class="btn-primary" onclick="searchLiterature()">搜索</button>
             </div>
             <div id="searchResults" style="margin-top:12px;"></div>
         </div>
 
-        <h2>Papers</h2>
+        <h2>论文列表</h2>
         <ul class="space-list" id="papersList">
-            <li class="empty-state"><p>No papers imported yet. Upload a PDF above.</p></li>
+            <li class="empty-state"><p>还没有导入论文。请在上方上传 PDF。</p></li>
         </ul>
         <!-- Paper Detail / Edit -->
         <div id="paperDetail" style="display:none; background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:20px; margin-top:12px;">
-            <h2 id="paperDetailTitle" style="margin-bottom:16px;">Paper Detail</h2>
+            <h2 id="paperDetailTitle" style="margin-bottom:16px;">论文详情</h2>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                 <div class="form-group">
-                    <label>Title</label>
+                    <label>标题</label>
                     <input type="text" id="editTitle">
                 </div>
                 <div class="form-group">
-                    <label>Authors</label>
-                    <input type="text" id="editAuthors" placeholder="e.g., Jane Doe, John Smith">
+                    <label>作者</label>
+                    <input type="text" id="editAuthors" placeholder="例如：Jane Doe, John Smith">
                 </div>
                 <div class="form-group">
-                    <label>Year</label>
+                    <label>年份</label>
                     <input type="number" id="editYear" placeholder="2024">
                 </div>
                 <div class="form-group">
@@ -357,72 +357,72 @@
                 </div>
             </div>
             <div class="form-group" style="margin-top:12px;">
-                <label>Venue / Journal</label>
-                <input type="text" id="editVenue" placeholder="Conference or journal name">
+                <label>会议 / 期刊</label>
+                <input type="text" id="editVenue" placeholder="会议或期刊名称">
             </div>
             <div class="form-group" style="margin-top:12px;">
-                <label>Abstract</label>
+                <label>摘要</label>
                 <textarea id="editAbstract" rows="3" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:6px; font-family:inherit; font-size:0.9rem;"></textarea>
             </div>
             <div class="form-group" style="margin-top:12px;">
-                <label>Citation / BibTeX</label>
-                <textarea id="editCitation" rows="2" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:6px; font-family:monospace; font-size:0.85rem;" placeholder="Paste BibTeX entry here"></textarea>
+                <label>引用 / BibTeX</label>
+                <textarea id="editCitation" rows="2" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:6px; font-family:monospace; font-size:0.85rem;" placeholder="在这里粘贴 BibTeX 条目"></textarea>
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px;">
                 <div class="form-group">
-                    <label>User Tags (comma-separated)</label>
-                    <input type="text" id="editTags" placeholder="important, survey">
+                    <label>用户标签（逗号分隔）</label>
+                    <input type="text" id="editTags" placeholder="重要, 综述">
                 </div>
                 <div class="form-group">
-                    <label>Relation to Idea</label>
+                    <label>与想法的关系</label>
                     <select id="editRelation" style="padding:8px; border:1px solid #ccc; border-radius:6px; font-size:0.9rem;">
-                        <option value="unclassified">Unclassified</option>
-                        <option value="supports">Supports</option>
-                        <option value="refutes">Refutes</option>
-                        <option value="inspires">Inspires</option>
-                        <option value="baseline">Baseline</option>
-                        <option value="method_source">Method Source</option>
-                        <option value="background">Background</option>
-                        <option value="result_comparison">Result Comparison</option>
+                        <option value="unclassified">未分类</option>
+                        <option value="supports">支持</option>
+                        <option value="refutes">反驳</option>
+                        <option value="inspires">启发</option>
+                        <option value="baseline">基线</option>
+                        <option value="method_source">方法来源</option>
+                        <option value="background">背景资料</option>
+                        <option value="result_comparison">结果对比</option>
                     </select>
                 </div>
             </div>
             <div style="margin-top:16px; display:flex; gap:8px;">
-                <button class="btn-primary" onclick="savePaperMeta()">Save Metadata</button>
-                <button class="btn-success" onclick="parsePaper()">Parse PDF</button>
+                <button class="btn-primary" onclick="savePaperMeta()">保存元数据</button>
+                <button class="btn-success" onclick="parsePaper()">解析 PDF</button>
             </div>
             <div id="paperParseStatus" style="margin-top:8px; font-size:0.85rem;"></div>
             <div id="paperCards" style="margin-top:16px;">
                 <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-                    <h3 style="font-size:1rem;">Knowledge Cards</h3>
-                    <button class="btn-outline btn-sm" onclick="showCreateCard()">+ Add Card</button> <button class="btn-outline btn-sm" onclick="extractCards()">Auto-Extract</button>
+                    <h3 style="font-size:1rem;">知识卡片</h3>
+                    <button class="btn-outline btn-sm" onclick="showCreateCard()">+ 添加卡片</button> <button class="btn-outline btn-sm" onclick="extractCards()">自动抽取</button>
                 </div>
                 <div id="cardCreateForm" style="display:none; border:1px solid #1976d2; border-radius:6px; padding:12px; margin-bottom:8px;">
                     <div class="form-group" style="margin-bottom:8px;">
-                        <label>Card Type</label>
+                        <label>卡片类型</label>
                         <select id="newCardType" style="padding:6px; border:1px solid #ccc; border-radius:4px; width:100%;">
-                            <option value="Method">Method</option><option value="Result">Result</option>
-                            <option value="Claim">Claim</option><option value="Evidence">Evidence</option>
-                            <option value="Metric">Metric</option><option value="Limitation">Limitation</option>
-                            <option value="Failure Mode">Failure Mode</option><option value="Problem">Problem</option>
-                            <option value="Object">Object</option><option value="Variable">Variable</option>
-                            <option value="Interpretation">Interpretation</option><option value="Practical Tip">Practical Tip</option>
+                            <option value="Method">方法</option><option value="Result">结果</option>
+                            <option value="Claim">主张</option><option value="Evidence">证据</option>
+                            <option value="Metric">指标</option><option value="Limitation">局限性</option>
+                            <option value="Failure Mode">失败模式</option><option value="Problem">问题</option>
+                            <option value="Object">研究对象</option><option value="Variable">变量</option>
+                            <option value="Interpretation">解释</option><option value="Practical Tip">实践建议</option>
                         </select>
                     </div>
                     <div class="form-group" style="margin-bottom:8px;">
-                        <label>Summary</label>
+                        <label>摘要</label>
                         <textarea id="newCardSummary" rows="2" style="width:100%; padding:6px; border:1px solid #ccc; border-radius:4px; font-family:inherit;"></textarea>
                     </div>
                     <div style="display:flex; gap:6px;">
-                        <button class="btn-primary btn-sm" onclick="createCard()">Create</button>
-                        <button class="btn-outline btn-sm" onclick="document.getElementById(cardCreateForm).style.display=none">Cancel</button>
+                        <button class="btn-primary btn-sm" onclick="createCard()">创建</button>
+                        <button class="btn-outline btn-sm" onclick="document.getElementById('cardCreateForm').style.display='none'">取消</button>
                     </div>
                 </div>
                 <div id="cardsList"></div>
             </div>
 
             <div id="paperPassages" style="margin-top:16px;">
-                <h3 style="font-size:1rem; margin-bottom:8px;">Passages</h3>
+                <h3 style="font-size:1rem; margin-bottom:8px;">原文片段</h3>
                 <div id="passagesList"></div>
             </div>
         </div>
@@ -430,25 +430,25 @@
 
     <!-- Structured Views -->
     <div id="structuredViews" style="display:none; margin-top:20px;">
-        <h2>Literature Views</h2>
+        <h2>结构化文献视图</h2>
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
-            <button class="btn-outline btn-sm view-tab active" onclick="showCardView('Method')">Methods</button>
-            <button class="btn-outline btn-sm view-tab" onclick="showCardView('Metric')">Metrics</button>
-            <button class="btn-outline btn-sm view-tab" onclick="showCardView('Result')">Results</button>
-            <button class="btn-outline btn-sm view-tab" onclick="showCardView('Failure Mode')">Failure Modes</button>
-            <button class="btn-outline btn-sm view-tab" onclick="showCardView('Limitation')">Limitations</button>
-            <button class="btn-outline btn-sm view-tab" onclick="showCardView('Claim')">Claims</button>
+            <button class="btn-outline btn-sm view-tab active" onclick="showCardView('Method')">方法</button>
+            <button class="btn-outline btn-sm view-tab" onclick="showCardView('Metric')">指标</button>
+            <button class="btn-outline btn-sm view-tab" onclick="showCardView('Result')">结果</button>
+            <button class="btn-outline btn-sm view-tab" onclick="showCardView('Failure Mode')">失败模式</button>
+            <button class="btn-outline btn-sm view-tab" onclick="showCardView('Limitation')">局限性</button>
+            <button class="btn-outline btn-sm view-tab" onclick="showCardView('Claim')">主张</button>
         </div>
         <div id="structuredViewContent"></div>
     </div>
 
 
     <!-- Space List -->
-    <h2>Idea Spaces</h2>
+    <h2>想法空间</h2>
     <ul class="space-list" id="spaceList">
         <li class="empty-state">
-            <p>No idea spaces yet.</p>
-            <p>Create your first space above to get started.</p>
+            <p>暂无想法空间。</p>
+            <p>请先在上方创建第一个空间。</p>
         </li>
     </ul>
 
@@ -486,23 +486,23 @@
                         activeId = active.id;
                         document.getElementById('activeSpaceName').textContent = active.name;
                     } else {
-                        document.getElementById('activeSpaceName').textContent = 'None selected';
+                        document.getElementById('activeSpaceName').textContent = '未选择';
                     }
                 } catch (e) {
-                    document.getElementById('activeSpaceName').textContent = 'None selected';
+                    document.getElementById('activeSpaceName').textContent = '未选择';
                 }
 
                 const list = document.getElementById('spaceList');
                 if (spaces.length === 0) {
-                    list.innerHTML = '<li class="empty-state"><p>No idea spaces yet.</p><p>Create your first space above to get started.</p></li>';
+                    list.innerHTML = '<li class="empty-state"><p>暂无想法空间。</p><p>请先在上方创建第一个空间。</p></li>';
                     return;
                 }
 
                 list.innerHTML = spaces.map(s => {
                     const isActive = s.id === activeId;
                     const statusBadge = s.status === 'active'
-                        ? `<span class="badge badge-active">Active</span>`
-                        : `<span class="badge badge-archived">Archived</span>`;
+                        ? `<span class="badge badge-active">活跃</span>`
+                        : `<span class="badge badge-archived">已归档</span>`;
                     
                     return `
                     <li class="space-item ${isActive ? 'active-space' : ''}" id="space-${s.id}">
@@ -513,34 +513,34 @@
                                     <input type="text" value="${esc(s.name)}" id="iname-${s.id}">
                                 </span>
                                 ${statusBadge}
-                                ${isActive ? '<span class="badge badge-active" style="margin-left:4px;">Current</span>' : ''}
+                                ${isActive ? '<span class="badge badge-active" style="margin-left:4px;">当前</span>' : ''}
                             </div>
                             <div class="space-desc">
-                                <span class="display-desc" id="ddesc-${s.id}">${esc(s.description || 'No description')}</span>
+                                <span class="display-desc" id="ddesc-${s.id}">${esc(s.description || '暂无描述')}</span>
                             </div>
                             <div class="desc-edit-area" id="edesc-area-${s.id}">
                                 <textarea id="edesc-${s.id}">${esc(s.description || '')}</textarea>
                                 <div class="desc-edit-actions">
-                                    <button class="btn-primary btn-sm" onclick="saveDesc('${s.id}')">Save</button>
-                                    <button class="btn-outline btn-sm" onclick="cancelDescEdit('${s.id}')">Cancel</button>
+                                    <button class="btn-primary btn-sm" onclick="saveDesc('${s.id}')">保存</button>
+                                    <button class="btn-outline btn-sm" onclick="cancelDescEdit('${s.id}')">取消</button>
                                 </div>
                             </div>
-                            <div class="space-meta">Created: ${s.created_at} | Updated: ${s.updated_at}</div>
+                            <div class="space-meta">创建：${s.created_at} | 更新：${s.updated_at}</div>
                         </div>
                         <div class="space-actions">
                             ${s.status === 'active' && !isActive
-                                ? `<button class="btn btn-outline btn-sm" onclick="setActive('${s.id}')">Open</button>`
+                                ? `<button class="btn btn-outline btn-sm" onclick="setActive('${s.id}')">打开</button>`
                                 : ''}
-                            <button class="btn btn-outline btn-sm" id="rename-btn-${s.id}" onclick="startRename('${s.id}')">Rename</button>
+                            <button class="btn btn-outline btn-sm" id="rename-btn-${s.id}" onclick="startRename('${s.id}')">重命名</button>
                             <span class="inline-edit" id="erename-actions-${s.id}">
-                                <button class="btn-primary btn-sm" onclick="saveRename('${s.id}')">Save</button>
-                                <button class="btn-outline btn-sm" onclick="cancelRename('${s.id}')">Cancel</button>
+                                <button class="btn-primary btn-sm" onclick="saveRename('${s.id}')">保存</button>
+                                <button class="btn-outline btn-sm" onclick="cancelRename('${s.id}')">取消</button>
                             </span>
-                            <button class="btn btn-outline btn-sm" onclick="startDescEdit('${s.id}')">Edit Desc</button>
+                            <button class="btn btn-outline btn-sm" onclick="startDescEdit('${s.id}')">编辑描述</button>
                             ${s.status === 'active'
-                                ? `<button class="btn btn-outline btn-sm" onclick="archiveSpace('${s.id}')">Archive</button>`
+                                ? `<button class="btn btn-outline btn-sm" onclick="archiveSpace('${s.id}')">归档</button>`
                                 : ''}
-                            <button class="btn btn-danger btn-sm" onclick="deleteSpace('${s.id}')">Delete</button>
+                            <button class="btn btn-danger btn-sm" onclick="deleteSpace('${s.id}')">删除</button>
                         </div>
                     </li>`;
                 }).join('');
@@ -555,10 +555,52 @@
             return div.innerHTML;
         }
 
+        function tParseStatus(status) {
+            const labels = {
+                pending: '待解析',
+                parsing: '解析中',
+                parsed: '已解析',
+                error: '解析失败'
+            };
+            return labels[status] || status;
+        }
+
+        function tSection(value) {
+            const labels = {
+                abstract: '摘要',
+                introduction: '引言',
+                method: '方法',
+                result: '结果',
+                discussion: '讨论',
+                limitation: '局限性',
+                appendix: '附录',
+                body: '正文'
+            };
+            return labels[value] || value || '正文';
+        }
+
+        function tCardType(value) {
+            const labels = {
+                'Problem': '问题',
+                'Claim': '主张',
+                'Evidence': '证据',
+                'Method': '方法',
+                'Object': '研究对象',
+                'Variable': '变量',
+                'Metric': '指标',
+                'Result': '结果',
+                'Failure Mode': '失败模式',
+                'Interpretation': '解释',
+                'Limitation': '局限性',
+                'Practical Tip': '实践建议'
+            };
+            return labels[value] || value;
+        }
+
         async function createSpace() {
             const name = document.getElementById('newName').value.trim();
             const desc = document.getElementById('newDesc').value.trim();
-            if (!name) { showError('Space name is required.'); return; }
+            if (!name) { showError('请输入空间名称。'); return; }
             try {
                 await api('', {
                     method: 'POST',
@@ -589,7 +631,7 @@
 
         async function saveRename(id) {
             const name = document.getElementById('iname-' + id).value.trim();
-            if (!name) { showError('Name cannot be empty.'); return; }
+            if (!name) { showError('名称不能为空。'); return; }
             try {
                 await api('/' + id, {
                     method: 'PATCH',
@@ -629,7 +671,7 @@
         }
 
         async function archiveSpace(id) {
-            if (!confirm('Archive this space? It will be preserved but hidden from active views.')) return;
+            if (!confirm('要归档这个空间吗？数据会保留，但不会出现在活跃视图中。')) return;
             try {
                 await api('/' + id + '/archive', { method: 'PATCH' });
                 await loadSpaces();
@@ -637,7 +679,7 @@
         }
 
         async function deleteSpace(id) {
-            if (!confirm('Delete this space? Data will be preserved but the space will be hidden.')) return;
+            if (!confirm('要删除这个空间吗？数据会保留，但该空间会被隐藏。')) return;
             try {
                 await api('/' + id, { method: 'DELETE' });
                 await loadSpaces();
@@ -662,7 +704,7 @@
 
         async function uploadFile(file) {
             if (!file.name.toLowerCase().endsWith('.pdf')) {
-                showError('Only PDF files are accepted.');
+                showError('仅支持 PDF 文件。');
                 return;
             }
             const formData = new FormData();
@@ -678,18 +720,18 @@
         }
 
 
-        // --- Literature Search ---
+        // --- 文献检索 ---
         async function searchLiterature() {
             const q = document.getElementById('searchInput').value.trim();
             if (!q) return;
             const resultsDiv = document.getElementById('searchResults');
-            resultsDiv.innerHTML = '<p style="color:#999;">Searching...</p>';
+            resultsDiv.innerHTML = '<p style="color:#999;">正在搜索...</p>';
             try {
                 const res = await fetch('/api/search?q=' + encodeURIComponent(q) + '&limit=30');
-                if (!res.ok) { resultsDiv.innerHTML = '<p style="color:#c62828;">Search requires an active space.</p>'; return; }
+                if (!res.ok) { resultsDiv.innerHTML = '<p style="color:#c62828;">搜索前需要先打开一个空间。</p>'; return; }
                 const results = await res.json();
                 if (results.length === 0) {
-                    resultsDiv.innerHTML = '<p style="color:#999;">No results found for "' + esc(q) + '".</p>';
+                    resultsDiv.innerHTML = '<p style="color:#999;">没有找到与“' + esc(q) + '”相关的结果。</p>';
                     return;
                 }
                 resultsDiv.innerHTML = results.map(r => `
@@ -697,14 +739,14 @@
                          onclick="viewPaper('${r.paper_id}')">
                         <div style="display:flex; gap:8px; align-items:center; margin-bottom:4px; flex-wrap:wrap;">
                             <strong style="font-size:0.85rem;">${esc(r.paper_title || r.paper_id)}</strong>
-                            <span class="parse-badge" style="background:#e3f2fd;color:#1565c0;">${esc(r.section)}</span>
-                            <span style="font-size:0.78rem;color:#999;">Page ${r.page_number}</span>
-                            <span style="font-size:0.75rem;color:#bbb;">Score: ${r.score.toFixed(2)}</span>
+                            <span class="parse-badge" style="background:#e3f2fd;color:#1565c0;">${esc(tSection(r.section))}</span>
+                            <span style="font-size:0.78rem;color:#999;">第 ${r.page_number} 页</span>
+                            <span style="font-size:0.75rem;color:#bbb;">分数：${r.score.toFixed(2)}</span>
                         </div>
                         <div style="font-size:0.85rem; line-height:1.5; color:#444;">${r.snippet}</div>
                     </div>
                 `).join('');
-            } catch (e) { resultsDiv.innerHTML = '<p style="color:#c62828;">Search error: ' + esc(e.message) + '</p>'; }
+            } catch (e) { resultsDiv.innerHTML = '<p style="color:#c62828;">搜索出错：' + esc(e.message) + '</p>'; }
         }
 
         // --- Paper List ---
@@ -715,18 +757,18 @@
                 const papers = await res.json();
                 const list = document.getElementById('papersList');
                 if (papers.length === 0) {
-                    list.innerHTML = '<li class="empty-state"><p>No papers imported yet. Upload a PDF above.</p></li>';
+                    list.innerHTML = '<li class="empty-state"><p>还没有导入论文。请在上方上传 PDF。</p></li>';
                     document.getElementById('paperDetail').style.display = 'none';
                 } else {
                     list.innerHTML = papers.map(p => `
                         <li class="paper-item" onclick="viewPaper('${p.id}')" style="cursor:pointer;">
                             <div class="paper-info">
-                                <div class="paper-title">${esc(p.title || '(Untitled)')}</div>
+                                <div class="paper-title">${esc(p.title || '（未命名）')}</div>
                                 <div class="paper-meta">
                                     ${p.authors ? esc(p.authors) + ' · ' : ''}
                                     ${p.year || ''}
-                                    Imported: ${p.imported_at}
-                                    <span class="parse-badge parse-${p.parse_status}">${p.parse_status}</span>
+                                    导入：${p.imported_at}
+                                    <span class="parse-badge parse-${p.parse_status}">${tParseStatus(p.parse_status)}</span>
                                 </div>
                             </div>
                         </li>
@@ -744,7 +786,7 @@
                 if (!res.ok) return;
                 currentPaper = await res.json();
                 const detail = document.getElementById('paperDetail');
-                document.getElementById('paperDetailTitle').textContent = currentPaper.title || '(Untitled)';
+                document.getElementById('paperDetailTitle').textContent = currentPaper.title || '（未命名）';
                 document.getElementById('editTitle').value = currentPaper.title || '';
                 document.getElementById('editAuthors').value = currentPaper.authors || '';
                 document.getElementById('editYear').value = currentPaper.year || '';
@@ -757,7 +799,7 @@
                 document.getElementById('editTags').value = currentPaper.user_tags || '';
                 document.getElementById('editRelation').value = currentPaper.relation_to_idea || 'unclassified';
                 document.getElementById('paperParseStatus').textContent =
-                    'Parse status: ' + currentPaper.parse_status;
+                    '解析状态：' + tParseStatus(currentPaper.parse_status);
                 detail.style.display = 'block';
                 await loadPaperPassages(paperId); await loadPaperCards(paperId);
                 detail.scrollIntoView({ behavior: 'smooth' });
@@ -770,14 +812,14 @@
                 const passages = res.ok ? await res.json() : [];
                 const list = document.getElementById('passagesList');
                 if (passages.length === 0) {
-                    list.innerHTML = '<p style="color:#999;font-size:0.85rem;">No passages yet. Click "Parse PDF" to extract text.</p>';
+                    list.innerHTML = '<p style="color:#999;font-size:0.85rem;">还没有原文片段。点击“解析 PDF”提取文本。</p>';
                 } else {
                     list.innerHTML = passages.map(p => `
                         <div style="border:1px solid #eee; border-radius:6px; padding:10px; margin-bottom:8px;">
                             <div style="display:flex; gap:8px; align-items:center; margin-bottom:4px;">
-                                <span class="parse-badge" style="background:#e3f2fd;color:#1565c0;">${esc(p.section)}</span>
-                                <span class="parse-badge" style="background:#f3e5f5;color:#7b1fa2;">${esc(p.passage_type)}</span>
-                                <span style="font-size:0.78rem;color:#999;">Page ${p.page_number} · Para ${p.paragraph_index}</span>
+                                <span class="parse-badge" style="background:#e3f2fd;color:#1565c0;">${esc(tSection(p.section))}</span>
+                                <span class="parse-badge" style="background:#f3e5f5;color:#7b1fa2;">${esc(tSection(p.passage_type))}</span>
+                                <span style="font-size:0.78rem;color:#999;">第 ${p.page_number} 页 · 第 ${p.paragraph_index} 段</span>
                             </div>
                             <div style="font-size:0.85rem; line-height:1.5; white-space:pre-wrap;">${esc(p.original_text)}</div>
                         </div>
@@ -794,17 +836,17 @@
                 const cards = res.ok ? await res.json() : [];
                 const list = document.getElementById('cardsList');
                 if (cards.length === 0) {
-                    list.innerHTML = '<p style="color:#999;font-size:0.85rem;">No cards yet.</p>';
+                    list.innerHTML = '<p style="color:#999;font-size:0.85rem;">还没有知识卡片。</p>';
                 } else {
                     list.innerHTML = cards.map(c => `
                         <div style="border:1px solid #eee; border-radius:6px; padding:8px 10px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:flex-start;">
                             <div style="flex:1;">
-                                <span class="parse-badge" style="background:#e8f5e9;color:#2e7d32;">${esc(c.card_type)}</span>
-                                ${c.source_passage_id ? '<span class="parse-badge" style="background:#fff3e0;color:#e65100;margin-left:4px;">has source</span>' : ''}
-                                <span style="font-size:0.78rem;color:#999;">Conf: ${c.confidence.toFixed(2)}</span>
+                                <span class="parse-badge" style="background:#e8f5e9;color:#2e7d32;">${esc(tCardType(c.card_type))}</span>
+                                ${c.source_passage_id ? '<span class="parse-badge" style="background:#fff3e0;color:#e65100;margin-left:4px;">有来源</span>' : ''}
+                                <span style="font-size:0.78rem;color:#999;">置信度：${c.confidence.toFixed(2)}</span>
                                 <div style="font-size:0.85rem; margin-top:4px;">${esc(c.summary)}</div>
                             </div>
-                            <button class="btn-danger btn-sm" onclick="deleteCard('''${c.id}''')" style="margin-left:8px;">×</button>
+                            <button class="btn-danger btn-sm" onclick="deleteCard('${c.id}')" style="margin-left:8px;">×</button>
                         </div>
                     `).join('');
                 }
@@ -823,7 +865,7 @@
                 summary: document.getElementById('newCardSummary').value.trim(),
                 confidence: 1.0
             };
-            if (!body.summary) { showError('Summary is required.'); return; }
+            if (!body.summary) { showError('请填写摘要。'); return; }
             try {
                 const res = await fetch('/api/cards', {
                     method: 'POST',
@@ -844,13 +886,13 @@
                 const res = await fetch('/api/cards/extract/' + currentPaper.id, { method: 'POST' });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.detail || 'Extraction failed');
-                alert('Extracted ' + data.card_count + ' cards.');
+                alert('已抽取 ' + data.card_count + ' 张卡片。');
                 await loadPaperCards(currentPaper.id);
             } catch (e) { showError(e.message); }
         }
 
         async function deleteCard(cardId) {
-            if (!confirm('Delete this card?')) return;
+            if (!confirm('要删除这张卡片吗？')) return;
             try {
                 await fetch('/api/cards/' + cardId, { method: 'DELETE' });
                 if (currentPaper) await loadPaperCards(currentPaper.id);
@@ -859,16 +901,16 @@
 
         async function parsePaper() {
             if (!currentPaper) return;
-            document.getElementById('paperParseStatus').textContent = 'Parsing...';
+            document.getElementById('paperParseStatus').textContent = '正在解析...';
             try {
                 const res = await fetch('/api/papers/' + currentPaper.id + '/parse', { method: 'POST' });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.detail || 'Parse failed');
                 document.getElementById('paperParseStatus').textContent =
-                    'Parse status: parsed (' + data.passage_count + ' passages)';
+                    '解析状态：已解析（' + data.passage_count + ' 个片段）';
                 await loadPaperPassages(currentPaper.id);
             } catch (e) {
-                document.getElementById('paperParseStatus').textContent = 'Parse failed: ' + e.message;
+                document.getElementById('paperParseStatus').textContent = '解析失败：' + e.message;
             }
         }
 
@@ -898,7 +940,7 @@
                     throw new Error(err.detail || 'Save failed');
                 }
                 currentPaper = await res.json();
-                document.getElementById('paperDetailTitle').textContent = currentPaper.title || '(Untitled)';
+                document.getElementById('paperDetailTitle').textContent = currentPaper.title || '（未命名）';
                 await loadPapers();
                 showError(''); // clear any previous error
             } catch (e) { showError(e.message); }
@@ -912,27 +954,27 @@
             event.target.classList.add('active');
 
             const container = document.getElementById('structuredViewContent');
-            container.innerHTML = '<p style="color:#999;">Loading...</p>';
+            container.innerHTML = '<p style="color:#999;">正在加载...</p>';
             try {
                 const res = await fetch('/api/cards?card_type=' + encodeURIComponent(cardType));
-                if (!res.ok) { container.innerHTML = '<p style="color:#999;">No active space.</p>'; return; }
+                if (!res.ok) { container.innerHTML = '<p style="color:#999;">还没有打开的空间。</p>'; return; }
                 const cards = await res.json();
                 if (cards.length === 0) {
-                    container.innerHTML = '<p style="color:#999;">No ' + cardType + ' cards in this space.</p>';
+                    container.innerHTML = '<p style="color:#999;">当前空间没有“' + tCardType(cardType) + '”卡片。</p>';
                     return;
                 }
                 container.innerHTML = cards.map(c => `
                     <div style="border:1px solid #e0e0e0; border-radius:6px; padding:10px; margin-bottom:6px;">
                         <div style="display:flex; gap:8px; align-items:center; margin-bottom:4px;">
-                            <span class="parse-badge" style="background:#e8f5e9;color:#2e7d32;">${esc(c.card_type)}</span>
+                            <span class="parse-badge" style="background:#e8f5e9;color:#2e7d32;">${esc(tCardType(c.card_type))}</span>
                             <span style="font-size:0.85rem; font-weight:600;">${esc(c.summary.substring(0, 80))}${c.summary.length > 80 ? '...' : ''}</span>
-                            <span style="font-size:0.75rem;color:#999;">Conf: ${c.confidence.toFixed(2)}</span>
+                            <span style="font-size:0.75rem;color:#999;">置信度：${c.confidence.toFixed(2)}</span>
                         </div>
                         <div style="font-size:0.85rem; color:#666;">${esc(c.summary)}</div>
-                        ${c.source_passage_id ? '<a href="#" onclick="viewPaper('${c.paper_id}')" style="font-size:0.78rem;color:#1976d2;">Open paper →</a>' : ''}
+                        ${c.source_passage_id ? '<a href="#" onclick="viewPaper(\'' + c.paper_id + '\')" style="font-size:0.78rem;color:#1976d2;">打开论文 &rarr;</a>' : ''}
                     </div>
                 `).join('');
-            } catch (e) { container.innerHTML = '<p style="color:#c62828;">Failed to load.</p>'; }
+            } catch (e) { container.innerHTML = '<p style="color:#c62828;">加载失败。</p>'; }
         }
 
         // --- Agent Access ---
@@ -943,7 +985,7 @@
                 const data = await res.json();
                 document.getElementById('agentToggle').checked = data.enabled;
                 document.getElementById('agentExposedSpace').textContent =
-                    data.active_space ? data.active_space.name : 'None';
+                    data.active_space ? data.active_space.name : '无';
                 document.getElementById('agentExposedSpace').style.color =
                     data.enabled ? '#0d47a1' : '#999';
             } catch (e) { /* ignore */ }
@@ -958,7 +1000,7 @@
                     body: JSON.stringify({ enabled })
                 });
                 await loadAgentStatus();
-            } catch (e) { showError('Failed to update agent access.'); }
+            } catch (e) { showError('更新智能代理访问状态失败。'); }
         }
 
         // --- Update loadSpaces to show/hide papers section ---

@@ -6,6 +6,12 @@ Local Paper Knowledge Engine 是一个本地优先的论文知识管理工具。
 
 产品本身不运行科研 agent，也不替用户执行实验。它负责管理论文、解析 PDF、生成 passage 和 knowledge card，并通过本地 MCP Server 把当前 idea space 的文献知识提供给 Codex、Claude Code、Cursor 等外部 agent。
 
+## 桌面应用
+
+当前产品迁移为 Tauri 桌面应用。桌面应用使用中文三栏研究工作台界面，并在启动时自动拉起本地 Python API sidecar。用户不需要手动启动 FastAPI 服务。
+
+第一阶段 macOS 支持生成未签名 `.dmg`，Windows 预留 Windows 构建环境和安装包配置。正式对外分发前需要代码签名。
+
 ## 适用场景
 
 - 围绕一个研究 idea 收集和管理相关论文。

@@ -12,6 +12,8 @@ npm --prefix frontend install
 npm run tauri build
 ```
 
+The root `npm run tauri build` script sets CI mode for the Tauri CLI. On macOS this skips Finder AppleScript DMG window customization, which keeps local automation and CI builds from hanging while still producing a valid unsigned DMG.
+
 The unsigned `.dmg` is generated under:
 
 ```txt

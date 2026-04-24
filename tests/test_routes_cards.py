@@ -137,3 +137,35 @@ async def test_create_card_rejects_source_passage_from_other_paper(
 
     assert resp.status_code == 422
     assert "source_passage_id" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_extract_cards_returns_heuristic_metadata(
+    client: AsyncClient,
+    setup_space_and_paper: tuple[str, str],
+) -> None:
+    space_id, paper_id = setup_space_and_paper
+
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO passages
+               (id, paper_id, space_id, section, original_text)
+               VALUES ('heuristic-passage', ?, ?, 'method', ?)""",
+            (
+                paper_id,
+                space_id,
+                "The protocol measures sample stability after synthesis.",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    resp = await client.post(f"/api/cards/extract/{paper_id}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "extracted"
+    assert body["mode"] == "heuristic"
+    assert body["message"] == "启发式抽取结果需要人工检查和修正。"

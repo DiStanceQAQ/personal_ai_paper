@@ -226,7 +226,13 @@ async def extract_cards(paper_id: str) -> dict[str, Any]:
         ).fetchall()
 
         if not passages:
-            return {"status": "no_passages", "paper_id": paper_id, "card_count": 0}
+            return {
+                "status": "no_passages",
+                "paper_id": paper_id,
+                "card_count": 0,
+                "mode": "heuristic",
+                "message": "没有可抽取的原文片段。",
+            }
 
         passage_list = [dict(p) for p in passages]
         cards = extract_cards_from_passages(passage_list, paper_id, space_id)
@@ -241,6 +247,12 @@ async def extract_cards(paper_id: str) -> dict[str, Any]:
             )
 
         conn.commit()
-        return {"status": "extracted", "paper_id": paper_id, "card_count": len(cards)}
+        return {
+            "status": "extracted",
+            "paper_id": paper_id,
+            "card_count": len(cards),
+            "mode": "heuristic",
+            "message": "启发式抽取结果需要人工检查和修正。",
+        }
     finally:
         conn.close()

@@ -1,4 +1,4 @@
-"""Rules-based knowledge card extraction from passages."""
+"""Rules-based, domain-neutral heuristic knowledge card extraction from passages."""
 
 import uuid
 from typing import Any
@@ -6,26 +6,38 @@ from typing import Any
 METHOD_KEYWORDS = [
     "method", "approach", "architecture", "algorithm", "protocol",
     "pipeline", "framework", "model", "we propose", "we present",
-    "we introduce", "we develop", "we design",
+    "we introduce", "we develop", "we design", "procedure", "workflow",
+    "intervention", "assay", "synthesis", "experiment", "experimental setup",
 ]
 
 RESULT_KEYWORDS = [
     "result", "achieve", "outperform", "accuracy", "performance",
     "improve", "increase", "decrease", "score", "f1", "bleu",
-    "we obtain", "we report", "shows that", "demonstrates",
+    "we obtain", "we report", "shows that", "demonstrates", "significant",
+    "statistical test", "yield", "stability", "effect size", "outcome",
 ]
 
 LIMITATION_KEYWORDS = [
     "limitation", "limited", "future work", "we acknowledge",
     "drawback", "shortcoming", "does not", "fail", "however",
-    "although", "despite",
+    "although", "despite", "constraint", "bias", "confounder",
+    "uncertainty", "threat to validity",
 ]
 
 METRIC_KEYWORDS = [
     "metric", "measure", "evaluate", "accuracy", "precision",
     "recall", "f1", "bleu", "rouge", "perplexity", "auc",
-    "rmse", "mae", "map", "ndcg",
+    "rmse", "mae", "map", "ndcg", "measurement", "endpoint",
+    "statistical test", "p-value", "confidence interval", "sample",
+    "cohort", "yield", "stability",
 ]
+
+HEURISTIC_CONFIDENCE = {
+    "Method": 0.55,
+    "Result": 0.5,
+    "Limitation": 0.5,
+    "Metric": 0.5,
+}
 
 
 def extract_cards_from_passages(
@@ -33,9 +45,10 @@ def extract_cards_from_passages(
     paper_id: str,
     space_id: str,
 ) -> list[dict[str, Any]]:
-    """Extract knowledge cards from a list of passages using rules-based heuristics.
+    """Extract low-confidence heuristic cards from passages.
 
-    Returns a list of card dicts ready for database insertion.
+    The extractor is domain-neutral. It does not claim to understand a scientific
+    field; users should review and edit generated cards.
     """
     cards: list[dict[str, Any]] = []
 
@@ -44,32 +57,28 @@ def extract_cards_from_passages(
         text_lower = text.lower()
         passage_id = str(passage["id"])
 
-        # Method cards
         if any(kw in text_lower for kw in METHOD_KEYWORDS):
             cards.append(_make_card(
                 space_id, paper_id, passage_id, "Method",
-                _first_sentence(text), 0.6,
+                _first_sentence(text), HEURISTIC_CONFIDENCE["Method"],
             ))
 
-        # Result cards
         if any(kw in text_lower for kw in RESULT_KEYWORDS):
             cards.append(_make_card(
                 space_id, paper_id, passage_id, "Result",
-                _first_sentence(text), 0.5,
+                _first_sentence(text), HEURISTIC_CONFIDENCE["Result"],
             ))
 
-        # Limitation cards
         if any(kw in text_lower for kw in LIMITATION_KEYWORDS):
             cards.append(_make_card(
                 space_id, paper_id, passage_id, "Limitation",
-                _first_sentence(text), 0.5,
+                _first_sentence(text), HEURISTIC_CONFIDENCE["Limitation"],
             ))
 
-        # Metric cards
         if any(kw in text_lower for kw in METRIC_KEYWORDS):
             cards.append(_make_card(
                 space_id, paper_id, passage_id, "Metric",
-                _first_sentence(text), 0.5,
+                _first_sentence(text), HEURISTIC_CONFIDENCE["Metric"],
             ))
 
     return cards

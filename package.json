@@ -7,9 +7,9 @@
     "frontend:dev": "npm --prefix frontend run dev",
     "frontend:build": "npm --prefix frontend run build",
     "frontend:typecheck": "npm --prefix frontend run typecheck",
-    "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri": "node scripts/run_tauri.mjs",
+    "tauri:dev": "npm run tauri dev",
+    "tauri:build": "npm run tauri build"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

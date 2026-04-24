@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import uvicorn
-
-from main import app
 
 
 @dataclass(frozen=True)
@@ -38,6 +37,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     settings = parse_args(argv)
     if settings.data_dir is not None:
         os.environ["PAPER_ENGINE_DATA_DIR"] = str(settings.data_dir)
+    app: Any = importlib.import_module("main").app
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="info")
 
 

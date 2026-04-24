@@ -38,19 +38,27 @@ def host_triple() -> str:
     raise RuntimeError("Unable to determine rust target triple")
 
 
-def build_onefile(name: str, entrypoint: str) -> Path:
+def build_onefile(
+    name: str,
+    entrypoint: str,
+    hidden_imports: tuple[str, ...] = (),
+) -> Path:
+    command = [
+        sys.executable,
+        "-m",
+        "PyInstaller",
+        "--clean",
+        "--noconfirm",
+        "--onefile",
+        "--name",
+        name,
+    ]
+    for module in hidden_imports:
+        command.extend(["--hidden-import", module])
+    command.append(entrypoint)
+
     subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "PyInstaller",
-            "--clean",
-            "--noconfirm",
-            "--onefile",
-            "--name",
-            name,
-            entrypoint,
-        ],
+        command,
         cwd=ROOT,
         check=True,
     )
@@ -80,14 +88,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     target_triple = host_triple()
-    targets = []
+    targets: list[tuple[str, str, tuple[str, ...]]] = []
     if args.target in {"api", "all"}:
-        targets.append(("paper-engine-api", "api_sidecar.py"))
+        targets.append(("paper-engine-api", "api_sidecar.py", ("main",)))
     if args.target in {"mcp", "all"}:
-        targets.append(("paper-engine-mcp", "mcp_server.py"))
+        targets.append(("paper-engine-mcp", "mcp_server.py", ()))
 
-    for sidecar_name, entrypoint in targets:
-        binary = build_onefile(sidecar_name, entrypoint)
+    for sidecar_name, entrypoint, hidden_imports in targets:
+        binary = build_onefile(sidecar_name, entrypoint, hidden_imports)
         packaged = copy_for_tauri(binary, sidecar_name, target_triple)
         print(f"Built {packaged}")
 

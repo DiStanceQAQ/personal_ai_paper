@@ -3,7 +3,7 @@
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 
 from db import get_connection
 
@@ -18,7 +18,10 @@ def _space_row_to_dict(row: Any) -> dict[str, Any]:
 
 
 @router.post("")
-async def create_space(name: str, description: str = "") -> dict[str, Any]:
+async def create_space(
+    name: str = Body(...),
+    description: str = Body(""),
+) -> dict[str, Any]:
     """Create a new idea space."""
     space_id = str(uuid.uuid4())
     conn = get_connection()
@@ -109,8 +112,12 @@ async def get_space(space_id: str) -> dict[str, Any]:
 
 
 @router.patch("/{space_id}")
-async def rename_space(space_id: str, name: str) -> dict[str, Any]:
-    """Rename an idea space."""
+async def update_space(
+    space_id: str,
+    name: str | None = Body(None),
+    description: str | None = Body(None),
+) -> dict[str, Any]:
+    """Update an idea space's name and/or description."""
     conn = get_connection()
     try:
         row = conn.execute(
@@ -119,11 +126,24 @@ async def rename_space(space_id: str, name: str) -> dict[str, Any]:
         if row is None or row["status"] == "deleted":
             raise HTTPException(status_code=404, detail="Space not found")
 
-        conn.execute(
-            "UPDATE spaces SET name = ?, updated_at = datetime('now') WHERE id = ?",
-            (name, space_id),
-        )
-        conn.commit()
+        updates: list[str] = []
+        params: list[str] = []
+
+        if name is not None:
+            updates.append("name = ?")
+            params.append(name)
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+
+        if updates:
+            updates.append("updated_at = datetime('now')")
+            params.append(space_id)
+            conn.execute(
+                f"UPDATE spaces SET {', '.join(updates)} WHERE id = ?",
+                params,
+            )
+            conn.commit()
     finally:
         conn.close()
 

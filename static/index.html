@@ -5,48 +5,408 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Local Paper Knowledge Engine</title>
     <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 800px;
-            margin: 40px auto;
-            padding: 0 20px;
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 24px 20px;
             color: #333;
             line-height: 1.6;
+            background: #fafafa;
         }
-        h1 { color: #1a1a2e; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px; }
-        .status { padding: 8px 16px; border-radius: 4px; display: inline-block; }
-        .status.healthy { background: #e8f5e9; color: #2e7d32; }
-        .status.checking { background: #fff3e0; color: #e65100; }
+
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        h1 { font-size: 1.6rem; color: #1a1a2e; }
+        h2 { font-size: 1.15rem; color: #444; margin-bottom: 12px; }
+
+        /* Active Space Banner */
+        .active-banner {
+            background: #e3f2fd;
+            border: 1px solid #90caf9;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .active-banner .label { font-weight: 600; color: #1565c0; }
+        .active-banner .name { color: #0d47a1; margin-left: 6px; }
+        .active-banner .none { color: #999; font-style: italic; }
+
+        /* Form */
+        .create-form {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 24px;
+        }
+        .form-row {
+            display: flex;
+            gap: 12px;
+            align-items: flex-end;
+            flex-wrap: wrap;
+        }
+        .form-group { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 180px; }
+        .form-group label { font-size: 0.85rem; font-weight: 600; color: #555; }
+        .form-group input {
+            padding: 8px 12px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 0.95rem;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: #1976d2;
+            box-shadow: 0 0 0 2px rgba(25,118,210,0.15);
+        }
+
+        /* Buttons */
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .btn-primary { background: #1976d2; color: #fff; }
+        .btn-primary:hover { background: #1565c0; }
+        .btn-success { background: #2e7d32; color: #fff; }
+        .btn-success:hover { background: #1b5e20; }
+        .btn-outline { background: #fff; color: #1976d2; border: 1px solid #1976d2; }
+        .btn-outline:hover { background: #e3f2fd; }
+        .btn-danger { background: #fff; color: #c62828; border: 1px solid #c62828; }
+        .btn-danger:hover { background: #ffebee; }
+        .btn-sm { padding: 4px 10px; font-size: 0.8rem; }
+
+        /* Space List */
+        .space-list { list-style: none; }
+        .space-item {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .space-item.active-space { border-color: #1976d2; background: #f5f9ff; }
+        .space-info { flex: 1; min-width: 0; }
+        .space-name { font-weight: 600; font-size: 0.95rem; }
+        .space-desc { font-size: 0.85rem; color: #666; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .space-meta { font-size: 0.78rem; color: #999; margin-top: 2px; }
+
+        /* Status Badges */
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge-active { background: #e8f5e9; color: #2e7d32; }
+        .badge-archived { background: #fff3e0; color: #e65100; }
+
+        .space-actions { display: flex; gap: 4px; }
+
+        /* Inline Edit */
+        .inline-edit { display: none; }
+        .inline-edit input {
+            padding: 4px 8px;
+            border: 1px solid #1976d2;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            width: 100%;
+        }
+
+        /* Description Edit */
+        .desc-edit-area {
+            display: none;
+            margin-top: 8px;
+        }
+        .desc-edit-area textarea {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #1976d2;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 60px;
+        }
+        .desc-edit-actions { display: flex; gap: 6px; margin-top: 6px; }
+
+        /* Error / Empty states */
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #999;
+        }
+        .empty-state p { margin-bottom: 12px; }
+        .error-toast {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            background: #ffebee;
+            color: #c62828;
+            border: 1px solid #ef9a9a;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            display: none;
+            z-index: 1000;
+        }
     </style>
 </head>
 <body>
-    <h1>&#x1F4DA; Local Paper Knowledge Engine</h1>
-    <p>A local-first paper knowledge engine organized by research idea spaces.</p>
+    <div id="errorToast" class="error-toast"></div>
 
-    <h2>Service Status</h2>
-    <div id="status" class="status checking">Checking...</div>
+    <header>
+        <h1>&#x1F4DA; Local Paper Knowledge Engine</h1>
+    </header>
 
-    <h2>Getting Started</h2>
-    <ol>
-        <li>Create an <strong>Idea Space</strong> for your research project</li>
-        <li><strong>Import PDFs</strong> into your space</li>
-        <li><strong>Search</strong> and browse parsed papers</li>
-        <li>Connect external agents via <strong>MCP Server</strong></li>
-    </ol>
+    <!-- Active Space Banner -->
+    <div class="active-banner" id="activeBanner">
+        <div>
+            <span class="label">Active Space:</span>
+            <span class="name" id="activeSpaceName">None selected</span>
+        </div>
+    </div>
+
+    <!-- Create Space Form -->
+    <div class="create-form">
+        <h2>Create New Idea Space</h2>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="newName">Space Name *</label>
+                <input type="text" id="newName" placeholder="e.g., Attention Mechanism Survey" required>
+            </div>
+            <div class="form-group">
+                <label for="newDesc">Description</label>
+                <input type="text" id="newDesc" placeholder="Research goals, hypotheses...">
+            </div>
+            <button class="btn-primary" onclick="createSpace()">+ Create</button>
+        </div>
+    </div>
+
+    <!-- Space List -->
+    <h2>Idea Spaces</h2>
+    <ul class="space-list" id="spaceList">
+        <li class="empty-state">
+            <p>No idea spaces yet.</p>
+            <p>Create your first space above to get started.</p>
+        </li>
+    </ul>
 
     <script>
-        fetch('/health')
-            .then(res => res.json())
-            .then(data => {
-                const el = document.getElementById('status');
-                el.textContent = '✅ ' + data.status;
-                el.className = 'status healthy';
-            })
-            .catch(() => {
-                const el = document.getElementById('status');
-                el.textContent = '❌ Unreachable';
-                el.className = 'status error';
+        const API = '/api/spaces';
+
+        function showError(msg) {
+            const el = document.getElementById('errorToast');
+            el.textContent = msg;
+            el.style.display = 'block';
+            setTimeout(() => el.style.display = 'none', 3000);
+        }
+
+        async function api(path, options = {}) {
+            const res = await fetch(API + path, {
+                headers: { 'Content-Type': 'application/json' },
+                ...options
             });
+            if (!res.ok && res.status !== 404) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || `Request failed: ${res.status}`);
+            }
+            return res;
+        }
+
+        async function loadSpaces() {
+            try {
+                const res = await api('');
+                const spaces = await res.json();
+                let activeId = null;
+                try {
+                    const aRes = await api('/active');
+                    if (aRes.ok) {
+                        const active = await aRes.json();
+                        activeId = active.id;
+                        document.getElementById('activeSpaceName').textContent = active.name;
+                    } else {
+                        document.getElementById('activeSpaceName').textContent = 'None selected';
+                    }
+                } catch (e) {
+                    document.getElementById('activeSpaceName').textContent = 'None selected';
+                }
+
+                const list = document.getElementById('spaceList');
+                if (spaces.length === 0) {
+                    list.innerHTML = '<li class="empty-state"><p>No idea spaces yet.</p><p>Create your first space above to get started.</p></li>';
+                    return;
+                }
+
+                list.innerHTML = spaces.map(s => {
+                    const isActive = s.id === activeId;
+                    const statusBadge = s.status === 'active'
+                        ? `<span class="badge badge-active">Active</span>`
+                        : `<span class="badge badge-archived">Archived</span>`;
+                    
+                    return `
+                    <li class="space-item ${isActive ? 'active-space' : ''}" id="space-${s.id}">
+                        <div class="space-info">
+                            <div class="space-name">
+                                <span class="display-name" id="dname-${s.id}">${esc(s.name)}</span>
+                                <span class="inline-edit" id="ename-${s.id}">
+                                    <input type="text" value="${esc(s.name)}" id="iname-${s.id}">
+                                </span>
+                                ${statusBadge}
+                                ${isActive ? '<span class="badge badge-active" style="margin-left:4px;">Current</span>' : ''}
+                            </div>
+                            <div class="space-desc">
+                                <span class="display-desc" id="ddesc-${s.id}">${esc(s.description || 'No description')}</span>
+                            </div>
+                            <div class="desc-edit-area" id="edesc-area-${s.id}">
+                                <textarea id="edesc-${s.id}">${esc(s.description || '')}</textarea>
+                                <div class="desc-edit-actions">
+                                    <button class="btn-primary btn-sm" onclick="saveDesc('${s.id}')">Save</button>
+                                    <button class="btn-outline btn-sm" onclick="cancelDescEdit('${s.id}')">Cancel</button>
+                                </div>
+                            </div>
+                            <div class="space-meta">Created: ${s.created_at} | Updated: ${s.updated_at}</div>
+                        </div>
+                        <div class="space-actions">
+                            ${s.status === 'active' && !isActive
+                                ? `<button class="btn btn-outline btn-sm" onclick="setActive('${s.id}')">Open</button>`
+                                : ''}
+                            <button class="btn btn-outline btn-sm" id="rename-btn-${s.id}" onclick="startRename('${s.id}')">Rename</button>
+                            <span class="inline-edit" id="erename-actions-${s.id}">
+                                <button class="btn-primary btn-sm" onclick="saveRename('${s.id}')">Save</button>
+                                <button class="btn-outline btn-sm" onclick="cancelRename('${s.id}')">Cancel</button>
+                            </span>
+                            <button class="btn btn-outline btn-sm" onclick="startDescEdit('${s.id}')">Edit Desc</button>
+                            ${s.status === 'active'
+                                ? `<button class="btn btn-outline btn-sm" onclick="archiveSpace('${s.id}')">Archive</button>`
+                                : ''}
+                            <button class="btn btn-danger btn-sm" onclick="deleteSpace('${s.id}')">Delete</button>
+                        </div>
+                    </li>`;
+                }).join('');
+            } catch (e) {
+                showError(e.message);
+            }
+        }
+
+        function esc(s) {
+            const div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+
+        async function createSpace() {
+            const name = document.getElementById('newName').value.trim();
+            const desc = document.getElementById('newDesc').value.trim();
+            if (!name) { showError('Space name is required.'); return; }
+            try {
+                await api('', {
+                    method: 'POST',
+                    body: JSON.stringify({ name, description: desc }),
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                document.getElementById('newName').value = '';
+                document.getElementById('newDesc').value = '';
+                await loadSpaces();
+            } catch (e) { showError(e.message); }
+        }
+
+        async function setActive(id) {
+            try {
+                await api('/active/' + id, { method: 'PUT' });
+                await loadSpaces();
+            } catch (e) { showError(e.message); }
+        }
+
+        function startRename(id) {
+            document.getElementById('dname-' + id).style.display = 'none';
+            document.getElementById('ename-' + id).style.display = 'inline';
+            document.getElementById('erename-actions-' + id).style.display = 'inline';
+            document.getElementById('rename-btn-' + id).style.display = 'none';
+            document.getElementById('iname-' + id).focus();
+            document.getElementById('iname-' + id).select();
+        }
+
+        async function saveRename(id) {
+            const name = document.getElementById('iname-' + id).value.trim();
+            if (!name) { showError('Name cannot be empty.'); return; }
+            try {
+                await api('/' + id, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ name })
+                });
+                cancelRename(id);
+                await loadSpaces();
+            } catch (e) { showError(e.message); }
+        }
+
+        function cancelRename(id) {
+            document.getElementById('dname-' + id).style.display = 'inline';
+            document.getElementById('ename-' + id).style.display = 'none';
+            document.getElementById('erename-actions-' + id).style.display = 'none';
+            document.getElementById('rename-btn-' + id).style.display = 'inline';
+        }
+
+        function startDescEdit(id) {
+            document.getElementById('edesc-area-' + id).style.display = 'block';
+            document.getElementById('edesc-' + id).focus();
+        }
+
+        async function saveDesc(id) {
+            const desc = document.getElementById('edesc-' + id).value.trim();
+            try {
+                await api('/' + id, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ description: desc })
+                });
+                cancelDescEdit(id);
+                await loadSpaces();
+            } catch (e) { showError(e.message); }
+        }
+
+        function cancelDescEdit(id) {
+            document.getElementById('edesc-area-' + id).style.display = 'none';
+        }
+
+        async function archiveSpace(id) {
+            if (!confirm('Archive this space? It will be preserved but hidden from active views.')) return;
+            try {
+                await api('/' + id + '/archive', { method: 'PATCH' });
+                await loadSpaces();
+            } catch (e) { showError(e.message); }
+        }
+
+        async function deleteSpace(id) {
+            if (!confirm('Delete this space? Data will be preserved but the space will be hidden.')) return;
+            try {
+                await api('/' + id, { method: 'DELETE' });
+                await loadSpaces();
+            } catch (e) { showError(e.message); }
+        }
+
+        // Initial load
+        loadSpaces();
     </script>
 </body>
 </html>

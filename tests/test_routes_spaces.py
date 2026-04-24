@@ -41,7 +41,7 @@ def client(db_path: str) -> Generator[AsyncClient, None, None]:
 async def test_create_and_get_space(client: AsyncClient) -> None:
     """Test creating a space and retrieving it."""
     # Create
-    resp = await client.post("/api/spaces", params={"name": "Test Space", "description": "A test"})
+    resp = await client.post("/api/spaces", json={"name": "Test Space", "description": "A test"})
     assert resp.status_code == 200
     data = resp.json()
     space_id = data["id"]
@@ -58,8 +58,8 @@ async def test_create_and_get_space(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_list_spaces(client: AsyncClient) -> None:
     """Test listing spaces."""
-    await client.post("/api/spaces", params={"name": "Space A"})
-    await client.post("/api/spaces", params={"name": "Space B"})
+    await client.post("/api/spaces", json={"name": "Space A"})
+    await client.post("/api/spaces", json={"name": "Space B"})
 
     resp = await client.get("/api/spaces")
     assert resp.status_code == 200
@@ -72,18 +72,36 @@ async def test_list_spaces(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_rename_space(client: AsyncClient) -> None:
     """Test renaming a space."""
-    resp = await client.post("/api/spaces", params={"name": "Original"})
+    resp = await client.post("/api/spaces", json={"name": "Original"})
     space_id = resp.json()["id"]
 
-    resp = await client.patch(f"/api/spaces/{space_id}", params={"name": "Renamed"})
+    resp = await client.patch(
+        f"/api/spaces/{space_id}", json={"name": "Renamed"}
+    )
     assert resp.status_code == 200
     assert resp.json()["name"] == "Renamed"
 
 
 @pytest.mark.asyncio
+async def test_update_space_description(client: AsyncClient) -> None:
+    """Test updating a space's description."""
+    resp = await client.post(
+        "/api/spaces", json={"name": "Desc Test", "description": "Original desc"}
+    )
+    space_id = resp.json()["id"]
+
+    resp = await client.patch(
+        f"/api/spaces/{space_id}", json={"description": "Updated desc"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["description"] == "Updated desc"
+    assert resp.json()["name"] == "Desc Test"  # name unchanged
+
+
+@pytest.mark.asyncio
 async def test_archive_space(client: AsyncClient) -> None:
     """Test archiving a space."""
-    resp = await client.post("/api/spaces", params={"name": "To Archive"})
+    resp = await client.post("/api/spaces", json={"name": "To Archive"})
     space_id = resp.json()["id"]
 
     resp = await client.patch(f"/api/spaces/{space_id}/archive")
@@ -106,7 +124,7 @@ async def test_archive_space(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_delete_space(client: AsyncClient) -> None:
     """Test deleting a space."""
-    resp = await client.post("/api/spaces", params={"name": "To Delete"})
+    resp = await client.post("/api/spaces", json={"name": "To Delete"})
     space_id = resp.json()["id"]
 
     resp = await client.delete(f"/api/spaces/{space_id}")
@@ -121,7 +139,7 @@ async def test_delete_space(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_set_and_get_active_space(client: AsyncClient) -> None:
     """Test setting and reading the active space."""
-    resp = await client.post("/api/spaces", params={"name": "Active One"})
+    resp = await client.post("/api/spaces", json={"name": "Active One"})
     space_id = resp.json()["id"]
 
     # Set active
@@ -138,8 +156,8 @@ async def test_set_and_get_active_space(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_delete_does_not_affect_other_spaces(client: AsyncClient) -> None:
     """Test that deleting one space does not affect others."""
-    resp_a = await client.post("/api/spaces", params={"name": "Space A"})
-    resp_b = await client.post("/api/spaces", params={"name": "Space B"})
+    resp_a = await client.post("/api/spaces", json={"name": "Space A"})
+    resp_b = await client.post("/api/spaces", json={"name": "Space B"})
     id_a = resp_a.json()["id"]
     id_b = resp_b.json()["id"]
 
@@ -154,8 +172,8 @@ async def test_delete_does_not_affect_other_spaces(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_archive_does_not_affect_other_spaces(client: AsyncClient) -> None:
     """Test that archiving one space does not affect others."""
-    resp_a = await client.post("/api/spaces", params={"name": "Space A"})
-    resp_b = await client.post("/api/spaces", params={"name": "Space B"})
+    resp_a = await client.post("/api/spaces", json={"name": "Space A"})
+    resp_b = await client.post("/api/spaces", json={"name": "Space B"})
     id_a = resp_a.json()["id"]
     id_b = resp_b.json()["id"]
 

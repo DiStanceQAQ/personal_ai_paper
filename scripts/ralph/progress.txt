@@ -186,3 +186,14 @@
   - _first_sentence() helper truncates passage text for card summaries
   - Card extraction returns count; cards are immediately queryable via GET /api/cards
 ---
+
+## 2026-04-24 18:45 - US-013
+- Added structured literature views: Methods, Metrics, Results, Failure Modes, Limitations, Claims
+- Tab-based navigation with active highlighting
+- Each view filters cards by type from GET /api/cards?card_type=X
+- Cards show type badge, summary, confidence, and link to open paper
+- Views section visible when space is active
+- **Learnings for future iterations:**
+  - Card type tabs use encodeURIComponent for types with spaces (e.g., "Failure Mode")
+  - Views reuse existing list_cards API with card_type filter
+---

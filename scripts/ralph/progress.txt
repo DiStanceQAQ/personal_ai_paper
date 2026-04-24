@@ -116,3 +116,16 @@
   - `INSERT OR REPLACE` for passages avoids duplicates on re-parse
   - `finally: doc.close()` critical to avoid resource leaks
 ---
+
+## 2026-04-24 18:34 - US-008
+- Added GET /api/papers/{paper_id}/passages endpoint
+- Paper detail UI now shows passages with section badge, type badge, page number, paragraph index
+- "Parse PDF" button triggers parsing and refreshes passage display
+- Parse status shown in paper detail
+- Passage text displayed with pre-wrap for readability
+- 2 new tests: list_passages, list_passages_nonexistent_paper (37 total passing)
+- **Learnings for future iterations:**
+  - Passages ordered by page_number, paragraph_index for sequential reading
+  - Use CSS `white-space:pre-wrap` for displaying original text with formatting
+  - Passage badges show section (blue) and passage_type (purple) for quick scanning
+---

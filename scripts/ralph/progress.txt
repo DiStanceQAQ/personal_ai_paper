@@ -129,3 +129,19 @@
   - Use CSS `white-space:pre-wrap` for displaying original text with formatting
   - Passage badges show section (blue) and passage_type (purple) for quick scanning
 ---
+
+## 2026-04-24 18:38 - US-009
+- Standalone FTS5 virtual table on passages (passage_id, paper_id, space_id, section, original_text)
+- FTS index created in init_db() alongside schema tables
+- Passages auto-inserted into FTS on PDF parsing
+- Search API: GET /api/search?q=... with space isolation
+- snippet() for highlighted search results with match context
+- Search results include paper title, section, page, paragraph index, snippet, original text
+- 6 search tests: FTS creation, search results, space isolation, API tests (43 total passing)
+- **Learnings for future iterations:**
+  - FTS5 content mode (content=tablename) is complex; standalone FTS with manual sync is more reliable
+  - Content-mode FTS5 requires content table to have rowid (no WITHOUT ROWID tables)
+  - snippet() function works in standalone FTS mode out of the box
+  - Use rebuild_fts_index to re-sync from passages table after data changes
+  - Space isolation in search: filter by space_id in join condition
+---

@@ -13,6 +13,7 @@ from routes_spaces import router as spaces_router
 from routes_papers import router as papers_router
 from routes_search import router as search_router
 from routes_cards import router as cards_router
+from routes_agent import router as agent_router
 
 
 @asynccontextmanager
@@ -39,6 +40,7 @@ app.include_router(spaces_router)
 app.include_router(papers_router)
 app.include_router(search_router)
 app.include_router(cards_router)
+app.include_router(agent_router)
 
 
 @app.get("/", response_class=HTMLResponse)

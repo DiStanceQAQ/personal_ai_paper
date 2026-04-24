@@ -1,0 +1,366 @@
+"""Tests for agent access controls and space isolation (US-016)."""
+
+import tempfile
+from collections.abc import Generator
+from pathlib import Path
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from db import DATABASE_PATH, get_connection, init_db
+from main import app
+
+
+@pytest.fixture
+def client() -> Generator[AsyncClient, None, None]:
+    import db as db_module
+    import config as config_module
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_file = Path(tmpdir) / "test.db"
+        init_db(database_path=db_file)
+        db_module.DATABASE_PATH = db_file
+        config_module.SPACES_DIR = Path(tmpdir) / "spaces"
+
+        transport = ASGITransport(app=app)
+        test_client = AsyncClient(transport=transport, base_url="http://test")
+        yield test_client
+
+
+@pytest.fixture
+def db_path() -> Generator[str, None, None]:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_file = str(Path(tmpdir) / "test.db")
+        init_db(database_path=Path(db_file))
+        yield db_file
+
+
+# ── Agent Access Toggle ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_agent_status_default_disabled(client: AsyncClient) -> None:
+    """Agent access should default to disabled."""
+    resp = await client.get("/api/agent/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["enabled"] is False
+    assert data["server_name"] == "paper-knowledge-engine"
+    assert data["transport"] == "stdio"
+
+
+@pytest.mark.asyncio
+async def test_enable_agent(client: AsyncClient) -> None:
+    """Enable agent access via API."""
+    resp = await client.put("/api/agent/enable")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "enabled"
+
+    resp = await client.get("/api/agent/status")
+    assert resp.json()["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_disable_agent(client: AsyncClient) -> None:
+    """Disable agent access via API."""
+    await client.put("/api/agent/enable")
+    resp = await client.put("/api/agent/disable")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "disabled"
+
+    resp = await client.get("/api/agent/status")
+    assert resp.json()["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_set_agent_status(client: AsyncClient) -> None:
+    """Set agent status with boolean body."""
+    resp = await client.put("/api/agent/status", json={"enabled": True})
+    assert resp.status_code == 200
+    assert resp.json()["enabled"] is True
+
+    resp = await client.put("/api/agent/status", json={"enabled": False})
+    assert resp.status_code == 200
+    assert resp.json()["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_agent_status_shows_active_space(client: AsyncClient) -> None:
+    """Agent status endpoint shows the active space."""
+    # Create a space and set active
+    resp = await client.post("/api/spaces", json={"name": "Agent Test Space"})
+    space_id = resp.json()["id"]
+    await client.put(f"/api/spaces/active/{space_id}")
+
+    resp = await client.get("/api/agent/status")
+    data = resp.json()
+    assert data["active_space"] is not None
+    assert data["active_space"]["name"] == "Agent Test Space"
+
+
+# ── MCP Tool Access Control ──────────────────────────────────────────
+
+
+def test_mcp_tool_blocked_when_disabled(db_path: str) -> None:
+    """MCP tools return error when agent_access is disabled."""
+    import db as db_module
+    orig = db_module.DATABASE_PATH
+    db_module.DATABASE_PATH = Path(db_path)
+
+    conn = get_connection()
+    conn.execute("INSERT INTO spaces (id, name) VALUES ('s1', 'Test')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('active_space', 's1')")
+    # agent_access not inserted → default disabled
+    conn.commit()
+    conn.close()
+
+    from mcp_server import list_spaces, get_active_space, search_literature, get_paper_summary, get_methods, get_evidence_for_claim
+
+    # All tools should return error
+    r1 = list_spaces()
+    assert isinstance(r1, list)
+    assert len(r1) == 1
+    assert "error" in r1[0]
+
+    r2 = get_active_space()
+    assert "error" in r2
+
+    r3 = search_literature("test")
+    assert len(r3) == 1 and "error" in r3[0]
+
+    r4 = get_paper_summary("paper-1")
+    assert "error" in r4
+
+    r5 = get_methods()
+    assert len(r5) == 1 and "error" in r5[0]
+
+    r6 = get_evidence_for_claim("test")
+    assert len(r6) == 1 and "error" in r6[0]
+
+    db_module.DATABASE_PATH = orig
+
+
+def test_mcp_tool_works_when_enabled(db_path: str) -> None:
+    """MCP tools succeed when agent_access is enabled."""
+    import db as db_module
+    orig = db_module.DATABASE_PATH
+    db_module.DATABASE_PATH = Path(db_path)
+
+    conn = get_connection()
+    conn.execute("INSERT INTO spaces (id, name) VALUES ('s1', 'Test')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('active_space', 's1')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('agent_access', 'enabled')")
+    conn.commit()
+    conn.close()
+
+    from mcp_server import list_spaces
+
+    result = list_spaces()
+    assert len(result) >= 1
+    assert any(s["id"] == "s1" for s in result)
+
+    db_module.DATABASE_PATH = orig
+
+
+# ── Space Isolation ──────────────────────────────────────────────────
+
+
+def test_mcp_space_isolation_papers(db_path: str) -> None:
+    """MCP tools never return papers from other spaces."""
+    import db as db_module
+    orig = db_module.DATABASE_PATH
+    db_module.DATABASE_PATH = Path(db_path)
+
+    conn = get_connection()
+    conn.execute("INSERT INTO spaces (id, name) VALUES ('space-1', 'A'), ('space-2', 'B')")
+    conn.execute("INSERT INTO papers (id, space_id, title, parse_status) VALUES ('p1', 'space-1', 'Paper A', 'parsed'), ('p2', 'space-2', 'Paper B', 'parsed')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('active_space', 'space-1')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('agent_access', 'enabled')")
+    conn.commit()
+    conn.close()
+
+    from mcp_server import list_papers
+
+    # Only space-1 papers should be returned
+    papers = list_papers(space_id="space-1")
+    paper_ids = {p["id"] for p in papers}
+    assert "p1" in paper_ids
+    assert "p2" not in paper_ids
+
+    # Explicitly query space-2
+    papers2 = list_papers(space_id="space-2")
+    paper_ids2 = {p["id"] for p in papers2}
+    assert "p2" in paper_ids2
+    assert "p1" not in paper_ids2
+
+    db_module.DATABASE_PATH = orig
+
+
+def test_mcp_space_isolation_cards(db_path: str) -> None:
+    """MCP tools never return cards from other spaces."""
+    import db as db_module
+    orig = db_module.DATABASE_PATH
+    db_module.DATABASE_PATH = Path(db_path)
+
+    conn = get_connection()
+    conn.execute("INSERT INTO spaces (id, name) VALUES ('space-1', 'A'), ('space-2', 'B')")
+    conn.execute("INSERT INTO papers (id, space_id, title, parse_status) VALUES ('p1', 'space-1', 'Paper A', 'parsed'), ('p2', 'space-2', 'Paper B', 'parsed')")
+    conn.execute("INSERT INTO knowledge_cards (id, space_id, paper_id, card_type, summary) VALUES ('c1', 'space-1', 'p1', 'Method', 'Method A'), ('c2', 'space-2', 'p2', 'Method', 'Method B')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('active_space', 'space-1')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('agent_access', 'enabled')")
+    conn.commit()
+    conn.close()
+
+    from mcp_server import get_methods
+
+    # Only space-1 cards should be returned
+    cards = get_methods(space_id="space-1")
+    card_ids = {c["id"] for c in cards}
+    assert "c1" in card_ids
+    assert "c2" not in card_ids
+
+    # Explicitly query space-2
+    cards2 = get_methods(space_id="space-2")
+    card_ids2 = {c["id"] for c in cards2}
+    assert "c2" in card_ids2
+    assert "c1" not in card_ids2
+
+    db_module.DATABASE_PATH = orig
+
+
+def test_mcp_space_isolation_search(db_path: str) -> None:
+    """MCP search never returns passages from other spaces."""
+    import db as db_module
+    orig = db_module.DATABASE_PATH
+    db_module.DATABASE_PATH = Path(db_path)
+
+    from search import rebuild_fts_index
+
+    conn = get_connection()
+    conn.execute("INSERT INTO spaces (id, name) VALUES ('space-1', 'A'), ('space-2', 'B')")
+    conn.execute("INSERT INTO papers (id, space_id, title, parse_status) VALUES ('p1', 'space-1', 'P1', 'parsed'), ('p2', 'space-2', 'P2', 'parsed')")
+    conn.execute(
+        "INSERT INTO passages (id, paper_id, space_id, section, original_text) VALUES "
+        "('pass1', 'p1', 'space-1', 'method', 'transformer model'),"
+        "('pass2', 'p2', 'space-2', 'method', 'transformer model')"
+    )
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('active_space', 'space-1')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('agent_access', 'enabled')")
+    conn.commit()
+    conn.close()
+
+    rebuild_fts_index(database_path=Path(db_path))
+
+    from mcp_server import search_literature
+
+    results = search_literature("transformer", space_id="space-1")
+    passage_ids = {r["passage_id"] for r in results}
+    assert "pass1" in passage_ids
+    assert "pass2" not in passage_ids
+
+    results2 = search_literature("transformer", space_id="space-2")
+    passage_ids2 = {r["passage_id"] for r in results2}
+    assert "pass2" in passage_ids2
+    assert "pass1" not in passage_ids2
+
+    db_module.DATABASE_PATH = orig
+
+
+# ── Source Information ───────────────────────────────────────────────
+
+
+def test_agent_results_have_source_info(db_path: str) -> None:
+    """Every agent-visible result includes source information."""
+    import db as db_module
+    orig = db_module.DATABASE_PATH
+    db_module.DATABASE_PATH = Path(db_path)
+
+    from search import rebuild_fts_index
+
+    conn = get_connection()
+    conn.execute("INSERT INTO spaces (id, name) VALUES ('s1', 'Test')")
+    conn.execute("INSERT INTO papers (id, space_id, title, parse_status) VALUES ('p1', 's1', 'Test Paper', 'parsed')")
+    conn.execute("INSERT INTO passages (id, paper_id, space_id, section, original_text) VALUES ('pass1', 'p1', 's1', 'method', 'transformer attention')")
+    conn.execute("INSERT INTO knowledge_cards (id, space_id, paper_id, card_type, summary) VALUES ('c1', 's1', 'p1', 'Method', 'Method X')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('active_space', 's1')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('agent_access', 'enabled')")
+    conn.commit()
+    conn.close()
+
+    rebuild_fts_index(database_path=Path(db_path))
+
+    from mcp_server import (
+        list_papers, search_literature, get_paper_summary,
+        get_citation, get_methods, get_evidence_for_claim,
+    )
+
+    # list_papers: should have id, space_id, title
+    papers = list_papers()
+    assert len(papers) >= 1
+    assert "id" in papers[0]
+    assert "space_id" in papers[0]
+    assert "title" in papers[0]
+
+    # search_literature: should have passage_id, paper_id, paper_title, snippet
+    results = search_literature("transformer")
+    assert len(results) >= 1
+    assert "passage_id" in results[0]
+    assert "paper_id" in results[0]
+    assert "paper_title" in results[0]
+    assert "snippet" in results[0] or "original_text" in results[0]
+
+    # get_paper_summary: should have paper, passages, cards
+    summary = get_paper_summary("p1")
+    assert "paper" in summary
+    assert "passage_count" in summary
+    assert "card_count" in summary
+    assert "cards" in summary
+
+    # get_citation: should have title, authors, doi
+    citation = get_citation("p1")
+    assert "title" in citation
+
+    # get_methods: should have card info with paper_title
+    methods = get_methods()
+    assert len(methods) >= 1
+    assert "id" in methods[0]
+    assert "card_type" in methods[0]
+    assert "paper_title" in methods[0]
+
+    # get_evidence_for_claim: should have passages and evidence_cards
+    evidence = get_evidence_for_claim("transformer")
+    assert len(evidence) >= 1
+    assert "passages" in evidence[0]
+    assert "evidence_cards" in evidence[0]
+
+    db_module.DATABASE_PATH = orig
+
+
+def test_no_source_less_results(db_path: str) -> None:
+    """Verify that results without paper_id or passage_id are not present."""
+    import db as db_module
+    orig = db_module.DATABASE_PATH
+    db_module.DATABASE_PATH = Path(db_path)
+
+    from search import rebuild_fts_index
+
+    conn = get_connection()
+    conn.execute("INSERT INTO spaces (id, name) VALUES ('s1', 'Test')")
+    conn.execute("INSERT INTO papers (id, space_id, title, parse_status) VALUES ('p1', 's1', 'Paper', 'parsed')")
+    conn.execute("INSERT INTO passages (id, paper_id, space_id, section, original_text) VALUES ('pass1', 'p1', 's1', 'method', 'transformer')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('active_space', 's1')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('agent_access', 'enabled')")
+    conn.commit()
+    conn.close()
+
+    rebuild_fts_index(database_path=Path(db_path))
+
+    from mcp_server import search_literature
+
+    results = search_literature("transformer")
+    # Every result must have paper_id and passage_id
+    for r in results:
+        assert r.get("paper_id"), f"Result missing paper_id: {r}"
+        assert r.get("passage_id"), f"Result missing passage_id: {r}"
+
+    db_module.DATABASE_PATH = orig

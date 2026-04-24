@@ -215,3 +215,32 @@
   - compare_with_literature enriches search results with related cards from matching papers
   - get_evidence_for_claim combines passage search with Evidence-type card lookup
 ---
+
+## 2026-04-24 18:55 - US-016
+- Created routes_agent.py with agent access control API
+  - GET /api/agent/status: returns enabled state, server name, transport, exposed space
+  - PUT /api/agent/status: toggle agent access (accepts {enabled: bool})
+  - PUT /api/agent/enable, /api/agent/disable: convenience endpoints
+- Added _check_access() to mcp_server.py: all 12 MCP tools check agent_access before responding
+  - Default: access disabled until user explicitly enables in UI
+  - When disabled, all tools return error dict
+- UI: added agent access toggle switch in active space banner area
+  - Shows MCP transport (stdio), server name, and exposed space name
+  - Toggle switch with green/disabled styling
+  - loadAgentStatus() called on every space list refresh
+- Added 12 new tests in tests/test_agent.py:
+  - Agent status default disabled, enable, disable, set_status, shows active space
+  - MCP tool blocked when disabled, works when enabled
+  - Space isolation for papers, cards, search via MCP tools
+  - Source info verification: all agent results include paper_id/passage_id
+  - No source-less results: every search result has paper_id and passage_id
+- Fixed: duplicate search section in index.html, structured views placement
+- 74 tests passing, 23 source files typecheck clean
+- **Learnings for future iterations:**
+  - FastAPI Body(..., embed=True) needed when body is {key: value} not raw value
+  - MCP agent_access stored in app_state table (same pattern as active_space)
+  - Default-disabled is safer for agent access (explicit user opt-in)
+  - Space isolation verified at 3 levels: papers, knowledge_cards, search passages
+  - All MCP results traceable to source (paper_id + passage_id) — no orphan results
+  - Use dict[str, Any] return type for dynamic API responses to satisfy strict mypy
+---

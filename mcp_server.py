@@ -14,6 +14,7 @@ from search import search_passages
 mcp = FastMCP("paper-knowledge-engine")
 
 ACTIVE_SPACE_KEY = "active_space"
+AGENT_ACCESS_KEY = "agent_access"
 
 
 def _get_active_space_id() -> str:
@@ -28,12 +29,33 @@ def _get_active_space_id() -> str:
         conn.close()
 
 
+def _check_access() -> dict[str, Any] | None:
+    """Return an error dict if agent access is disabled, else None."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT value FROM app_state WHERE key = ?",
+            (AGENT_ACCESS_KEY,),
+        ).fetchone()
+        if row is None:
+            # Default: access disabled until explicitly enabled
+            return {"error": "Agent access is not configured. Enable it in the UI first."}
+        if row["value"] != "enabled":
+            return {"error": "Agent access is disabled. Enable it in the UI first."}
+        return None
+    finally:
+        conn.close()
+
+
 # ── Core Tools (US-014) ──────────────────────────────────────────────
 
 
 @mcp.tool()
 def list_spaces() -> list[dict[str, Any]]:
     """List all available idea spaces."""
+    access_error = _check_access()
+    if access_error:
+        return [access_error]
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -47,6 +69,9 @@ def list_spaces() -> list[dict[str, Any]]:
 @mcp.tool()
 def get_active_space() -> dict[str, Any]:
     """Get the currently active idea space."""
+    access_error = _check_access()
+    if access_error:
+        return access_error
     space_id = _get_active_space_id()
     if not space_id:
         return {"error": "No active space set"}
@@ -63,6 +88,9 @@ def get_active_space() -> dict[str, Any]:
 @mcp.tool()
 def list_papers(space_id: str = "") -> list[dict[str, Any]]:
     """List all papers in a space. Defaults to active space."""
+    access_error = _check_access()
+    if access_error:
+        return [access_error]
     sid = space_id or _get_active_space_id()
     if not sid:
         return [{"error": "No space specified and no active space set"}]
@@ -82,6 +110,9 @@ def list_papers(space_id: str = "") -> list[dict[str, Any]]:
 @mcp.tool()
 def search_literature(query: str, space_id: str = "", limit: int = 20) -> list[dict[str, Any]]:
     """Full-text search across passages. Returns paper, section, page, passage text, and card info."""
+    access_error = _check_access()
+    if access_error:
+        return [access_error]
     sid = space_id or _get_active_space_id()
     if not sid:
         return [{"error": "No space specified"}]
@@ -95,6 +126,9 @@ def search_literature(query: str, space_id: str = "", limit: int = 20) -> list[d
 @mcp.tool()
 def get_paper_summary(paper_id: str) -> dict[str, Any]:
     """Get a structured summary of a paper including metadata, passages, and cards."""
+    access_error = _check_access()
+    if access_error:
+        return access_error
     conn = get_connection()
     try:
         paper = conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
@@ -120,6 +154,9 @@ def get_paper_summary(paper_id: str) -> dict[str, Any]:
 @mcp.tool()
 def get_citation(paper_id: str) -> dict[str, str]:
     """Get citation information for a paper."""
+    access_error = _check_access()
+    if access_error:
+        return access_error
     conn = get_connection()
     try:
         paper = conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
@@ -164,30 +201,45 @@ def _get_cards_by_type(card_type: str, space_id: str = "") -> list[dict[str, Any
 @mcp.tool()
 def get_methods(space_id: str = "") -> list[dict[str, Any]]:
     """Get method cards from the active space, each with paper title and source passage."""
+    access_error = _check_access()
+    if access_error:
+        return [access_error]
     return _get_cards_by_type("Method", space_id)
 
 
 @mcp.tool()
 def get_metrics(space_id: str = "") -> list[dict[str, Any]]:
     """Get metric cards from the active space."""
+    access_error = _check_access()
+    if access_error:
+        return [access_error]
     return _get_cards_by_type("Metric", space_id)
 
 
 @mcp.tool()
 def get_limitations(space_id: str = "") -> list[dict[str, Any]]:
     """Get limitation cards from the active space."""
+    access_error = _check_access()
+    if access_error:
+        return [access_error]
     return _get_cards_by_type("Limitation", space_id)
 
 
 @mcp.tool()
 def find_failure_modes(space_id: str = "") -> list[dict[str, Any]]:
     """Find failure mode cards from the active space."""
+    access_error = _check_access()
+    if access_error:
+        return [access_error]
     return _get_cards_by_type("Failure Mode", space_id)
 
 
 @mcp.tool()
 def find_similar_results(query: str, space_id: str = "", limit: int = 10) -> list[dict[str, Any]]:
     """Find results similar to a query using full-text search."""
+    access_error = _check_access()
+    if access_error:
+        return [access_error]
     sid = space_id or _get_active_space_id()
     if not sid:
         return [{"error": "No space specified"}]
@@ -203,6 +255,9 @@ def compare_with_literature(
     observation: str, space_id: str = "", limit: int = 10
 ) -> dict[str, Any]:
     """Compare an observation with literature evidence. Returns matching passages and related cards."""
+    access_error = _check_access()
+    if access_error:
+        return access_error
     sid = space_id or _get_active_space_id()
     if not sid:
         return {"error": "No space specified"}
@@ -235,6 +290,9 @@ def get_evidence_for_claim(
     claim: str, space_id: str = "", limit: int = 10
 ) -> list[dict[str, Any]]:
     """Find evidence for a scientific claim in the literature."""
+    access_error = _check_access()
+    if access_error:
+        return [access_error]
     sid = space_id or _get_active_space_id()
     if not sid:
         return [{"error": "No space specified"}]

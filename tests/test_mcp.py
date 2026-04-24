@@ -29,6 +29,7 @@ def _setup_data(db_path_str: str) -> str:
     conn.execute("INSERT INTO passages (id, paper_id, space_id, section, original_text) VALUES ('p1', 'paper-1', 'space-1', 'method', 'transformer model')")
     conn.execute("INSERT INTO knowledge_cards (id, space_id, paper_id, card_type, summary) VALUES ('c1', 'space-1', 'paper-1', 'Method', 'Test method card')")
     conn.execute("INSERT INTO app_state (key, value) VALUES ('active_space', 'space-1')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('agent_access', 'enabled')")
     conn.commit()
     # Insert into FTS
     conn.execute("INSERT INTO passages_fts (passage_id, paper_id, space_id, section, original_text) VALUES ('p1', 'paper-1', 'space-1', 'method', 'transformer model')")

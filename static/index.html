@@ -212,6 +212,49 @@
         .parse-parsed { background: #e8f5e9; color: #2e7d32; }
         .parse-error { background: #ffebee; color: #c62828; }
 
+        /* Agent Access Toggle */
+        .agent-controls {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .agent-controls .agent-info { font-size: 0.85rem; color: #555; }
+        .agent-controls .agent-info .space-exposed { font-weight: 600; color: #0d47a1; }
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 48px;
+            height: 26px;
+        }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #ccc;
+            transition: 0.3s;
+            border-radius: 26px;
+        }
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+        .toggle-switch input:checked + .toggle-slider { background-color: #2e7d32; }
+        .toggle-switch input:checked + .toggle-slider:before { transform: translateX(22px); }
+
         #papersSection { display: none; }
     </style>
 </head>
@@ -228,6 +271,18 @@
             <span class="label">Active Space:</span>
             <span class="name" id="activeSpaceName">None selected</span>
         </div>
+    </div>
+
+    <!-- Agent Access Controls -->
+    <div class="agent-controls" id="agentControls">
+        <div class="agent-info">
+            <div><strong>Agent Access (MCP)</strong> — Transport: <code>stdio</code></div>
+            <div style="margin-top:2px;">Exposing: <span class="space-exposed" id="agentExposedSpace">None</span></div>
+        </div>
+        <label class="toggle-switch" title="Enable/disable local agent access">
+            <input type="checkbox" id="agentToggle" onchange="toggleAgentAccess()">
+            <span class="toggle-slider"></span>
+        </label>
     </div>
 
     <!-- Create Space Form -->
@@ -255,17 +310,6 @@
                 <p style="font-size:0.85rem;color:#999;margin-top:4px;">Only PDF files accepted</p>
                 <input type="file" id="fileInput" accept=".pdf,application/pdf" onchange="handleFileSelect(event)">
             </div>
-        </div>
-
-        <!-- Search -->
-        <div style="margin-bottom:24px;">
-            <h2>Literature Search</h2>
-            <div style="display:flex; gap:8px;">
-                <input type="text" id="searchInput" placeholder="Search methods, metrics, results..." onkeydown="if(event.key==='Enter')searchLiterature()"
-                    style="flex:1; padding:8px 12px; border:1px solid #ccc; border-radius:6px; font-size:0.9rem;">
-                <button class="btn-primary" onclick="searchLiterature()">Search</button>
-            </div>
-            <div id="searchResults" style="margin-top:12px;"></div>
         </div>
 
         <!-- Search -->
@@ -384,19 +428,19 @@
         </div>
     </div>
 
-        <!-- Structured Views -->
-        <div id="structuredViews" style="display:none; margin-top:20px;">
-            <h2>Literature Views</h2>
-            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
-                <button class="btn-outline btn-sm view-tab active" onclick="showCardView('Method')">Methods</button>
-                <button class="btn-outline btn-sm view-tab" onclick="showCardView('Metric')">Metrics</button>
-                <button class="btn-outline btn-sm view-tab" onclick="showCardView('Result')">Results</button>
-                <button class="btn-outline btn-sm view-tab" onclick="showCardView('Failure Mode')">Failure Modes</button>
-                <button class="btn-outline btn-sm view-tab" onclick="showCardView('Limitation')">Limitations</button>
-                <button class="btn-outline btn-sm view-tab" onclick="showCardView('Claim')">Claims</button>
-            </div>
-            <div id="structuredViewContent"></div>
+    <!-- Structured Views -->
+    <div id="structuredViews" style="display:none; margin-top:20px;">
+        <h2>Literature Views</h2>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+            <button class="btn-outline btn-sm view-tab active" onclick="showCardView('Method')">Methods</button>
+            <button class="btn-outline btn-sm view-tab" onclick="showCardView('Metric')">Metrics</button>
+            <button class="btn-outline btn-sm view-tab" onclick="showCardView('Result')">Results</button>
+            <button class="btn-outline btn-sm view-tab" onclick="showCardView('Failure Mode')">Failure Modes</button>
+            <button class="btn-outline btn-sm view-tab" onclick="showCardView('Limitation')">Limitations</button>
+            <button class="btn-outline btn-sm view-tab" onclick="showCardView('Claim')">Claims</button>
         </div>
+        <div id="structuredViewContent"></div>
+    </div>
 
 
     <!-- Space List -->
@@ -891,10 +935,37 @@
             } catch (e) { container.innerHTML = '<p style="color:#c62828;">Failed to load.</p>'; }
         }
 
+        // --- Agent Access ---
+        async function loadAgentStatus() {
+            try {
+                const res = await fetch('/api/agent/status');
+                if (!res.ok) return;
+                const data = await res.json();
+                document.getElementById('agentToggle').checked = data.enabled;
+                document.getElementById('agentExposedSpace').textContent =
+                    data.active_space ? data.active_space.name : 'None';
+                document.getElementById('agentExposedSpace').style.color =
+                    data.enabled ? '#0d47a1' : '#999';
+            } catch (e) { /* ignore */ }
+        }
+
+        async function toggleAgentAccess() {
+            const enabled = document.getElementById('agentToggle').checked;
+            try {
+                await fetch('/api/agent/status', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled })
+                });
+                await loadAgentStatus();
+            } catch (e) { showError('Failed to update agent access.'); }
+        }
+
         // --- Update loadSpaces to show/hide papers section ---
         const originalLoadSpaces = loadSpaces;
         loadSpaces = async function() {
             await originalLoadSpaces();
+            await loadAgentStatus();
             // Show papers section only if there's an active space
             try {
                 const aRes = await fetch('/api/spaces/active');

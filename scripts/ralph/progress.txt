@@ -158,3 +158,16 @@
   - encodeURIComponent() needed for search query in URL
   - Results link to paper detail via viewPaper(paper_id) on click
 ---
+
+## 2026-04-24 18:42 - US-011
+- Created routes_cards.py with full CRUD: create, list (with filters), get, update, delete
+- 12 card types supported (Problem through Practical Tip)
+- Cards bound to paper_id and space_id
+- UI: card list in paper detail, create card form with type dropdown, delete button
+- update sets user_edited=1 automatically
+- 4 card tests pass (47 total)
+- **Learnings for future iterations:**
+  - Card filtering supports paper_id and card_type query params
+  - Card type validation on both create and update
+  - Cards displayed with type badge, confidence score, and delete button
+---

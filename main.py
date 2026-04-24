@@ -1,21 +1,38 @@
 """Local Paper Knowledge Engine - FastAPI application."""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from db import init_db
+from routes_spaces import router as spaces_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Initialize the database on startup."""
+    init_db()
+    yield
+
+
 app = FastAPI(
     title="Local Paper Knowledge Engine",
     version="0.1.0",
     description="A local-first paper knowledge engine organized by research idea spaces.",
+    lifespan=lifespan,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# Register API routers
+app.include_router(spaces_router)
 
 
 @app.get("/", response_class=HTMLResponse)

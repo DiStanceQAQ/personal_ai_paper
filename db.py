@@ -5,6 +5,15 @@ from pathlib import Path
 
 from config import APP_DATA_DIR, DATABASE_PATH
 
+__all__ = [
+    "SCHEMA_SQL",
+    "DATABASE_PATH",
+    "ensure_app_data_dir",
+    "get_connection",
+    "init_db",
+    "get_table_names",
+]
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS spaces (
     id TEXT PRIMARY KEY,

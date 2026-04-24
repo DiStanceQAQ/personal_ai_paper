@@ -67,3 +67,21 @@
   - UI uses `esc()` for XSS prevention on user-provided text
   - Browser verification not performed (no browser tools available); manual verification needed
 ---
+
+## 2026-04-24 18:27 - US-005
+- Created routes_papers.py with POST /api/papers/upload and GET /api/papers
+- PDF upload saves to app-data/spaces/<space-id>/papers/<uuid>.pdf
+- SHA-256 hash computed for every uploaded PDF
+- Duplicate detection: same hash within same space → 409 Conflict
+- Cross-space duplicates allowed (different spaces can have same PDF)
+- Added python-multipart to dependencies for UploadFile support
+- UI: drag-and-drop upload zone + file picker, paper list with parse status badges
+- Papers section only visible when an active space is set
+- 6 new tests pass (upload, non-PDF reject, no-active-space, duplicate detection, cross-space, list)
+- **Learnings for future iterations:**
+  - FastAPI UploadFile: use `httpx` files param as `{"file": (filename, bytes, mime_type)}` in tests
+  - File upload in browser: FormData + fetch with no Content-Type header (browser sets multipart)
+  - SHA-256 with incremental reading avoids loading large files entirely in memory
+  - Use `hashlib.sha256()` with chunked reading for file hashing
+  - Paper list uses `parse_status` badge (pending/parsed/error) styled with CSS classes
+---

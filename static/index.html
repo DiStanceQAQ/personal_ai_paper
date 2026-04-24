@@ -322,6 +322,12 @@
             </div>
             <div style="margin-top:16px; display:flex; gap:8px;">
                 <button class="btn-primary" onclick="savePaperMeta()">Save Metadata</button>
+                <button class="btn-success" onclick="parsePaper()">Parse PDF</button>
+            </div>
+            <div id="paperParseStatus" style="margin-top:8px; font-size:0.85rem;"></div>
+            <div id="paperPassages" style="margin-top:16px;">
+                <h3 style="font-size:1rem; margin-bottom:8px;">Passages</h3>
+                <div id="passagesList"></div>
             </div>
         </div>
     </div>
@@ -609,9 +615,49 @@
                 document.getElementById('editCitation').value = currentPaper.citation || '';
                 document.getElementById('editTags').value = currentPaper.user_tags || '';
                 document.getElementById('editRelation').value = currentPaper.relation_to_idea || 'unclassified';
+                document.getElementById('paperParseStatus').textContent =
+                    'Parse status: ' + currentPaper.parse_status;
                 detail.style.display = 'block';
+                await loadPaperPassages(paperId);
                 detail.scrollIntoView({ behavior: 'smooth' });
             } catch (e) { showError(e.message); }
+        }
+
+        async function loadPaperPassages(paperId) {
+            try {
+                const res = await fetch('/api/papers/' + paperId + '/passages');
+                const passages = res.ok ? await res.json() : [];
+                const list = document.getElementById('passagesList');
+                if (passages.length === 0) {
+                    list.innerHTML = '<p style="color:#999;font-size:0.85rem;">No passages yet. Click "Parse PDF" to extract text.</p>';
+                } else {
+                    list.innerHTML = passages.map(p => `
+                        <div style="border:1px solid #eee; border-radius:6px; padding:10px; margin-bottom:8px;">
+                            <div style="display:flex; gap:8px; align-items:center; margin-bottom:4px;">
+                                <span class="parse-badge" style="background:#e3f2fd;color:#1565c0;">${esc(p.section)}</span>
+                                <span class="parse-badge" style="background:#f3e5f5;color:#7b1fa2;">${esc(p.passage_type)}</span>
+                                <span style="font-size:0.78rem;color:#999;">Page ${p.page_number} · Para ${p.paragraph_index}</span>
+                            </div>
+                            <div style="font-size:0.85rem; line-height:1.5; white-space:pre-wrap;">${esc(p.original_text)}</div>
+                        </div>
+                    `).join('');
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        async function parsePaper() {
+            if (!currentPaper) return;
+            document.getElementById('paperParseStatus').textContent = 'Parsing...';
+            try {
+                const res = await fetch('/api/papers/' + currentPaper.id + '/parse', { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Parse failed');
+                document.getElementById('paperParseStatus').textContent =
+                    'Parse status: parsed (' + data.passage_count + ' passages)';
+                await loadPaperPassages(currentPaper.id);
+            } catch (e) {
+                document.getElementById('paperParseStatus').textContent = 'Parse failed: ' + e.message;
+            }
         }
 
         async function savePaperMeta() {

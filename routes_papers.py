@@ -280,3 +280,23 @@ async def parse_paper(paper_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail="PDF parsing failed")
     finally:
         conn.close()
+
+
+@router.get("/{paper_id}/passages")
+async def list_passages(paper_id: str) -> list[dict[str, Any]]:
+    """List all passages for a paper."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id FROM papers WHERE id = ?", (paper_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Paper not found")
+
+        rows = conn.execute(
+            "SELECT * FROM passages WHERE paper_id = ? ORDER BY page_number, paragraph_index",
+            (paper_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()

@@ -295,3 +295,27 @@ async def test_get_nonexistent_paper_returns_404(client: AsyncClient) -> None:
     """Test that requesting a nonexistent paper returns 404."""
     resp = await client.get("/api/papers/nonexistent-id")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_passages(client: AsyncClient) -> None:
+    """Test listing passages for a paper."""
+    await _create_and_activate_space(client)
+
+    resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+    paper_id = resp.json()["id"]
+
+    await client.post(f"/api/papers/{paper_id}/parse")
+
+    resp = await client.get(f"/api/papers/{paper_id}/passages")
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_list_passages_nonexistent_paper(client: AsyncClient) -> None:
+    """Test that listing passages for nonexistent paper returns 404."""
+    resp = await client.get("/api/papers/nonexistent-id/passages")
+    assert resp.status_code == 404

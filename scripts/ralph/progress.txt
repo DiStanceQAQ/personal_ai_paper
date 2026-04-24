@@ -85,3 +85,17 @@
   - Use `hashlib.sha256()` with chunked reading for file hashing
   - Paper list uses `parse_status` badge (pending/parsed/error) styled with CSS classes
 ---
+
+## 2026-04-24 18:29 - US-006
+- Added GET /api/papers/{paper_id} and PATCH /api/papers/{paper_id} endpoints
+- PATCH supports all metadata fields: title, authors, year, doi, arxiv_id, pubmed_id, venue, abstract, citation, user_tags, relation_to_idea
+- Partial updates: only provided fields are changed, others preserved
+- UI: click a paper to open detail/edit panel with form fields for all metadata
+- Citation field accepts BibTeX text input
+- Relation to idea dropdown with all 8 options
+- 4 new tests: get_paper, update all metadata, partial update, 404
+- **Learnings for future iterations:**
+  - Dynamic SQL UPDATE: build SET clause from non-None fields to support partial updates
+  - Paper title fallback display: `esc(p.title || '(Untitled)')` when title is empty
+  - Use `parseInt(x) || null` to handle empty year field gracefully
+---

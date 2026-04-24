@@ -384,6 +384,21 @@
         </div>
     </div>
 
+        <!-- Structured Views -->
+        <div id="structuredViews" style="display:none; margin-top:20px;">
+            <h2>Literature Views</h2>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+                <button class="btn-outline btn-sm view-tab active" onclick="showCardView('Method')">Methods</button>
+                <button class="btn-outline btn-sm view-tab" onclick="showCardView('Metric')">Metrics</button>
+                <button class="btn-outline btn-sm view-tab" onclick="showCardView('Result')">Results</button>
+                <button class="btn-outline btn-sm view-tab" onclick="showCardView('Failure Mode')">Failure Modes</button>
+                <button class="btn-outline btn-sm view-tab" onclick="showCardView('Limitation')">Limitations</button>
+                <button class="btn-outline btn-sm view-tab" onclick="showCardView('Claim')">Claims</button>
+            </div>
+            <div id="structuredViewContent"></div>
+        </div>
+
+
     <!-- Space List -->
     <h2>Idea Spaces</h2>
     <ul class="space-list" id="spaceList">
@@ -845,6 +860,37 @@
             } catch (e) { showError(e.message); }
         }
 
+
+        // --- Structured Views ---
+        async function showCardView(cardType) {
+            // Update tabs
+            document.querySelectorAll('.view-tab').forEach(b => b.classList.remove('active'));
+            event.target.classList.add('active');
+
+            const container = document.getElementById('structuredViewContent');
+            container.innerHTML = '<p style="color:#999;">Loading...</p>';
+            try {
+                const res = await fetch('/api/cards?card_type=' + encodeURIComponent(cardType));
+                if (!res.ok) { container.innerHTML = '<p style="color:#999;">No active space.</p>'; return; }
+                const cards = await res.json();
+                if (cards.length === 0) {
+                    container.innerHTML = '<p style="color:#999;">No ' + cardType + ' cards in this space.</p>';
+                    return;
+                }
+                container.innerHTML = cards.map(c => `
+                    <div style="border:1px solid #e0e0e0; border-radius:6px; padding:10px; margin-bottom:6px;">
+                        <div style="display:flex; gap:8px; align-items:center; margin-bottom:4px;">
+                            <span class="parse-badge" style="background:#e8f5e9;color:#2e7d32;">${esc(c.card_type)}</span>
+                            <span style="font-size:0.85rem; font-weight:600;">${esc(c.summary.substring(0, 80))}${c.summary.length > 80 ? '...' : ''}</span>
+                            <span style="font-size:0.75rem;color:#999;">Conf: ${c.confidence.toFixed(2)}</span>
+                        </div>
+                        <div style="font-size:0.85rem; color:#666;">${esc(c.summary)}</div>
+                        ${c.source_passage_id ? '<a href="#" onclick="viewPaper('${c.paper_id}')" style="font-size:0.78rem;color:#1976d2;">Open paper →</a>' : ''}
+                    </div>
+                `).join('');
+            } catch (e) { container.innerHTML = '<p style="color:#c62828;">Failed to load.</p>'; }
+        }
+
         // --- Update loadSpaces to show/hide papers section ---
         const originalLoadSpaces = loadSpaces;
         loadSpaces = async function() {
@@ -852,7 +898,7 @@
             // Show papers section only if there's an active space
             try {
                 const aRes = await fetch('/api/spaces/active');
-                document.getElementById('papersSection').style.display = aRes.ok ? 'block' : 'none';
+                document.getElementById('papersSection').style.display = aRes.ok ? 'block' : 'none'; document.getElementById('structuredViews').style.display = aRes.ok ? 'block' : 'none';
                 if (aRes.ok) await loadPapers();
             } catch (e) {
                 document.getElementById('papersSection').style.display = 'none';

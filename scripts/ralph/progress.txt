@@ -34,3 +34,18 @@
   - `sqlite3.Row` row_factory allows dict-style column access by name
   - Use Path objects instead of raw strings for database paths
 ---
+
+## 2026-04-24 18:22 - US-003
+- Created routes_spaces.py with FastAPI APIRouter for /api/spaces
+- Implemented CRUD: create, list, get, rename, archive, delete
+- Active space management: set_active_space and get_active_space via PUT/GET /api/spaces/active
+- Space isolation: delete/archive only affects targeted space
+- Added database init on app startup via FastAPI lifespan
+- 9 API route tests pass
+- **Learnings for future iterations:**
+  - FastAPI route order matters: fixed routes (like `/active`) MUST be defined before parameterized routes (like `/{space_id}`) or the parameterized route will capture the literal path
+  - Pytest fixtures that yield need `Generator[YieldType, None, None]` return annotation
+  - Use `@asynccontextmanager` with `AsyncIterator[None]` type for FastAPI lifespan
+  - Module-level variable override pattern works for test DB isolation but is fragile — consider dependency injection later
+  - `ON CONFLICT(key) DO UPDATE` is the SQLite upsert pattern
+---

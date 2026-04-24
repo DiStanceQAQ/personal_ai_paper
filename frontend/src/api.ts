@@ -1,17 +1,29 @@
+import { invoke } from '@tauri-apps/api/core';
 import type { AgentStatus, KnowledgeCard, Paper, Passage, SearchResult, Space } from './types';
 
 const DEFAULT_BACKEND = 'http://127.0.0.1:8000';
 
-export function backendBaseUrl(): string {
-  return window.localStorage.getItem('paper-engine-backend-url') || DEFAULT_BACKEND;
+let cachedBackendUrl: string | null = null;
+
+export async function initializeBackendBaseUrl(): Promise<string> {
+  if (cachedBackendUrl) return cachedBackendUrl;
+  try {
+    const url = await invoke<string>('backend_url');
+    cachedBackendUrl = url.replace(/\/$/, '');
+  } catch {
+    cachedBackendUrl = window.localStorage.getItem('paper-engine-backend-url') || DEFAULT_BACKEND;
+  }
+  return cachedBackendUrl;
 }
 
 export function setBackendBaseUrl(url: string): void {
-  window.localStorage.setItem('paper-engine-backend-url', url.replace(/\/$/, ''));
+  cachedBackendUrl = url.replace(/\/$/, '');
+  window.localStorage.setItem('paper-engine-backend-url', cachedBackendUrl);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${backendBaseUrl()}${path}`, {
+  const baseUrl = await initializeBackendBaseUrl();
+  const res = await fetch(`${baseUrl}${path}`, {
     headers: init?.body instanceof FormData ? undefined : { 'Content-Type': 'application/json' },
     ...init,
   });

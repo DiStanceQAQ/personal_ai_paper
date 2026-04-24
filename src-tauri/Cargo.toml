@@ -1,0 +1,19 @@
+[package]
+name = "paper-knowledge-engine"
+version = "0.1.0"
+description = "Local Paper Knowledge Engine"
+authors = ["Local Paper Knowledge Engine"]
+edition = "2021"
+
+[lib]
+name = "paper_knowledge_engine_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"

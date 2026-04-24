@@ -5,6 +5,8 @@ __pycache__/
 node_modules/
 dist/
 build/
+src-tauri/gen/
+src-tauri/target/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/

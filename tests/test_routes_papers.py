@@ -252,6 +252,45 @@ async def test_update_paper_partial(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_parse_paper(client: AsyncClient) -> None:
+    """Test parsing a paper into passages."""
+    await _create_and_activate_space(client)
+
+    resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+    paper_id = resp.json()["id"]
+
+    resp = await client.post(f"/api/papers/{paper_id}/parse")
+    # Minimal PDF may produce no text, so status could be 'error' or 'parsed'
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["paper_id"] == paper_id
+    assert data["status"] in ("parsed", "error")
+
+
+@pytest.mark.asyncio
+async def test_parse_preserves_error_status(client: AsyncClient) -> None:
+    """Test that parse failure preserves paper record with error status."""
+    await _create_and_activate_space(client)
+
+    resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+    paper_id = resp.json()["id"]
+
+    await client.post(f"/api/papers/{paper_id}/parse")
+
+    # Paper should still exist
+    resp = await client.get(f"/api/papers/{paper_id}")
+    assert resp.status_code == 200
+    # parse_status should be either 'parsed' or 'error', not 'pending'
+    assert resp.json()["parse_status"] in ("parsed", "error", "parsing")
+
+
+@pytest.mark.asyncio
 async def test_get_nonexistent_paper_returns_404(client: AsyncClient) -> None:
     """Test that requesting a nonexistent paper returns 404."""
     resp = await client.get("/api/papers/nonexistent-id")

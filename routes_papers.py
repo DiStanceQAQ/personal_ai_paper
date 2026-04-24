@@ -9,6 +9,7 @@ from fastapi import APIRouter, Body, HTTPException, UploadFile
 
 from config import SPACES_DIR
 from db import get_connection
+from parser import extract_passages_from_pdf
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
 
@@ -200,3 +201,82 @@ async def update_paper(
         conn.close()
 
     return await get_paper(paper_id)
+
+
+@router.post("/{paper_id}/parse")
+async def parse_paper(paper_id: str) -> dict[str, Any]:
+    """Trigger PDF parsing for a paper."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM papers WHERE id = ?", (paper_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Paper not found")
+
+        file_path = Path(row["file_path"])
+        if not file_path.exists():
+            conn.execute(
+                "UPDATE papers SET parse_status = 'error' WHERE id = ?",
+                (paper_id,),
+            )
+            conn.commit()
+            raise HTTPException(
+                status_code=400, detail="PDF file not found on disk"
+            )
+
+        # Set status to parsing
+        conn.execute(
+            "UPDATE papers SET parse_status = 'parsing' WHERE id = ?",
+            (paper_id,),
+        )
+        conn.commit()
+
+        space_id = str(row["space_id"])
+        passages = extract_passages_from_pdf(file_path, paper_id, space_id)
+
+        if not passages:
+            # Parsing produced no passages
+            conn.execute(
+                "UPDATE papers SET parse_status = 'error' WHERE id = ?",
+                (paper_id,),
+            )
+            conn.commit()
+            return {"status": "error", "paper_id": paper_id, "passage_count": 0}
+
+        # Insert passages
+        for p in passages:
+            conn.execute(
+                """INSERT OR REPLACE INTO passages
+                   (id, paper_id, space_id, section, page_number,
+                    paragraph_index, original_text, parse_confidence, passage_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    p["id"], p["paper_id"], p["space_id"], p["section"],
+                    p["page_number"], p["paragraph_index"], p["original_text"],
+                    p["parse_confidence"], p["passage_type"],
+                ),
+            )
+
+        conn.execute(
+            "UPDATE papers SET parse_status = 'parsed' WHERE id = ?",
+            (paper_id,),
+        )
+        conn.commit()
+
+        return {
+            "status": "parsed",
+            "paper_id": paper_id,
+            "passage_count": len(passages),
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        conn.execute(
+            "UPDATE papers SET parse_status = 'error' WHERE id = ?",
+            (paper_id,),
+        )
+        conn.commit()
+        raise HTTPException(status_code=500, detail="PDF parsing failed")
+    finally:
+        conn.close()

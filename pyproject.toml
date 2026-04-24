@@ -7,6 +7,7 @@ dependencies = [
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.29.0",
     "python-multipart>=0.0.9",
+    "PyMuPDF>=1.24.0",
 ]
 
 [project.optional-dependencies]
@@ -26,3 +27,11 @@ python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = "pymupdf"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["parser", "tests.test_parser"]
+disable_error_code = ["no-untyped-call"]

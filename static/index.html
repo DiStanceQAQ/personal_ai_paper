@@ -348,6 +348,35 @@
                 <button class="btn-success" onclick="parsePaper()">Parse PDF</button>
             </div>
             <div id="paperParseStatus" style="margin-top:8px; font-size:0.85rem;"></div>
+            <div id="paperCards" style="margin-top:16px;">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                    <h3 style="font-size:1rem;">Knowledge Cards</h3>
+                    <button class="btn-outline btn-sm" onclick="showCreateCard()">+ Add Card</button>
+                </div>
+                <div id="cardCreateForm" style="display:none; border:1px solid #1976d2; border-radius:6px; padding:12px; margin-bottom:8px;">
+                    <div class="form-group" style="margin-bottom:8px;">
+                        <label>Card Type</label>
+                        <select id="newCardType" style="padding:6px; border:1px solid #ccc; border-radius:4px; width:100%;">
+                            <option value="Method">Method</option><option value="Result">Result</option>
+                            <option value="Claim">Claim</option><option value="Evidence">Evidence</option>
+                            <option value="Metric">Metric</option><option value="Limitation">Limitation</option>
+                            <option value="Failure Mode">Failure Mode</option><option value="Problem">Problem</option>
+                            <option value="Object">Object</option><option value="Variable">Variable</option>
+                            <option value="Interpretation">Interpretation</option><option value="Practical Tip">Practical Tip</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin-bottom:8px;">
+                        <label>Summary</label>
+                        <textarea id="newCardSummary" rows="2" style="width:100%; padding:6px; border:1px solid #ccc; border-radius:4px; font-family:inherit;"></textarea>
+                    </div>
+                    <div style="display:flex; gap:6px;">
+                        <button class="btn-primary btn-sm" onclick="createCard()">Create</button>
+                        <button class="btn-outline btn-sm" onclick="document.getElementById(cardCreateForm).style.display=none">Cancel</button>
+                    </div>
+                </div>
+                <div id="cardsList"></div>
+            </div>
+
             <div id="paperPassages" style="margin-top:16px;">
                 <h3 style="font-size:1rem; margin-bottom:8px;">Passages</h3>
                 <div id="passagesList"></div>
@@ -671,7 +700,7 @@
                 document.getElementById('paperParseStatus').textContent =
                     'Parse status: ' + currentPaper.parse_status;
                 detail.style.display = 'block';
-                await loadPaperPassages(paperId);
+                await loadPaperPassages(paperId); await loadPaperCards(paperId);
                 detail.scrollIntoView({ behavior: 'smooth' });
             } catch (e) { showError(e.message); }
         }
@@ -696,6 +725,65 @@
                     `).join('');
                 }
             } catch (e) { /* ignore */ }
+        }
+
+
+        // --- Knowledge Cards ---
+        async function loadPaperCards(paperId) {
+            try {
+                const res = await fetch('/api/cards?paper_id=' + paperId);
+                const cards = res.ok ? await res.json() : [];
+                const list = document.getElementById('cardsList');
+                if (cards.length === 0) {
+                    list.innerHTML = '<p style="color:#999;font-size:0.85rem;">No cards yet.</p>';
+                } else {
+                    list.innerHTML = cards.map(c => `
+                        <div style="border:1px solid #eee; border-radius:6px; padding:8px 10px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:flex-start;">
+                            <div style="flex:1;">
+                                <span class="parse-badge" style="background:#e8f5e9;color:#2e7d32;">${esc(c.card_type)}</span>
+                                ${c.source_passage_id ? '<span class="parse-badge" style="background:#fff3e0;color:#e65100;margin-left:4px;">has source</span>' : ''}
+                                <span style="font-size:0.78rem;color:#999;">Conf: ${c.confidence.toFixed(2)}</span>
+                                <div style="font-size:0.85rem; margin-top:4px;">${esc(c.summary)}</div>
+                            </div>
+                            <button class="btn-danger btn-sm" onclick="deleteCard('''${c.id}''')" style="margin-left:8px;">×</button>
+                        </div>
+                    `).join('');
+                }
+            } catch (e) {}
+        }
+
+        function showCreateCard() {
+            document.getElementById('cardCreateForm').style.display = 'block';
+        }
+
+        async function createCard() {
+            if (!currentPaper) return;
+            const body = {
+                paper_id: currentPaper.id,
+                card_type: document.getElementById('newCardType').value,
+                summary: document.getElementById('newCardSummary').value.trim(),
+                confidence: 1.0
+            };
+            if (!body.summary) { showError('Summary is required.'); return; }
+            try {
+                const res = await fetch('/api/cards', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e.detail); }
+                document.getElementById('cardCreateForm').style.display = 'none';
+                document.getElementById('newCardSummary').value = '';
+                await loadPaperCards(currentPaper.id);
+            } catch (e) { showError(e.message); }
+        }
+
+        async function deleteCard(cardId) {
+            if (!confirm('Delete this card?')) return;
+            try {
+                await fetch('/api/cards/' + cardId, { method: 'DELETE' });
+                if (currentPaper) await loadPaperCards(currentPaper.id);
+            } catch (e) { showError(e.message); }
         }
 
         async function parsePaper() {

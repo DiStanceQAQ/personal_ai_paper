@@ -12,6 +12,7 @@ from db import init_db
 from routes_spaces import router as spaces_router
 from routes_papers import router as papers_router
 from routes_search import router as search_router
+from routes_cards import router as cards_router
 
 
 @asynccontextmanager
@@ -37,6 +38,7 @@ if STATIC_DIR.exists():
 app.include_router(spaces_router)
 app.include_router(papers_router)
 app.include_router(search_router)
+app.include_router(cards_router)
 
 
 @app.get("/", response_class=HTMLResponse)

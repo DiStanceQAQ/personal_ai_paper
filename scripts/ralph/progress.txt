@@ -171,3 +171,18 @@
   - Card type validation on both create and update
   - Cards displayed with type badge, confidence score, and delete button
 ---
+
+## 2026-04-24 18:44 - US-012
+- Created card_extractor.py with rules-based extraction
+- Keyword matching for Method, Result, Limitation, Metric cards
+- Every auto-generated card bound to source passage with confidence score
+- POST /api/cards/extract/{paper_id} endpoint triggers extraction
+- UI: "Auto-Extract" button in paper detail cards section
+- Extraction failure doesn't affect search or passage viewing (separate endpoint)
+- 6 extractor tests, 53 total tests pass
+- **Learnings for future iterations:**
+  - Rules-based extraction uses keyword lists for each card type
+  - INSERT OR IGNORE prevents duplicate cards on re-extraction
+  - _first_sentence() helper truncates passage text for card summaries
+  - Card extraction returns count; cards are immediately queryable via GET /api/cards
+---

@@ -145,3 +145,16 @@
   - Use rebuild_fts_index to re-sync from passages table after data changes
   - Space isolation in search: filter by space_id in join condition
 ---
+
+## 2026-04-24 18:40 - US-010
+- Added literature search bar and results area to UI
+- Search input with Enter key support
+- Results show paper title, section badge, page number, relevance score, and highlighted snippet
+- Click a result to open the paper detail view
+- Empty state: "No results found for 'query'"
+- Error state: graceful message when no active space
+- **Learnings for future iterations:**
+  - Search results use snippet() with <mark> tags for highlighting in UI
+  - encodeURIComponent() needed for search query in URL
+  - Results link to paper detail via viewPaper(paper_id) on click
+---

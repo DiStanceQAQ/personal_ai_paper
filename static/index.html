@@ -256,6 +256,29 @@
                 <input type="file" id="fileInput" accept=".pdf,application/pdf" onchange="handleFileSelect(event)">
             </div>
         </div>
+
+        <!-- Search -->
+        <div style="margin-bottom:24px;">
+            <h2>Literature Search</h2>
+            <div style="display:flex; gap:8px;">
+                <input type="text" id="searchInput" placeholder="Search methods, metrics, results..." onkeydown="if(event.key==='Enter')searchLiterature()"
+                    style="flex:1; padding:8px 12px; border:1px solid #ccc; border-radius:6px; font-size:0.9rem;">
+                <button class="btn-primary" onclick="searchLiterature()">Search</button>
+            </div>
+            <div id="searchResults" style="margin-top:12px;"></div>
+        </div>
+
+        <!-- Search -->
+        <div style="margin-bottom:24px;">
+            <h2>Literature Search</h2>
+            <div style="display:flex; gap:8px;">
+                <input type="text" id="searchInput" placeholder="Search methods, metrics, results..." onkeydown="if(event.key==='Enter')searchLiterature()"
+                    style="flex:1; padding:8px 12px; border:1px solid #ccc; border-radius:6px; font-size:0.9rem;">
+                <button class="btn-primary" onclick="searchLiterature()">Search</button>
+            </div>
+            <div id="searchResults" style="margin-top:12px;"></div>
+        </div>
+
         <h2>Papers</h2>
         <ul class="space-list" id="papersList">
             <li class="empty-state"><p>No papers imported yet. Upload a PDF above.</p></li>
@@ -564,6 +587,36 @@
                 }
                 await loadPapers();
             } catch (e) { showError(e.message); }
+        }
+
+
+        // --- Literature Search ---
+        async function searchLiterature() {
+            const q = document.getElementById('searchInput').value.trim();
+            if (!q) return;
+            const resultsDiv = document.getElementById('searchResults');
+            resultsDiv.innerHTML = '<p style="color:#999;">Searching...</p>';
+            try {
+                const res = await fetch('/api/search?q=' + encodeURIComponent(q) + '&limit=30');
+                if (!res.ok) { resultsDiv.innerHTML = '<p style="color:#c62828;">Search requires an active space.</p>'; return; }
+                const results = await res.json();
+                if (results.length === 0) {
+                    resultsDiv.innerHTML = '<p style="color:#999;">No results found for "' + esc(q) + '".</p>';
+                    return;
+                }
+                resultsDiv.innerHTML = results.map(r => `
+                    <div style="border:1px solid #e0e0e0; border-radius:6px; padding:10px; margin-bottom:8px; cursor:pointer;"
+                         onclick="viewPaper('${r.paper_id}')">
+                        <div style="display:flex; gap:8px; align-items:center; margin-bottom:4px; flex-wrap:wrap;">
+                            <strong style="font-size:0.85rem;">${esc(r.paper_title || r.paper_id)}</strong>
+                            <span class="parse-badge" style="background:#e3f2fd;color:#1565c0;">${esc(r.section)}</span>
+                            <span style="font-size:0.78rem;color:#999;">Page ${r.page_number}</span>
+                            <span style="font-size:0.75rem;color:#bbb;">Score: ${r.score.toFixed(2)}</span>
+                        </div>
+                        <div style="font-size:0.85rem; line-height:1.5; color:#444;">${r.snippet}</div>
+                    </div>
+                `).join('');
+            } catch (e) { resultsDiv.innerHTML = '<p style="color:#c62828;">Search error: ' + esc(e.message) + '</p>'; }
         }
 
         // --- Paper List ---

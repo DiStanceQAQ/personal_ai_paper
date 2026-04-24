@@ -1,5 +1,6 @@
 __pycache__/
 *.py[cod]
+*.spec
 *.egg-info/
 .eggs/
 node_modules/
@@ -7,6 +8,7 @@ dist/
 build/
 src-tauri/gen/
 src-tauri/target/
+src-tauri/binaries/paper-engine-*
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/

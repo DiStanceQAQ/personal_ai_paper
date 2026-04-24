@@ -27,6 +27,10 @@
   "bundle": {
     "active": true,
     "targets": ["dmg", "app", "nsis"],
+    "externalBin": [
+      "binaries/paper-engine-api",
+      "binaries/paper-engine-mcp"
+    ],
     "macOS": {
       "minimumSystemVersion": "11.0"
     }

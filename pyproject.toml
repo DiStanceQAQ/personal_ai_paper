@@ -24,6 +24,23 @@ dev = [
     "pyinstaller>=6.0",
 ]
 
+[tool.setuptools]
+py-modules = [
+    "api_sidecar",
+    "card_extractor",
+    "config",
+    "db",
+    "main",
+    "mcp_server",
+    "parser",
+    "routes_agent",
+    "routes_cards",
+    "routes_papers",
+    "routes_search",
+    "routes_spaces",
+    "search",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

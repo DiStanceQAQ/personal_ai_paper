@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS papers (
 );
 
 CREATE TABLE IF NOT EXISTS passages (
-    id TEXT PRIMARY KEY,
+    id TEXT NOT NULL UNIQUE,
     paper_id TEXT NOT NULL,
     space_id TEXT NOT NULL,
     section TEXT NOT NULL DEFAULT '',
@@ -128,6 +128,22 @@ def init_db(database_path: Path | None = None) -> sqlite3.Connection:
     conn = get_connection(database_path)
     conn.executescript(SCHEMA_SQL)
     conn.commit()
+
+    # Initialize FTS5 index on the same connection (standalone, no content=)
+    from search import FTS_TABLE
+
+    conn.execute(f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS {FTS_TABLE}
+        USING fts5(
+            passage_id,
+            paper_id,
+            space_id,
+            section,
+            original_text
+        )
+    """)
+    conn.commit()
+
     return conn
 
 

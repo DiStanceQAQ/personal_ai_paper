@@ -33,5 +33,5 @@ module = "pymupdf"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["parser", "tests.test_parser"]
-disable_error_code = ["no-untyped-call"]
+module = ["parser", "tests.test_parser", "tests.test_search"]
+disable_error_code = ["no-untyped-call", "no-any-return"]

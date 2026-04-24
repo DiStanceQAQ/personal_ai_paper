@@ -10,6 +10,7 @@ from fastapi import APIRouter, Body, HTTPException, UploadFile
 from config import SPACES_DIR
 from db import get_connection
 from parser import extract_passages_from_pdf
+from search import FTS_TABLE
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
 
@@ -244,7 +245,7 @@ async def parse_paper(paper_id: str) -> dict[str, Any]:
             conn.commit()
             return {"status": "error", "paper_id": paper_id, "passage_count": 0}
 
-        # Insert passages
+        # Insert passages and sync to FTS
         for p in passages:
             conn.execute(
                 """INSERT OR REPLACE INTO passages
@@ -256,6 +257,12 @@ async def parse_paper(paper_id: str) -> dict[str, Any]:
                     p["page_number"], p["paragraph_index"], p["original_text"],
                     p["parse_confidence"], p["passage_type"],
                 ),
+            )
+            conn.execute(
+                f"""INSERT OR REPLACE INTO {FTS_TABLE}
+                   (passage_id, paper_id, space_id, section, original_text)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (p["id"], p["paper_id"], p["space_id"], p["section"], p["original_text"]),
             )
 
         conn.execute(

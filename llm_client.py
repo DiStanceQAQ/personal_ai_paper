@@ -1,7 +1,7 @@
 """Client for calling LLM APIs (OpenAI compatible)."""
 
 import json
-from typing import Any
+from typing import Any, Literal, overload, cast
 import httpx
 from db import get_connection
 
@@ -19,7 +19,29 @@ async def get_llm_config() -> dict[str, str]:
     finally:
         conn.close()
 
-async def call_llm(system_prompt: str, user_prompt: str, json_mode: bool = True) -> dict[str, Any]:
+@overload
+async def call_llm(
+    system_prompt: str,
+    user_prompt: str,
+    json_mode: Literal[True] = True,
+) -> dict[str, Any]:
+    ...
+
+
+@overload
+async def call_llm(
+    system_prompt: str,
+    user_prompt: str,
+    json_mode: Literal[False],
+) -> str:
+    ...
+
+
+async def call_llm(
+    system_prompt: str,
+    user_prompt: str,
+    json_mode: bool = True,
+) -> dict[str, Any] | str:
     """Call an OpenAI-compatible LLM API."""
     config = await get_llm_config()
     if not config["api_key"] and "localhost" not in config["base_url"] and "127.0.0.1" not in config["base_url"]:
@@ -53,5 +75,8 @@ async def call_llm(system_prompt: str, user_prompt: str, json_mode: bool = True)
         
         content = data["choices"][0]["message"]["content"]
         if json_mode:
-            return json.loads(content)
-        return content
+            parsed = json.loads(content)
+            if not isinstance(parsed, dict):
+                raise ValueError("LLM response is not a JSON object.")
+            return cast(dict[str, Any], parsed)
+        return str(content)

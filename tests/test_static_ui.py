@@ -74,3 +74,15 @@ def test_react_app_gates_shell_until_initial_data_loads() -> None:
     assert "initialLoadStatus" in source
     assert "正在启动论文知识引擎" in source
     assert "initialLoadStatus !== 'ready'" in source
+
+
+def test_paper_hook_clears_detail_state_when_active_space_changes() -> None:
+    """Switching spaces should not leave the inspector showing stale paper details."""
+    source = Path("frontend/src/hooks/usePapers.ts").read_text(encoding="utf-8")
+    expected_effect = """useEffect(() => {
+    setSelectedPaper(null);
+    setPassages([]);
+    setCards([]);
+  }, [activeSpaceId]);"""
+
+    assert expected_effect in source

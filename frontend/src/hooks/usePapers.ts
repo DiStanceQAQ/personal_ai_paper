@@ -15,6 +15,12 @@ export function usePapers(
   
   const pollingRef = useRef<number | null>(null);
 
+  useEffect(() => {
+    setSelectedPaper(null);
+    setPassages([]);
+    setCards([]);
+  }, [activeSpaceId]);
+
   const loadPapers = useCallback(async () => {
     if (!activeSpaceId) {
       setPapers([]);

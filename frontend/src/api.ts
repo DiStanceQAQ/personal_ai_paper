@@ -51,6 +51,7 @@ export const api = {
   getActiveSpace: () => request<Space>('/api/spaces/active'),
   listPapers: () => request<Paper[]>('/api/papers'),
   getPaper: (paperId: string) => request<Paper>(`/api/papers/${paperId}`),
+  deletePaper: (paperId: string) => request<{ status: string; paper_id: string }>(`/api/papers/${paperId}`, { method: 'DELETE' }),
   updatePaper: (paperId: string, body: Partial<Paper>) =>
     request<Paper>(`/api/papers/${paperId}`, { method: 'PATCH', body: JSON.stringify(body) }),
   uploadPaper: (file: File) => {
@@ -77,4 +78,10 @@ export const api = {
   agentStatus: () => request<AgentStatus>('/api/agent/status'),
   setAgentStatus: (enabled: boolean) =>
     request<{ enabled: boolean }>('/api/agent/status', { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  getAgentConfig: () => request<{ llm_provider: string; llm_base_url: string; llm_model: string; has_api_key: boolean }>('/api/agent/config'),
+  getAppInfo: () => request<{ project_root: string; os: string }>('/api/info'),
+  updateAgentConfig: (config: { llm_provider: string; llm_base_url: string; llm_model: string; llm_api_key: string }) =>
+    request<{ status: string }>('/api/agent/config', { method: 'PUT', body: JSON.stringify(config) }),
+  runDeepAnalysis: (paperId: string) =>
+    request<{ status: string; card_count: number }>(`/api/agent/analyze/${paperId}`, { method: 'POST' }),
 };

@@ -338,6 +338,7 @@ async def delete_paper(paper_id: str) -> dict[str, str]:
 
         # 1. Clear linked data
         conn.execute("DELETE FROM knowledge_cards WHERE paper_id = ?", (paper_id,))
+        conn.execute("DELETE FROM notes WHERE paper_id = ?", (paper_id,))
         conn.execute(f"DELETE FROM {FTS_TABLE} WHERE paper_id = ?", (paper_id,))
         conn.execute("DELETE FROM passages WHERE paper_id = ?", (paper_id,))
         

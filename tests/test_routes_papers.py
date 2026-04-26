@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from db import get_connection
 from db import DATABASE_PATH, init_db
 from main import app
 
@@ -380,3 +381,86 @@ async def test_reparsing_replaces_existing_passages_and_fts_rows(
     second_search = await client.get("/api/search", params={"q": "transformer"})
     assert second_search.status_code == 200
     assert len(second_search.json()) == first_search_count
+
+
+@pytest.mark.asyncio
+async def test_delete_paper_removes_database_rows_fts_index_and_pdf(
+    client: AsyncClient,
+) -> None:
+    """Deleting a paper should remove its dependent data and stored PDF."""
+    space_id = await _create_and_activate_space(client)
+
+    resp = await client.post(
+        "/api/papers/upload",
+        files={
+            "file": (
+                "test.pdf",
+                _make_text_pdf("method transformer attention mechanism"),
+                "application/pdf",
+            )
+        },
+    )
+    assert resp.status_code == 200
+    paper = resp.json()
+    paper_id = paper["id"]
+    pdf_path = Path(paper["file_path"])
+    assert pdf_path.exists()
+
+    parse_resp = await client.post(f"/api/papers/{paper_id}/parse")
+    assert parse_resp.status_code == 200
+    assert parse_resp.json()["status"] == "parsed"
+
+    card_resp = await client.post(
+        "/api/cards",
+        json={"paper_id": paper_id, "card_type": "Method", "summary": "uses attention"},
+    )
+    assert card_resp.status_code == 200
+
+    import db as db_module
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        conn.execute(
+            """INSERT INTO notes (id, space_id, paper_id, content)
+               VALUES ('note-1', ?, ?, 'keep deletion referentially clean')""",
+            (space_id, paper_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    search_resp = await client.get("/api/search", params={"q": "transformer"})
+    assert search_resp.status_code == 200
+    assert len(search_resp.json()) > 0
+
+    delete_resp = await client.delete(f"/api/papers/{paper_id}")
+    assert delete_resp.status_code == 200
+    assert delete_resp.json() == {"status": "deleted", "paper_id": paper_id}
+
+    assert not pdf_path.exists()
+    assert (await client.get(f"/api/papers/{paper_id}")).status_code == 404
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        paper_count = conn.execute(
+            "SELECT COUNT(*) FROM papers WHERE id = ?",
+            (paper_id,),
+        ).fetchone()[0]
+        assert paper_count == 0
+        for table in ("passages", "knowledge_cards", "notes"):
+            count = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE paper_id = ?",
+                (paper_id,),
+            ).fetchone()[0]
+            assert count == 0
+        fts_count = conn.execute(
+            "SELECT COUNT(*) FROM passages_fts WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchone()[0]
+        assert fts_count == 0
+    finally:
+        conn.close()
+
+    search_after_delete = await client.get("/api/search", params={"q": "transformer"})
+    assert search_after_delete.status_code == 200
+    assert search_after_delete.json() == []

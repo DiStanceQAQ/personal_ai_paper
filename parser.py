@@ -36,6 +36,7 @@ def extract_passages_from_pdf(
             # Sort blocks primarily by y0 (vertical) then x0 (horizontal) 
             # PyMuPDF usually does this, but we ensure it.
             blocks.sort(key=lambda b: (b[1], b[0]))
+            text_block_count = sum(1 for b in blocks if b[6] == 0 and b[4].strip())
 
             page_height = page.rect.height
             page_width = page.rect.width
@@ -54,7 +55,7 @@ def extract_passages_from_pdf(
                 # (Often contains page numbers, journal names, DOI)
                 y0 = b[1]
                 y1 = b[3]
-                if y0 < page_height * 0.07 or y1 > page_height * 0.93:
+                if text_block_count > 3 and (y0 < page_height * 0.07 or y1 > page_height * 0.93):
                     # Double check: headers/footers are usually short
                     if len(block_text) < 150:
                         continue
@@ -90,6 +91,39 @@ def extract_passages_from_pdf(
         doc.close()
 
     return passages
+
+
+def _split_paragraphs(text: str) -> list[str]:
+    """Split raw extracted text into normalized paragraphs."""
+    paragraphs = re.split(r"\n\s*\n", text.strip())
+    return [_normalize_text(paragraph) for paragraph in paragraphs if paragraph.strip()]
+
+
+def _guess_section(text: str) -> str:
+    """Infer a broad academic section from a paragraph or header."""
+    header = _detect_section_header(text)
+    if header:
+        return header
+
+    text_lower = text.strip().lower()
+    if text_lower.startswith("abstract"):
+        return "abstract"
+    if "introduction" in text_lower or "related work" in text_lower:
+        return "introduction"
+    if "method" in text_lower or "algorithm" in text_lower or "architecture" in text_lower:
+        return "method"
+    if "result" in text_lower or "evaluation" in text_lower or "experiment" in text_lower:
+        return "result"
+    if "limitation" in text_lower or "future work" in text_lower:
+        return "limitation"
+    if text_lower.startswith("appendix") or text_lower.startswith("supplementary"):
+        return "appendix"
+    return "body"
+
+
+def _guess_passage_type(section: str) -> str:
+    """Compatibility wrapper for older parser tests and callers."""
+    return _get_passage_type(section)
 
 
 def _detect_section_header(text: str) -> str | None:

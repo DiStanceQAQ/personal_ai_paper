@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from db import DATABASE_PATH, init_db
+from db import DATABASE_PATH, get_connection, init_db
 from main import app
 
 
@@ -122,6 +122,29 @@ async def test_archive_space(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_archiving_active_space_clears_active_space(client: AsyncClient) -> None:
+    """Archiving the current active space should leave no active space selected."""
+    resp = await client.post("/api/spaces", json={"name": "Active Archive"})
+    space_id = resp.json()["id"]
+    await client.put(f"/api/spaces/active/{space_id}")
+
+    resp = await client.patch(f"/api/spaces/{space_id}/archive")
+
+    assert resp.status_code == 200
+    active_resp = await client.get("/api/spaces/active")
+    assert active_resp.status_code == 404
+
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT value FROM app_state WHERE key = 'active_space'"
+        ).fetchone()
+        assert row is None
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
 async def test_delete_space(client: AsyncClient) -> None:
     """Test deleting a space."""
     resp = await client.post("/api/spaces", json={"name": "To Delete"})
@@ -134,6 +157,29 @@ async def test_delete_space(client: AsyncClient) -> None:
     # Deleted space should return 404
     resp = await client.get(f"/api/spaces/{space_id}")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_deleting_active_space_clears_active_space(client: AsyncClient) -> None:
+    """Deleting the current active space should leave no active space selected."""
+    resp = await client.post("/api/spaces", json={"name": "Active Delete"})
+    space_id = resp.json()["id"]
+    await client.put(f"/api/spaces/active/{space_id}")
+
+    resp = await client.delete(f"/api/spaces/{space_id}")
+
+    assert resp.status_code == 200
+    active_resp = await client.get("/api/spaces/active")
+    assert active_resp.status_code == 404
+
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT value FROM app_state WHERE key = 'active_space'"
+        ).fetchone()
+        assert row is None
+    finally:
+        conn.close()
 
 
 @pytest.mark.asyncio

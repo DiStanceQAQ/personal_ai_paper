@@ -123,6 +123,38 @@ async def test_upload_requires_active_space(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_upload_rejects_deleted_active_space(client: AsyncClient) -> None:
+    """A deleted space left in app_state must not accept new papers."""
+    space_id = await _create_and_activate_space(client)
+    delete_resp = await client.delete(f"/api/spaces/{space_id}")
+    assert delete_resp.status_code == 200
+
+    resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+
+    assert resp.status_code == 400
+    assert "active space" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_upload_rejects_archived_active_space(client: AsyncClient) -> None:
+    """An archived space left in app_state must not accept new papers."""
+    space_id = await _create_and_activate_space(client)
+    archive_resp = await client.patch(f"/api/spaces/{space_id}/archive")
+    assert archive_resp.status_code == 200
+
+    resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+
+    assert resp.status_code == 400
+    assert "active space" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
 async def test_duplicate_detection_same_space(client: AsyncClient) -> None:
     """Test that duplicate PDFs in the same space are detected."""
     await _create_and_activate_space(client)

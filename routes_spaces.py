@@ -17,6 +17,14 @@ def _space_row_to_dict(row: Any) -> dict[str, Any]:
     return dict(row)
 
 
+def _clear_active_space_if_matches(conn: Any, space_id: str) -> None:
+    """Clear active space state when that space is no longer active."""
+    conn.execute(
+        "DELETE FROM app_state WHERE key = ? AND value = ?",
+        (ACTIVE_SPACE_KEY, space_id),
+    )
+
+
 @router.post("")
 async def create_space(
     name: str = Body(...),
@@ -57,12 +65,15 @@ async def get_active_space() -> dict[str, Any]:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT value FROM app_state WHERE key = ?",
+            """SELECT s.id
+               FROM spaces s
+               JOIN app_state a ON a.value = s.id
+               WHERE a.key = ? AND s.status = 'active'""",
             (ACTIVE_SPACE_KEY,),
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="No active space set")
-        space_id = row["value"]
+        space_id = row["id"]
         return await get_space(space_id)
     finally:
         conn.close()
@@ -167,6 +178,7 @@ async def archive_space(space_id: str) -> dict[str, str]:
             "UPDATE spaces SET status = 'archived', updated_at = datetime('now') WHERE id = ?",
             (space_id,),
         )
+        _clear_active_space_if_matches(conn, space_id)
         conn.commit()
         return {"status": "archived", "space_id": space_id}
     finally:
@@ -188,6 +200,7 @@ async def delete_space(space_id: str) -> dict[str, str]:
             "UPDATE spaces SET status = 'deleted', updated_at = datetime('now') WHERE id = ?",
             (space_id,),
         )
+        _clear_active_space_if_matches(conn, space_id)
         conn.commit()
         return {"status": "deleted", "space_id": space_id}
     finally:

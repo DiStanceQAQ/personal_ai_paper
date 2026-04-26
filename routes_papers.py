@@ -23,15 +23,18 @@ def _get_active_space_id() -> str:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT value FROM app_state WHERE key = ?",
+            """SELECT s.id
+               FROM spaces s
+               JOIN app_state a ON a.value = s.id
+               WHERE a.key = ? AND s.status = 'active'""",
             (ACTIVE_SPACE_KEY,),
         ).fetchone()
         if row is None:
             raise HTTPException(
                 status_code=400,
-                detail="No active space selected. Please open a space first.",
+                detail="No active space selected. Please open an active space first.",
             )
-        return str(row["value"])
+        return str(row["id"])
     finally:
         conn.close()
 

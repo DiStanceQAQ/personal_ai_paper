@@ -140,6 +140,29 @@ async def test_create_card_rejects_source_passage_from_other_paper(
 
 
 @pytest.mark.asyncio
+async def test_create_card_rejects_deleted_active_space(
+    client: AsyncClient,
+    setup_space_and_paper: tuple[str, str],
+) -> None:
+    """A stale deleted active space should not accept card writes."""
+    space_id, paper_id = setup_space_and_paper
+    delete_resp = await client.delete(f"/api/spaces/{space_id}")
+    assert delete_resp.status_code == 200
+
+    resp = await client.post(
+        "/api/cards",
+        json={
+            "paper_id": paper_id,
+            "card_type": "Method",
+            "summary": "Should not be written",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "active space" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
 async def test_extract_cards_returns_heuristic_metadata(
     client: AsyncClient,
     setup_space_and_paper: tuple[str, str],

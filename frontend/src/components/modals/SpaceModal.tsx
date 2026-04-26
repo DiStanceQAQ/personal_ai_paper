@@ -1,14 +1,12 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 
 interface SpaceModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: () => void;
+  onSave: (name: string, description: string) => void;
   isEditing: boolean;
-  name: string;
-  setName: (name: string) => void;
-  description: string;
-  setDescription: (desc: string) => void;
+  initialName?: string;
+  initialDescription?: string;
 }
 
 export const SpaceModal: React.FC<SpaceModalProps> = ({
@@ -16,11 +14,19 @@ export const SpaceModal: React.FC<SpaceModalProps> = ({
   onClose,
   onSave,
   isEditing,
-  name,
-  setName,
-  description,
-  setDescription,
+  initialName = '',
+  initialDescription = '',
 }) => {
+  const [name, setName] = useState(initialName);
+  const [description, setDescription] = useState(initialDescription);
+
+  useEffect(() => {
+    if (isOpen) {
+      setName(initialName);
+      setDescription(initialDescription);
+    }
+  }, [isOpen, initialName, initialDescription]);
+
   if (!isOpen) return null;
 
   return (
@@ -49,7 +55,7 @@ export const SpaceModal: React.FC<SpaceModalProps> = ({
           <button className="btn-secondary" onClick={onClose}>
             取消
           </button>
-          <button className="btn-primary" onClick={onSave}>
+          <button className="btn-primary" onClick={() => onSave(name, description)}>
             {isEditing ? '保存修改' : '创建并进入'}
           </button>
         </div>

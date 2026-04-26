@@ -1,17 +1,18 @@
 import React, { useState } from 'react';
-import { Cpu, Zap, FileText, Globe, BookOpen, Plus, Edit2 } from 'lucide-react';
-import type { Paper, KnowledgeCard, AgentStatus, Passage } from '../../types';
+import { Cpu, FileText, Plus, Edit2 } from 'lucide-react';
+import type { Paper, KnowledgeCard, AgentStatus, Space } from '../../types';
 import { KnowledgeCardFancy } from '../ui/KnowledgeCardFancy';
 
-interface InspectorProps {
+export interface InspectorProps {
   isOpen: boolean;
   onToggle: () => void;
   selectedPaper: Paper | null;
-  activeSpace: any;
+  activeSpace: Space | null;
   agentStatus: AgentStatus | null;
-  onToggleAgent: () => void;
+  onToggleAgent: () => Promise<void>;
   onExtract: () => void;
   onDeleteCard: (id: string) => void;
+  onUpdateCard: (id: string, summary: string) => Promise<void>;
   onAddManualCard: (type: string, summary: string) => void;
   onOpenEditPaper: () => void;
   activeTab: string;
@@ -43,6 +44,7 @@ export const Inspector: React.FC<InspectorProps> = ({
   onToggleAgent,
   onExtract,
   onDeleteCard,
+  onUpdateCard,
   onAddManualCard,
   onOpenEditPaper,
   activeTab,
@@ -146,7 +148,13 @@ export const Inspector: React.FC<InspectorProps> = ({
 
                 <div className="card-list">
                   {visibleCards.map((card) => (
-                    <KnowledgeCardFancy key={card.id} card={card} cardLabel={cardLabel} onDelete={onDeleteCard} />
+                    <KnowledgeCardFancy 
+                      key={card.id} 
+                      card={card} 
+                      cardLabel={cardLabel} 
+                      onDelete={onDeleteCard}
+                      onUpdate={onUpdateCard}
+                    />
                   ))}
                   {visibleCards.length === 0 && !isAdding && (
                     <div className="empty-state-small">

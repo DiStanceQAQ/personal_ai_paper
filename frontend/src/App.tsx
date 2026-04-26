@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
-import type { AgentStatus, KnowledgeCard, Paper, Passage, SearchResult, Space } from './types';
+import type { Paper } from './types';
 
 // Layout Components
 import { Sidebar } from './components/layout/Sidebar';
@@ -12,338 +12,109 @@ import { LoadingOverlay } from './components/ui/LoadingOverlay';
 import { Toast } from './components/ui/Toast';
 
 // Modals
-import { SettingsModal } from './components/modals/SettingsModal';
-import { SpaceModal } from './components/modals/SpaceModal';
-import { ConfirmModal } from './components/modals/ConfirmModal';
-import { MCPGuideModal } from './components/modals/MCPGuideModal';
-import { EditPaperModal } from './components/modals/EditPaperModal';
+import { ModalsContainer } from './components/modals/ModalsContainer';
+
+// Hooks
+import { useModals } from './hooks/useModals';
+import { useSpaces } from './hooks/useSpaces';
+import { usePapers } from './hooks/usePapers';
+import { useLlmConfig } from './hooks/useLlmConfig';
 
 const cardTabs = ['Method', 'Metric', 'Result', 'Failure Mode', 'Limitation', 'Claim'] as const;
 
 function cardLabel(type: string): string {
   const labels: Record<string, string> = {
-    Method: '方法',
-    Metric: '指标',
-    Result: '结果',
-    'Failure Mode': '失败模式',
-    Limitation: '局限性',
-    Claim: '主张',
-    Evidence: '证据',
-    Problem: '问题',
-    Object: '研究对象',
-    Variable: '变量',
-    Interpretation: '解释',
-    'Practical Tip': '实践建议',
+    Method: '方法', Metric: '指标', Result: '结果', 'Failure Mode': '失败模式',
+    Limitation: '局限性', Claim: '主张', Evidence: '证据', Problem: '问题',
+    Object: '研究对象', Variable: '变量', Interpretation: '解释', 'Practical Tip': '实践建议',
   };
   return labels[type] || type;
 }
 
 function parseLabel(status: string): string {
   const labels: Record<string, string> = {
-    pending: '待解析',
-    parsing: '解析中',
-    parsed: '已解析',
-    error: '解析失败',
+    pending: '待解析', parsing: '解析中', parsed: '已解析', error: '解析失败',
   };
   return labels[status] || status;
 }
 
 export default function App(): JSX.Element {
-  // --- State ---
+  // --- Global UI State ---
   const [initialLoadStatus, setInitialLoadStatus] = useState<'starting' | 'ready'>('starting');
-  const [spaces, setSpaces] = useState<Space[]>([]);
-  const [activeSpace, setActiveSpace] = useState<Space | null>(null);
-  const [papers, setPapers] = useState<Paper[]>([]);
-  const [selectedPaper, setSelectedPaper] = useState<Paper | null>(null);
-  const [passages, setPassages] = useState<Passage[]>([]);
-  const [cards, setCards] = useState<KnowledgeCard[]>([]);
-  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [activeTab, setActiveTab] = useState<(typeof cardTabs)[number]>('Method');
-  const [activeView, setActiveView] = useState<'library' | 'search'>('library');
-  const [isInspectorOpen, setIsInspectorOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
-  
-  // Modals
-  const [isSpaceModalOpen, setIsSpaceModalOpen] = useState(false);
-  const [editingSpace, setEditingSpace] = useState<Space | null>(null);
-  const [newSpaceName, setNewSpaceName] = useState('');
-  const [newSpaceDescription, setNewSpaceDescription] = useState('');
-  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
-  const [spaceToDelete, setSpaceToDelete] = useState<string | null>(null);
-  const [isPaperDeleteConfirmOpen, setIsPaperDeleteConfirmOpen] = useState(false);
-  const [paperToDelete, setPaperToDelete] = useState<string | null>(null);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isMCPGuideOpen, setIsMCPGuideOpen] = useState(false);
-  const [isEditPaperOpen, setIsEditPaperOpen] = useState(false);
+  const [notice, setNotice] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
   const [projectRoot, setProjectRoot] = useState<string>('');
 
-  const [llmConfig, setLlmConfig] = useState({
-    llm_provider: 'openai',
-    llm_base_url: 'https://api.openai.com/v1',
-    llm_model: 'gpt-4o',
-    llm_api_key: '',
-    has_api_key: false
-  });
-  
-  const [notice, setNotice] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+  // --- View State ---
+  const [activeView, setActiveView] = useState<'library' | 'search'>('library');
+  const [isInspectorOpen, setIsInspectorOpen] = useState(true);
+  const [activeTab, setActiveTab] = useState<(typeof cardTabs)[number]>('Method');
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<any[]>([]);
+
+  // --- Custom Hooks (Logic Logic) ---
+  const modals = useModals();
+  const { spaces, activeSpace, loadSpaces, switchSpace, createOrUpdateSpace, deleteSpace } = useSpaces(setNotice);
+  const { 
+    papers, selectedPaper, setSelectedPaper, passages, cards, setCards, agentStatus, setAgentStatus,
+    loadPapers, openPaper, deletePaper: handleDeletePaper, uploadPaper, runDeepAnalysis 
+  } = usePapers(activeSpace?.id, setNotice, setIsProcessing);
+  const { llmConfig, setLlmConfig, loadLlmConfig, saveLlmConfig } = useLlmConfig(setNotice);
 
   // --- Derived State ---
-  const visibleCards = useMemo(
-    () => cards.filter((card) => card.card_type === activeTab),
-    [cards, activeTab],
-  );
+  const visibleCards = useMemo(() => cards.filter((card) => card.card_type === activeTab), [cards, activeTab]);
 
-  // --- Effects ---
-  useEffect(() => {
-    if (notice) {
-      const timer = setTimeout(() => setNotice(null), 3500);
-      return () => clearTimeout(timer);
-    }
-  }, [notice]);
-
+  // --- Initial Mount ---
   useEffect(() => {
     async function init() {
       let retryCount = 0;
       while (retryCount < 20) {
-        try {
-          await api.health();
-          break; 
-        } catch {
-          await new Promise(r => setTimeout(r, 500));
-          retryCount++;
-        }
+        try { await api.health(); break; } catch { await new Promise(r => setTimeout(r, 500)); retryCount++; }
       }
-      await Promise.all([refresh(), loadLlmConfig(), loadAppInfo()]);
+      try {
+        const info = await api.getAppInfo();
+        setProjectRoot(info.project_root);
+      } catch {}
+      await Promise.all([loadSpaces(), loadLlmConfig()]);
       setInitialLoadStatus('ready');
     }
     init();
-  }, []);
+  }, [loadSpaces, loadLlmConfig]);
 
-  // --- Actions ---
-  async function loadAppInfo(): Promise<void> {
-    try {
-      const info = await api.getAppInfo();
-      setProjectRoot(info.project_root);
-    } catch {
-      console.warn('无法获取应用信息。');
-    }
-  }
+  useEffect(() => {
+    if (activeSpace) loadPapers();
+  }, [activeSpace, loadPapers]);
 
-  async function refresh(): Promise<void> {
-    try {
-      const loadedSpaces = await api.listSpaces();
-      setSpaces(loadedSpaces);
-      try {
-        const active = await api.getActiveSpace();
-        setActiveSpace(active);
-        const [loadedPapers, status] = await Promise.all([
-          api.listPapers(),
-          api.agentStatus(),
-        ]);
-        setPapers(loadedPapers);
-        setAgentStatus(status);
-      } catch {
-        setActiveSpace(null);
-      }
-    } catch (err) {
-      console.error('连接后端失败:', err);
-      setNotice({ message: '无法连接到后端 Sidecar，请检查应用状态。', type: 'error' });
-    }
-  }
-
-  async function openPaper(paper: Paper): Promise<void> {
-    setSelectedPaper(paper);
-    try {
-      const [paperPassages, paperCards] = await Promise.all([
-        api.listPassages(paper.id),
-        api.listCards(paper.id),
-      ]);
-      setPassages(paperPassages);
-      setCards(paperCards);
-    } catch {
-      setNotice({ message: '获取论文详情失败。', type: 'error' });
-    }
-  }
-
-  async function handleUpdatePaper(paperId: string, data: Partial<Paper>): Promise<void> {
-    try {
-      const updated = await api.updatePaper(paperId, data);
-      setNotice({ message: '论文元数据已更新。', type: 'success' });
-      setSelectedPaper(updated);
-      setIsEditPaperOpen(false);
-      await refresh();
-    } catch {
-      setNotice({ message: '更新失败。', type: 'error' });
-    }
-  }
-
-  async function loadLlmConfig(): Promise<void> {
-    try {
-      const config = await api.getAgentConfig();
-      setLlmConfig({ ...config, llm_api_key: '' });
-    } catch {
-      console.warn('无法加载 LLM 配置。');
-    }
-  }
-
-  async function saveLlmConfig(): Promise<void> {
-    try {
-      await api.updateAgentConfig(llmConfig);
-      setNotice({ message: 'LLM 配置保存成功。', type: 'success' });
-      setIsSettingsOpen(false);
-      await loadLlmConfig();
-    } catch {
-      setNotice({ message: '保存配置失败。', type: 'error' });
-    }
-  }
-
-  async function copyToClipboard(text: string): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(text);
-      setNotice({ message: '配置已复制到剪贴板。', type: 'success' });
-    } catch {
-      setNotice({ message: '复制失败。', type: 'error' });
-    }
-  }
-
-  async function saveSpace(): Promise<void> {
-    if (!newSpaceName.trim()) {
-      setNotice({ message: '请输入空间名称。', type: 'error' });
-      return;
-    }
-    try {
-      if (editingSpace) {
-        await api.updateSpace(editingSpace.id, newSpaceName.trim(), newSpaceDescription.trim());
-        setNotice({ message: '空间更新成功。', type: 'success' });
-      } else {
-        const space = await api.createSpace(newSpaceName.trim(), newSpaceDescription.trim());
-        await api.setActiveSpace(space.id);
-        setNotice({ message: '新空间已创建并激活。', type: 'success' });
-      }
-      setIsSpaceModalOpen(false);
-      await refresh();
-    } catch {
-      setNotice({ message: '操作空间失败。', type: 'error' });
-    }
-  }
-
-  async function confirmDelete(): Promise<void> {
-    if (!spaceToDelete) return;
-    try {
-      await api.deleteSpace(spaceToDelete);
-      if (activeSpace?.id === spaceToDelete) {
-        setActiveSpace(null);
-        setSelectedPaper(null);
-      }
-      setNotice({ message: '研究空间已删除。', type: 'success' });
-    } catch {
-      setNotice({ message: '删除空间失败。', type: 'error' });
-    } finally {
-      setIsDeleteConfirmOpen(false);
-      await refresh();
-    }
-  }
-
-  async function confirmPaperDelete(): Promise<void> {
-    if (!paperToDelete) return;
-    try {
-      await api.deletePaper(paperToDelete);
-      if (selectedPaper?.id === paperToDelete) {
-        setSelectedPaper(null);
-        setPassages([]);
-        setCards([]);
-      }
-      setNotice({ message: '论文已从库中移除。', type: 'success' });
-    } catch {
-      setNotice({ message: '移除论文失败。', type: 'error' });
-    } finally {
-      setIsPaperDeleteConfirmOpen(false);
-      setPaperToDelete(null);
-      await refresh();
-    }
-  }
-
-  async function setActive(space: Space): Promise<void> {
-    if (activeSpace?.id === space.id) return;
-    try {
-      await api.setActiveSpace(space.id);
-      setSelectedPaper(null);
-      setPassages([]);
-      setCards([]);
-      await refresh();
-    } catch {
-      setNotice({ message: '切换空间失败。', type: 'error' });
-    }
-  }
-
-  async function upload(file: File): Promise<void> {
-    setIsProcessing(true);
-    setNotice({ message: '正在导入并预处理 PDF 文件...', type: 'success' });
-    try {
-      await api.uploadPaper(file);
-      setNotice({ message: '导入成功。', type: 'success' });
-      await refresh();
-    } catch (err: any) {
-      setNotice({ message: err.message || '文件导入失败。', type: 'error' });
-    } finally {
-      setIsProcessing(false);
-    }
-  }
-
-  async function runSearch(): Promise<void> {
-    if (!query.trim()) return;
-    try {
-      const searchResults = await api.search(query.trim());
-      setResults(searchResults);
-      setActiveView('search');
-    } catch {
-      setNotice({ message: '搜索请求失败。', type: 'error' });
-    }
-  }
-
-  async function extractSelected(): Promise<void> {
-    if (!selectedPaper) return;
-    const config = await api.getAgentConfig();
-    if (!config.has_api_key && config.llm_provider !== 'ollama') {
-      setNotice({ message: '请先在左下角完成 LLM 配置（API Key）后再执行解析。', type: 'error' });
-      setIsSettingsOpen(true);
-      return;
-    }
-    setIsProcessing(true);
-    try {
-      setNotice({ message: '正在进行 PDF 物理切片和 RAG 预处理...', type: 'success' });
-      await api.parsePaper(selectedPaper.id);
-      setNotice({ message: '正在调用内置 Agent 进行深度语义分析...', type: 'success' });
-      const result = await api.runDeepAnalysis(selectedPaper.id);
-      setNotice({ message: `AI 解析成功！识别了元数据并提取了 ${result.card_count} 张卡片。`, type: 'success' });
-      const [updatedPaper, paperCards] = await Promise.all([
-        api.getPaper(selectedPaper.id),
-        api.listCards(selectedPaper.id),
-      ]);
-      setSelectedPaper(updatedPaper);
-      setCards(paperCards);
-      await refresh();
-    } catch (err: any) {
-      setNotice({ message: `AI 解析失败: ${err.message || '请检查模型配置'}`, type: 'error' });
-    } finally {
-      setIsProcessing(false);
-    }
-  }
-
-  async function toggleAgent(): Promise<void> {
+  // --- Common Handlers ---
+  const handleToggleAgent = async () => {
     try {
       const enabled = agentStatus ? !agentStatus.enabled : true;
       await api.setAgentStatus(enabled);
       const newStatus = await api.agentStatus();
       setAgentStatus(newStatus);
-    } catch {
-      setNotice({ message: '智能代理状态切换失败。', type: 'error' });
-    }
-  }
+    } catch { setNotice({ message: '智能代理状态切换失败。', type: 'error' }); }
+  };
 
-  async function deleteCard(cardId: string): Promise<void> {
+  const handleSearch = async () => {
+    if (!query.trim()) return;
+    try {
+      const searchResults = await api.search(query.trim());
+      setResults(searchResults);
+      setActiveView('search');
+    } catch { setNotice({ message: '搜索请求失败。', type: 'error' }); }
+  };
+
+  const handleUpdatePaper = async (paperId: string, data: Partial<Paper>) => {
+    try {
+      const updated = await api.updatePaper(paperId, data);
+      setNotice({ message: '论文元数据已更新。', type: 'success' });
+      setSelectedPaper(updated);
+      modals.closeModal('editPaper');
+      await loadPapers();
+    } catch { setNotice({ message: '更新失败。', type: 'error' }); }
+  };
+
+  const handleDeleteCard = async (cardId: string) => {
     try {
       await api.deleteCard(cardId);
       setNotice({ message: '卡片已移除。', type: 'success' });
@@ -351,28 +122,33 @@ export default function App(): JSX.Element {
         const paperCards = await api.listCards(selectedPaper.id);
         setCards(paperCards);
       }
-    } catch {
-      setNotice({ message: '移除卡片失败。', type: 'error' });
-    }
-  }
+    } catch { setNotice({ message: '移除卡片失败。', type: 'error' }); }
+  };
 
-  async function addManualCard(type: string, summary: string): Promise<void> {
+  const handleUpdateCard = async (cardId: string, summary: string) => {
+    try {
+      await api.updateCard(cardId, { summary });
+      if (selectedPaper) {
+        const paperCards = await api.listCards(selectedPaper.id);
+        setCards(paperCards);
+      }
+    } catch {
+      setNotice({ message: '更新卡片失败。', type: 'error' });
+      throw new Error('Update failed');
+    }
+  };
+
+  const handleAddManualCard = async (type: string, summary: string) => {
     if (!selectedPaper) return;
     try {
-      await api.createCard({
-        paper_id: selectedPaper.id,
-        card_type: type,
-        summary: summary,
-        confidence: 1.0
-      });
+      await api.createCard({ paper_id: selectedPaper.id, card_type: type, summary, confidence: 1.0 });
       setNotice({ message: '已手动添加知识卡片。', type: 'success' });
       const paperCards = await api.listCards(selectedPaper.id);
       setCards(paperCards);
-    } catch {
-      setNotice({ message: '添加卡片失败。', type: 'error' });
-    }
-  }
+    } catch { setNotice({ message: '添加卡片失败。', type: 'error' }); }
+  };
 
+  // --- Render Helpers ---
   if (initialLoadStatus !== 'ready') {
     return (
       <div style={{ height: '100vh', display: 'grid', placeItems: 'center', background: 'var(--bg-main)' }}>
@@ -390,28 +166,28 @@ export default function App(): JSX.Element {
         <Sidebar
           spaces={spaces}
           activeSpace={activeSpace}
-          onSelectSpace={setActive}
-          onOpenCreateModal={() => { setEditingSpace(null); setNewSpaceName(''); setNewSpaceDescription(''); setIsSpaceModalOpen(true); }}
-          onOpenEditModal={(e, space) => { e.stopPropagation(); setEditingSpace(space); setNewSpaceName(space.name); setNewSpaceDescription(space.description || ''); setIsSpaceModalOpen(true); }}
-          onOpenDeleteConfirm={(e, id) => { e.stopPropagation(); setSpaceToDelete(id); setIsDeleteConfirmOpen(true); }}
-          onOpenSettings={() => setIsSettingsOpen(true)}
+          onSelectSpace={switchSpace}
+          onOpenCreateModal={() => modals.openModal('space')}
+          onOpenEditModal={(e, space) => { e.stopPropagation(); modals.openModal('space', { editingSpace: space }); }}
+          onOpenDeleteConfirm={(e, id) => { e.stopPropagation(); modals.openModal('deleteSpace', { spaceToDelete: id }); }}
+          onOpenSettings={() => modals.openModal('settings')}
         />
 
         <Workspace
           activeSpace={activeSpace}
           agentStatus={agentStatus}
-          onToggleAgent={toggleAgent}
-          onOpenMCPGuide={() => setIsMCPGuideOpen(true)}
+          onToggleAgent={handleToggleAgent}
+          onOpenMCPGuide={() => modals.openModal('mcpGuide')}
           activeView={activeView}
           setActiveView={setActiveView}
           papers={papers}
           selectedPaper={selectedPaper}
           onSelectPaper={openPaper}
-          onDeletePaper={(e, id) => { e.stopPropagation(); setPaperToDelete(id); setIsPaperDeleteConfirmOpen(true); }}
-          onUpload={upload}
+          onDeletePaper={(e, id) => { e.stopPropagation(); modals.openModal('deletePaper', { paperToDelete: id }); }}
+          onUpload={uploadPaper}
           query={query}
           setQuery={setQuery}
-          onSearch={runSearch}
+          onSearch={handleSearch}
           results={results}
           parseLabel={parseLabel}
         />
@@ -422,11 +198,12 @@ export default function App(): JSX.Element {
           selectedPaper={selectedPaper}
           activeSpace={activeSpace}
           agentStatus={agentStatus}
-          onToggleAgent={toggleAgent}
-          onExtract={extractSelected}
-          onDeleteCard={deleteCard}
-          onAddManualCard={addManualCard}
-          onOpenEditPaper={() => setIsEditPaperOpen(true)}
+          onToggleAgent={handleToggleAgent}
+          onExtract={() => selectedPaper && runDeepAnalysis(selectedPaper.id)}
+          onDeleteCard={handleDeleteCard}
+          onUpdateCard={handleUpdateCard}
+          onAddManualCard={handleAddManualCard}
+          onOpenEditPaper={() => modals.openModal('editPaper')}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           visibleCards={visibleCards}
@@ -436,53 +213,18 @@ export default function App(): JSX.Element {
         />
       </main>
 
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        onSave={saveLlmConfig}
-        config={llmConfig}
-        setConfig={setLlmConfig}
-      />
-
-      <SpaceModal
-        isOpen={isSpaceModalOpen}
-        onClose={() => setIsSpaceModalOpen(false)}
-        onSave={saveSpace}
-        isEditing={!!editingSpace}
-        name={newSpaceName}
-        setName={setNewSpaceName}
-        description={newSpaceDescription}
-        setDescription={setNewSpaceDescription}
-      />
-
-      <EditPaperModal
-        isOpen={isEditPaperOpen}
-        onClose={() => setIsEditPaperOpen(false)}
-        onSave={handleUpdatePaper}
-        paper={selectedPaper}
-      />
-
-      <ConfirmModal
-        isOpen={isDeleteConfirmOpen}
-        title="确认删除空间？"
-        message="此空间内所有的论文、解析结果和知识卡片将不再显示。数据仍保留在数据库中，但当前界面将无法访问。"
-        onConfirm={confirmDelete}
-        onCancel={() => setIsDeleteConfirmOpen(false)}
-      />
-
-      <ConfirmModal
-        isOpen={isPaperDeleteConfirmOpen}
-        title="确认从库中移除这篇论文？"
-        message="该操作将删除该论文的所有物理分片、搜索索引和已提取的卡片，并删除磁盘上的 PDF 文件。"
-        onConfirm={confirmPaperDelete}
-        onCancel={() => setIsPaperDeleteConfirmOpen(false)}
-      />
-
-      <MCPGuideModal
-        isOpen={isMCPGuideOpen}
-        onClose={() => setIsMCPGuideOpen(false)}
-        onCopy={copyToClipboard}
-        projectPath={projectRoot}
+      <ModalsContainer
+        modals={modals}
+        llmConfig={llmConfig}
+        setLlmConfig={setLlmConfig}
+        saveLlmConfig={saveLlmConfig}
+        createOrUpdateSpace={createOrUpdateSpace}
+        deleteSpace={deleteSpace}
+        handleUpdatePaper={handleUpdatePaper}
+        handleDeletePaper={handleDeletePaper}
+        selectedPaper={selectedPaper}
+        projectRoot={projectRoot}
+        setNotice={setNotice}
       />
 
       <LoadingOverlay isVisible={isProcessing} message={notice?.message || ''} />

@@ -347,6 +347,99 @@ def get_evidence_for_claim(
     return [{"passages": passages, "evidence_cards": [dict(c) for c in ev_cards]}]
 
 
+@mcp.tool()
+def get_full_paper_text(paper_id: str) -> list[dict[str, Any]]:
+    """Get all text passages of a paper in order. Useful for full-paper analysis."""
+    access_error = _check_access()
+    if access_error:
+        return [access_error]
+    sid, space_error = _resolve_active_space()
+    if space_error:
+        return [space_error]
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, section, page_number, original_text FROM passages WHERE paper_id = ? AND space_id = ? ORDER BY page_number, paragraph_index",
+            (paper_id, sid),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def update_paper_metadata(
+    paper_id: str,
+    title: str = "",
+    authors: str = "",
+    year: int = 0,
+    abstract: str = "",
+    relation_to_idea: str = "",
+) -> dict[str, Any]:
+    """Update paper metadata. Call this after analyzing a paper to fill in missing info."""
+    access_error = _check_access()
+    if access_error:
+        return access_error
+    sid, space_error = _resolve_active_space()
+    if space_error:
+        return space_error
+    
+    conn = get_connection()
+    try:
+        fields = []
+        params = []
+        if title: fields.append("title = ?"); params.append(title)
+        if authors: fields.append("authors = ?"); params.append(authors)
+        if year: fields.append("year = ?"); params.append(year)
+        if abstract: fields.append("abstract = ?"); params.append(abstract)
+        if relation_to_idea: fields.append("relation_to_idea = ?"); params.append(relation_to_idea)
+        
+        if not fields:
+            return {"error": "No fields to update"}
+            
+        params.append(paper_id)
+        params.append(sid)
+        conn.execute(
+            f"UPDATE papers SET {', '.join(fields)} WHERE id = ? AND space_id = ?",
+            params
+        )
+        conn.commit()
+        return {"status": "success", "updated_paper_id": paper_id}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def add_knowledge_card(
+    paper_id: str,
+    card_type: str,
+    summary: str,
+    source_passage_id: str = "",
+) -> dict[str, Any]:
+    """Create a new knowledge card for a paper. 
+    Valid types: Method, Metric, Result, Failure Mode, Limitation, Claim, Evidence, Problem, Object, Variable, Interpretation, Practical Tip.
+    """
+    access_error = _check_access()
+    if access_error:
+        return access_error
+    sid, space_error = _resolve_active_space()
+    if space_error:
+        return space_error
+
+    card_id = str(uuid.uuid4())
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO knowledge_cards (id, space_id, paper_id, source_passage_id, card_type, summary, confidence, user_edited)
+               VALUES (?, ?, ?, ?, ?, ?, 1.0, 0)""",
+            (card_id, sid, paper_id, source_passage_id or None, card_type, summary),
+        )
+        conn.commit()
+        return {"status": "success", "card_id": card_id}
+    finally:
+        conn.close()
+
+
 # ── Main ──────────────────────────────────────────────────────────────
 
 

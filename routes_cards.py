@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
-from card_extractor import extract_cards_from_passages
+from card_extractor import extract_cards_from_passages, extract_metadata_from_passages
 from db import get_connection
 
 router = APIRouter(prefix="/api/cards", tags=["cards"])
@@ -208,20 +208,20 @@ async def delete_card(card_id: str) -> dict[str, str]:
 
 @router.post("/extract/{paper_id}")
 async def extract_cards(paper_id: str) -> dict[str, Any]:
-    """Extract knowledge cards from a paper's passages using rules-based extraction."""
+    """Trigger the 'Extraction' phase. Now primarily guides the user to use an external Agent."""
     space_id = _get_active_space_id()
 
     conn = get_connection()
     try:
-        paper = conn.execute(
-            "SELECT id FROM papers WHERE id = ? AND space_id = ?",
+        paper_row = conn.execute(
+            "SELECT * FROM papers WHERE id = ? AND space_id = ?",
             (paper_id, space_id),
         ).fetchone()
-        if paper is None:
-            raise HTTPException(status_code=404, detail="Paper not found in active space")
+        if paper_row is None:
+            raise HTTPException(status_code=404, detail="Paper not found")
 
         passages = conn.execute(
-            "SELECT * FROM passages WHERE paper_id = ?",
+            "SELECT * FROM passages WHERE paper_id = ? ORDER BY page_number, paragraph_index",
             (paper_id,),
         ).fetchall()
 
@@ -230,29 +230,27 @@ async def extract_cards(paper_id: str) -> dict[str, Any]:
                 "status": "no_passages",
                 "paper_id": paper_id,
                 "card_count": 0,
-                "mode": "heuristic",
-                "message": "没有可抽取的原文片段。",
+                "message": "请先点击“解析原文”完成本地切片预处理。",
             }
 
         passage_list = [dict(p) for p in passages]
-        cards = extract_cards_from_passages(passage_list, paper_id, space_id)
-
-        for c in cards:
-            conn.execute(
-                """INSERT OR IGNORE INTO knowledge_cards
-                   (id, space_id, paper_id, source_passage_id, card_type, summary, confidence, user_edited)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
-                (c["id"], c["space_id"], c["paper_id"], c["source_passage_id"],
-                 c["card_type"], c["summary"], c["confidence"]),
-            )
+        
+        # 1. RAG Pre-processing: Basic Title Identification
+        # Still helpful for the UI to have a title even without the Agent
+        if not paper_row["authors"] or "." in paper_row["title"]:
+            meta = extract_metadata_from_passages(passage_list)
+            if meta["title"]:
+                conn.execute(
+                    "UPDATE papers SET title = ? WHERE id = ?",
+                    (meta["title"][:500], paper_id),
+                )
 
         conn.commit()
         return {
-            "status": "extracted",
+            "status": "ready_for_agent",
             "paper_id": paper_id,
-            "card_count": len(cards),
-            "mode": "heuristic",
-            "message": "启发式抽取结果需要人工检查和修正。",
+            "card_count": 0,
+            "message": "本地 RAG 预处理已就绪。请在您的 AI 助手（如 Claude/Cursor）中连接此 MCP 服务，并使用 get_full_paper_text 工具执行深度分析。",
         }
     finally:
         conn.close()

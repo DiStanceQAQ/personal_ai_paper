@@ -98,10 +98,20 @@ async def root() -> HTMLResponse:
 
 
 @app.get("/health")
-async def health_check() -> dict[str, str]:
+def health_check() -> dict[str, str]:
     """Health check endpoint returning service status."""
     return {
         "status": "healthy",
         "service": "Local Paper Knowledge Engine",
         "version": "0.1.0",
     }
+
+
+@app.get("/api/info")
+def get_app_info() -> dict[str, str]:
+    """Return runtime information about the application."""
+    return {
+        "project_root": str(Path(__file__).parent.absolute()),
+        "os": sys.platform,
+    }
+

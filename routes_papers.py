@@ -2,6 +2,7 @@
 
 import hashlib
 import uuid
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -184,7 +185,7 @@ async def update_paper(
         }
 
         updates: list[str] = []
-        params: list[str | int] = []
+        params: list[Any] = []
 
         for field, value in field_map.items():
             if value is not None:
@@ -289,13 +290,15 @@ async def parse_paper(paper_id: str) -> dict[str, Any]:
         }
     except HTTPException:
         raise
-    except Exception:
+    except Exception as e:
+        print(f"Error parsing paper {paper_id}:")
+        traceback.print_exc()
         conn.execute(
             "UPDATE papers SET parse_status = 'error' WHERE id = ?",
             (paper_id,),
         )
         conn.commit()
-        raise HTTPException(status_code=500, detail="PDF parsing failed")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
@@ -316,5 +319,36 @@ async def list_passages(paper_id: str) -> list[dict[str, Any]]:
             (paper_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@router.delete("/{paper_id}")
+async def delete_paper(paper_id: str) -> dict[str, str]:
+    """Delete a paper and all associated data."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT file_path FROM papers WHERE id = ?", (paper_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Paper not found")
+
+        file_path = Path(row["file_path"])
+
+        # 1. Clear linked data
+        conn.execute("DELETE FROM knowledge_cards WHERE paper_id = ?", (paper_id,))
+        conn.execute(f"DELETE FROM {FTS_TABLE} WHERE paper_id = ?", (paper_id,))
+        conn.execute("DELETE FROM passages WHERE paper_id = ?", (paper_id,))
+        
+        # 2. Delete the paper record
+        conn.execute("DELETE FROM papers WHERE id = ?", (paper_id,))
+        conn.commit()
+
+        # 3. Delete the file from disk
+        if file_path.exists():
+            file_path.unlink()
+
+        return {"status": "deleted", "paper_id": paper_id}
     finally:
         conn.close()

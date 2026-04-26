@@ -410,3 +410,112 @@ def test_no_source_less_results(db_path: str) -> None:
         assert r.get("passage_id"), f"Result missing passage_id: {r}"
 
     db_module.DATABASE_PATH = orig
+
+
+def test_mcp_add_knowledge_card_creates_card_in_active_space(db_path: str) -> None:
+    """MCP card creation should create a card bound to the active space."""
+    import db as db_module
+
+    orig = db_module.DATABASE_PATH
+    db_module.DATABASE_PATH = Path(db_path)
+
+    conn = get_connection()
+    conn.execute("INSERT INTO spaces (id, name) VALUES ('s1', 'Test')")
+    conn.execute("INSERT INTO papers (id, space_id, title) VALUES ('p1', 's1', 'Paper')")
+    conn.execute(
+        """INSERT INTO passages (id, paper_id, space_id, original_text)
+           VALUES ('pass1', 'p1', 's1', 'source text')"""
+    )
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('active_space', 's1')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('agent_access', 'enabled')")
+    conn.commit()
+    conn.close()
+
+    try:
+        from mcp_server import add_knowledge_card
+
+        result = add_knowledge_card("p1", "Method", "MCP-created method", "pass1")
+
+        assert result["status"] == "success"
+        card_id = result["card_id"]
+
+        conn = get_connection()
+        card = conn.execute(
+            "SELECT * FROM knowledge_cards WHERE id = ?",
+            (card_id,),
+        ).fetchone()
+        conn.close()
+        assert card is not None
+        assert card["space_id"] == "s1"
+        assert card["paper_id"] == "p1"
+        assert card["source_passage_id"] == "pass1"
+    finally:
+        db_module.DATABASE_PATH = orig
+
+
+def test_mcp_add_knowledge_card_rejects_cross_space_paper(db_path: str) -> None:
+    """MCP card creation must not write to a paper outside the active space."""
+    import db as db_module
+
+    orig = db_module.DATABASE_PATH
+    db_module.DATABASE_PATH = Path(db_path)
+
+    conn = get_connection()
+    conn.execute("INSERT INTO spaces (id, name) VALUES ('s1', 'A'), ('s2', 'B')")
+    conn.execute("INSERT INTO papers (id, space_id, title) VALUES ('p2', 's2', 'Other')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('active_space', 's1')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('agent_access', 'enabled')")
+    conn.commit()
+    conn.close()
+
+    try:
+        from mcp_server import add_knowledge_card
+
+        result = add_knowledge_card("p2", "Method", "Should not be written")
+
+        assert "error" in result
+        assert "active space" in result["error"]
+
+        conn = get_connection()
+        count = conn.execute("SELECT COUNT(*) FROM knowledge_cards").fetchone()[0]
+        conn.close()
+        assert count == 0
+    finally:
+        db_module.DATABASE_PATH = orig
+
+
+def test_mcp_add_knowledge_card_rejects_foreign_source_passage(db_path: str) -> None:
+    """MCP card source passages must belong to the target paper and active space."""
+    import db as db_module
+
+    orig = db_module.DATABASE_PATH
+    db_module.DATABASE_PATH = Path(db_path)
+
+    conn = get_connection()
+    conn.execute("INSERT INTO spaces (id, name) VALUES ('s1', 'A'), ('s2', 'B')")
+    conn.execute(
+        "INSERT INTO papers (id, space_id, title) VALUES ('p1', 's1', 'Paper'), ('p2', 's2', 'Other')"
+    )
+    conn.execute(
+        """INSERT INTO passages (id, paper_id, space_id, original_text)
+           VALUES ('foreign-pass', 'p2', 's2', 'foreign text')"""
+    )
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('active_space', 's1')")
+    conn.execute("INSERT INTO app_state (key, value) VALUES ('agent_access', 'enabled')")
+    conn.commit()
+    conn.close()
+
+    try:
+        from mcp_server import add_knowledge_card
+
+        result = add_knowledge_card("p1", "Method", "Should not be written", "foreign-pass")
+
+        assert "error" in result
+        assert "source_passage_id" in result["error"]
+
+        conn = get_connection()
+        count = conn.execute("SELECT COUNT(*) FROM knowledge_cards").fetchone()[0]
+        conn.close()
+        assert count == 0
+    finally:
+        db_module.DATABASE_PATH = orig

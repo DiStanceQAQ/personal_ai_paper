@@ -4,6 +4,7 @@ Start with: python mcp_server.py
 Configure in agent's MCP settings with stdio transport.
 """
 
+import uuid
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -15,16 +16,24 @@ mcp = FastMCP("paper-knowledge-engine")
 
 ACTIVE_SPACE_KEY = "active_space"
 AGENT_ACCESS_KEY = "agent_access"
+CARD_TYPES = {
+    "Problem", "Claim", "Evidence", "Method",
+    "Object", "Variable", "Metric", "Result",
+    "Failure Mode", "Interpretation", "Limitation", "Practical Tip",
+}
 
 
 def _get_active_space_id() -> str:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT value FROM app_state WHERE key = ?",
+            """SELECT s.id
+               FROM spaces s
+               JOIN app_state a ON a.value = s.id
+               WHERE a.key = ? AND s.status = 'active'""",
             (ACTIVE_SPACE_KEY,),
         ).fetchone()
-        return str(row["value"]) if row else ""
+        return str(row["id"]) if row else ""
     finally:
         conn.close()
 
@@ -386,8 +395,8 @@ def update_paper_metadata(
     
     conn = get_connection()
     try:
-        fields = []
-        params = []
+        fields: list[str] = []
+        params: list[Any] = []
         if title: fields.append("title = ?"); params.append(title)
         if authors: fields.append("authors = ?"); params.append(authors)
         if year: fields.append("year = ?"); params.append(year)
@@ -426,13 +435,35 @@ def add_knowledge_card(
     if space_error:
         return space_error
 
-    card_id = str(uuid.uuid4())
+    if card_type not in CARD_TYPES:
+        return {"error": f"Invalid card type: {card_type}"}
+
     conn = get_connection()
     try:
+        paper = conn.execute(
+            "SELECT id FROM papers WHERE id = ? AND space_id = ?",
+            (paper_id, sid),
+        ).fetchone()
+        if paper is None:
+            return {"error": "Paper not found in active space"}
+
+        source_id = source_passage_id or None
+        if source_id is not None:
+            source = conn.execute(
+                """SELECT id FROM passages
+                   WHERE id = ? AND paper_id = ? AND space_id = ?""",
+                (source_id, paper_id, sid),
+            ).fetchone()
+            if source is None:
+                return {
+                    "error": "source_passage_id must belong to the same paper and active space"
+                }
+
+        card_id = str(uuid.uuid4())
         conn.execute(
             """INSERT INTO knowledge_cards (id, space_id, paper_id, source_passage_id, card_type, summary, confidence, user_edited)
                VALUES (?, ?, ?, ?, ?, ?, 1.0, 0)""",
-            (card_id, sid, paper_id, source_passage_id or None, card_type, summary),
+            (card_id, sid, paper_id, source_id, card_type, summary),
         )
         conn.commit()
         return {"status": "success", "card_id": card_id}

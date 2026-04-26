@@ -69,6 +69,12 @@ export const api = {
     const query = params.toString();
     return request<KnowledgeCard[]>(`/api/cards${query ? `?${query}` : ''}`);
   },
+  createCard: (card: Partial<KnowledgeCard>) =>
+    request<KnowledgeCard>('/api/cards', { method: 'POST', body: JSON.stringify(card) }),
+  updateCard: (cardId: string, card: Partial<KnowledgeCard>) =>
+    request<KnowledgeCard>(`/api/cards/${cardId}`, { method: 'PATCH', body: JSON.stringify(card) }),
+  deleteCard: (cardId: string) =>
+    request<{ status: string; card_id: string }>(`/api/cards/${cardId}`, { method: 'DELETE' }),
   extractCards: (paperId: string) =>
     request<{ status: string; paper_id: string; card_count: number; mode?: string; message?: string }>(
       `/api/cards/extract/${paperId}`,

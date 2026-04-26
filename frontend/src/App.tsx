@@ -16,6 +16,7 @@ import { SettingsModal } from './components/modals/SettingsModal';
 import { SpaceModal } from './components/modals/SpaceModal';
 import { ConfirmModal } from './components/modals/ConfirmModal';
 import { MCPGuideModal } from './components/modals/MCPGuideModal';
+import { EditPaperModal } from './components/modals/EditPaperModal';
 
 const cardTabs = ['Method', 'Metric', 'Result', 'Failure Mode', 'Limitation', 'Claim'] as const;
 
@@ -49,7 +50,7 @@ function parseLabel(status: string): string {
 
 export default function App(): JSX.Element {
   // --- State ---
-  const [isAppReady, setIsAppReady] = useState(false);
+  const [initialLoadStatus, setInitialLoadStatus] = useState<'starting' | 'ready'>('starting');
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [activeSpace, setActiveSpace] = useState<Space | null>(null);
   const [papers, setPapers] = useState<Paper[]>([]);
@@ -75,6 +76,7 @@ export default function App(): JSX.Element {
   const [paperToDelete, setPaperToDelete] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMCPGuideOpen, setIsMCPGuideOpen] = useState(false);
+  const [isEditPaperOpen, setIsEditPaperOpen] = useState(false);
   const [projectRoot, setProjectRoot] = useState<string>('');
 
   const [llmConfig, setLlmConfig] = useState({
@@ -114,7 +116,7 @@ export default function App(): JSX.Element {
         }
       }
       await Promise.all([refresh(), loadLlmConfig(), loadAppInfo()]);
-      setIsAppReady(true);
+      setInitialLoadStatus('ready');
     }
     init();
   }, []);
@@ -162,6 +164,18 @@ export default function App(): JSX.Element {
       setCards(paperCards);
     } catch {
       setNotice({ message: '获取论文详情失败。', type: 'error' });
+    }
+  }
+
+  async function handleUpdatePaper(paperId: string, data: Partial<Paper>): Promise<void> {
+    try {
+      const updated = await api.updatePaper(paperId, data);
+      setNotice({ message: '论文元数据已更新。', type: 'success' });
+      setSelectedPaper(updated);
+      setIsEditPaperOpen(false);
+      await refresh();
+    } catch {
+      setNotice({ message: '更新失败。', type: 'error' });
     }
   }
 
@@ -325,16 +339,46 @@ export default function App(): JSX.Element {
       const newStatus = await api.agentStatus();
       setAgentStatus(newStatus);
     } catch {
-      setNotice({ message: 'MCP状态切换失败。', type: 'error' });
+      setNotice({ message: '智能代理状态切换失败。', type: 'error' });
     }
   }
 
-  if (!isAppReady) {
+  async function deleteCard(cardId: string): Promise<void> {
+    try {
+      await api.deleteCard(cardId);
+      setNotice({ message: '卡片已移除。', type: 'success' });
+      if (selectedPaper) {
+        const paperCards = await api.listCards(selectedPaper.id);
+        setCards(paperCards);
+      }
+    } catch {
+      setNotice({ message: '移除卡片失败。', type: 'error' });
+    }
+  }
+
+  async function addManualCard(type: string, summary: string): Promise<void> {
+    if (!selectedPaper) return;
+    try {
+      await api.createCard({
+        paper_id: selectedPaper.id,
+        card_type: type,
+        summary: summary,
+        confidence: 1.0
+      });
+      setNotice({ message: '已手动添加知识卡片。', type: 'success' });
+      const paperCards = await api.listCards(selectedPaper.id);
+      setCards(paperCards);
+    } catch {
+      setNotice({ message: '添加卡片失败。', type: 'error' });
+    }
+  }
+
+  if (initialLoadStatus !== 'ready') {
     return (
       <div style={{ height: '100vh', display: 'grid', placeItems: 'center', background: 'var(--bg-main)' }}>
         <div style={{ textAlign: 'center' }}>
           <div className="spinner" style={{ margin: '0 auto 20px auto' }}></div>
-          <p style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>正在拉起本地 AI 引擎...</p>
+          <p style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>正在启动论文知识引擎</p>
         </div>
       </div>
     );
@@ -380,6 +424,9 @@ export default function App(): JSX.Element {
           agentStatus={agentStatus}
           onToggleAgent={toggleAgent}
           onExtract={extractSelected}
+          onDeleteCard={deleteCard}
+          onAddManualCard={addManualCard}
+          onOpenEditPaper={() => setIsEditPaperOpen(true)}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           visibleCards={visibleCards}
@@ -406,6 +453,13 @@ export default function App(): JSX.Element {
         setName={setNewSpaceName}
         description={newSpaceDescription}
         setDescription={setNewSpaceDescription}
+      />
+
+      <EditPaperModal
+        isOpen={isEditPaperOpen}
+        onClose={() => setIsEditPaperOpen(false)}
+        onSave={handleUpdatePaper}
+        paper={selectedPaper}
       />
 
       <ConfirmModal

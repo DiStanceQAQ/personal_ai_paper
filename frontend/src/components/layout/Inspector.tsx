@@ -1,5 +1,5 @@
-import React from 'react';
-import { Cpu, Zap, FileText, Globe, BookOpen } from 'lucide-react';
+import React, { useState } from 'react';
+import { Cpu, Zap, FileText, Globe, BookOpen, Plus, Edit2 } from 'lucide-react';
 import type { Paper, KnowledgeCard, AgentStatus, Passage } from '../../types';
 import { KnowledgeCardFancy } from '../ui/KnowledgeCardFancy';
 
@@ -11,6 +11,9 @@ interface InspectorProps {
   agentStatus: AgentStatus | null;
   onToggleAgent: () => void;
   onExtract: () => void;
+  onDeleteCard: (id: string) => void;
+  onAddManualCard: (type: string, summary: string) => void;
+  onOpenEditPaper: () => void;
   activeTab: string;
   setActiveTab: (tab: any) => void;
   visibleCards: KnowledgeCard[];
@@ -25,7 +28,7 @@ function relationLabel(rel: string): string {
     competing: '竞争方案',
     inspiring: '灵感来源',
     result_comparison: '对比分析',
-    background: '背景背景',
+    background: '背景资料',
     unclassified: '未分类',
   };
   return labels[rel] || rel;
@@ -39,6 +42,9 @@ export const Inspector: React.FC<InspectorProps> = ({
   agentStatus,
   onToggleAgent,
   onExtract,
+  onDeleteCard,
+  onAddManualCard,
+  onOpenEditPaper,
   activeTab,
   setActiveTab,
   visibleCards,
@@ -46,6 +52,16 @@ export const Inspector: React.FC<InspectorProps> = ({
   cardLabel,
   parseLabel,
 }) => {
+  const [newCardText, setNewCardText] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
+
+  const handleAddManual = () => {
+    if (!newCardText.trim()) return;
+    onAddManualCard(activeTab, newCardText.trim());
+    setNewCardText('');
+    setIsAdding(false);
+  };
+
   return (
     <aside className={isOpen ? 'inspector' : 'inspector collapsed'}>
       <button className="inspector-toggle" onClick={onToggle}>
@@ -56,7 +72,17 @@ export const Inspector: React.FC<InspectorProps> = ({
           {selectedPaper ? (
             <>
               <div className="inspector-header">
-                <div className="paper-status-tag">{parseLabel(selectedPaper.parse_status)}</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div className="paper-status-tag">{parseLabel(selectedPaper.parse_status)}</div>
+                  <button
+                    className="btn-icon-secondary"
+                    onClick={onOpenEditPaper}
+                    title="编辑元数据"
+                    style={{ width: '28px', height: '28px', borderRadius: '50%', background: '#f3f4f6' }}
+                  >
+                    <Edit2 size={14} />
+                  </button>
+                </div>
                 <h2>{selectedPaper.title || '未命名论文'}</h2>
                 <p className="paper-authors">{selectedPaper.authors || '作者未知'}</p>
               </div>
@@ -79,46 +105,51 @@ export const Inspector: React.FC<InspectorProps> = ({
               <div className="inspector-section">
                 <div className="section-title">核心元数据</div>
                 <div className="meta-pills-grid">
-                  <div className="meta-pill">
-                    <label>出版年份</label>
-                    <span>{selectedPaper.year || '未知'}</span>
-                  </div>
-                  <div className="meta-pill">
-                    <label>研究关系</label>
-                    <span>{relationLabel(selectedPaper.relation_to_idea)}</span>
-                  </div>
-                  <div className="meta-pill">
-                    <label>发表渠道</label>
-                    <span>{selectedPaper.venue || '未知'}</span>
-                  </div>
-                  <div className="meta-pill">
-                    <label>DOI / 标识符</label>
-                    <span>{selectedPaper.doi || '无'}</span>
-                  </div>
+                  <div className="meta-pill"><label>出版年份</label><span>{selectedPaper.year || '未知'}</span></div>
+                  <div className="meta-pill"><label>研究关系</label><span>{relationLabel(selectedPaper.relation_to_idea)}</span></div>
+                  <div className="meta-pill"><label>发表渠道</label><span>{selectedPaper.venue || '未知'}</span></div>
+                  <div className="meta-pill"><label>DOI / 标识符</label><span>{selectedPaper.doi || '无'}</span></div>
                 </div>
               </div>
 
               <div className="inspector-section">
-                <div className="section-title">知识卡片</div>
+                <div className="section-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>知识卡片</span>
+                  <button className="btn-add-inline" onClick={() => setIsAdding(!isAdding)} title="手动添加">
+                    <Plus size={14} />
+                  </button>
+                </div>
+
+                {isAdding && (
+                  <div className="manual-card-form animation-fadeIn">
+                    <textarea
+                      placeholder={`手动输入一条[${cardLabel(activeTab)}]...`}
+                      value={newCardText}
+                      onChange={(e) => setNewCardText(e.target.value)}
+                      rows={3}
+                      autoFocus
+                    />
+                    <div className="form-actions-inline">
+                      <button className="btn-secondary" onClick={() => setIsAdding(false)}>取消</button>
+                      <button className="btn-primary" onClick={handleAddManual}>保存卡片</button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="tabs">
                   <div className="tabs-list" style={{ display: 'flex', gap: '2px' }}>
                     {cardTabs.map((tab) => (
-                      <button
-                        key={tab}
-                        className={tab === activeTab ? 'tab-btn active' : 'tab-btn'}
-                        onClick={() => setActiveTab(tab)}
-                      >
-                        {cardLabel(tab)}
-                      </button>
+                      <button key={tab} className={tab === activeTab ? 'tab-btn active' : 'tab-btn'} onClick={() => setActiveTab(tab)}>{cardLabel(tab)}</button>
                     ))}
                   </div>
                 </div>
+
                 <div className="card-list">
                   {visibleCards.map((card) => (
-                    <KnowledgeCardFancy key={card.id} card={card} cardLabel={cardLabel} />
+                    <KnowledgeCardFancy key={card.id} card={card} cardLabel={cardLabel} onDelete={onDeleteCard} />
                   ))}
-                  {visibleCards.length === 0 && (
-                    <div className="empty-state-small" style={{ textAlign: 'center', padding: '24px', opacity: 0.5, border: '1px dashed var(--border)', borderRadius: '12px' }}>
+                  {visibleCards.length === 0 && !isAdding && (
+                    <div className="empty-state-small">
                       <p>该分类下暂无内容</p>
                     </div>
                   )}

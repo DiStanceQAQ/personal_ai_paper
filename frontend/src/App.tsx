@@ -1,4 +1,4 @@
-import { FileText, FolderOpen, Plug, Search, ShieldCheck, UploadCloud } from 'lucide-react';
+import { Edit2, FileText, FolderOpen, MoreVertical, Plus, RotateCcw, Search, ShieldCheck, Trash2, UploadCloud, Zap } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
 import type { AgentStatus, KnowledgeCard, Paper, Passage, SearchResult, Space } from './types';
@@ -33,6 +33,12 @@ function parseLabel(status: string): string {
   return labels[status] || status;
 }
 
+type InitialLoadStatus = 'loading' | 'ready' | 'error';
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export default function App(): JSX.Element {
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [activeSpace, setActiveSpace] = useState<Space | null>(null);
@@ -44,30 +50,66 @@ export default function App(): JSX.Element {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [activeTab, setActiveTab] = useState<(typeof cardTabs)[number]>('Method');
+  const [activeView, setActiveView] = useState<'library' | 'search'>('library');
+  const [isInspectorOpen, setIsInspectorOpen] = useState(true);
+  
+  // 空间模态框状态
+  const [isSpaceModalOpen, setIsSpaceModalOpen] = useState(false);
+  const [editingSpace, setEditingSpace] = useState<Space | null>(null);
   const [newSpaceName, setNewSpaceName] = useState('');
   const [newSpaceDescription, setNewSpaceDescription] = useState('');
+  
+  // 删除确认模态框状态
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+  const [spaceToDelete, setSpaceToDelete] = useState<string | null>(null);
+  
   const [notice, setNotice] = useState('');
+  const [initialLoadStatus, setInitialLoadStatus] = useState<InitialLoadStatus>('loading');
+  const [initialLoadError, setInitialLoadError] = useState('');
 
   const visibleCards = useMemo(
     () => cards.filter((card) => card.card_type === activeTab),
     [cards, activeTab],
   );
 
-  async function refresh(): Promise<void> {
-    const loadedSpaces = await api.listSpaces();
-    setSpaces(loadedSpaces);
+  async function refresh(options: { initial?: boolean } = {}): Promise<void> {
+    if (options.initial) {
+      setInitialLoadStatus('loading');
+      setInitialLoadError('');
+    }
+
     try {
-      const active = await api.getActiveSpace();
+      const loadedSpaces = await api.listSpaces();
+      setSpaces(loadedSpaces);
+
+      let active: Space | null = null;
+      try {
+        active = await api.getActiveSpace();
+      } catch {
+        active = loadedSpaces[0] || null;
+        if (active) {
+          await api.setActiveSpace(active.id);
+        }
+      }
       setActiveSpace(active);
-      const [loadedPapers, status] = await Promise.all([
-        api.listPapers(),
-        api.agentStatus(),
-      ]);
+
+      const [loadedPapers, status]: [Paper[], AgentStatus] = active
+        ? await Promise.all([
+            api.listPapers(),
+            api.agentStatus(),
+          ])
+        : [[], await api.agentStatus()];
       setPapers(loadedPapers);
       setAgentStatus(status);
-    } catch {
-      setActiveSpace(null);
-      setPapers([]);
+      if (options.initial) {
+        setInitialLoadStatus('ready');
+      }
+    } catch (err) {
+      console.error('刷新数据失败:', err);
+      if (options.initial) {
+        setInitialLoadError(errorMessage(err));
+        setInitialLoadStatus('error');
+      }
     }
   }
 
@@ -82,20 +124,71 @@ export default function App(): JSX.Element {
   }
 
   useEffect(() => {
-    void refresh();
+    if (notice) {
+      const timer = setTimeout(() => setNotice(''), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [notice]);
+
+  useEffect(() => {
+    void refresh({ initial: true });
   }, []);
 
-  async function createSpace(): Promise<void> {
+  // 空间 CRUD 逻辑
+  function openCreateModal(): void {
+    setEditingSpace(null);
+    setNewSpaceName('');
+    setNewSpaceDescription('');
+    setIsSpaceModalOpen(true);
+  }
+
+  function openEditModal(e: React.MouseEvent, space: Space): void {
+    e.stopPropagation();
+    setEditingSpace(space);
+    setNewSpaceName(space.name);
+    setNewSpaceDescription(space.description || '');
+    setIsSpaceModalOpen(true);
+  }
+
+  async function saveSpace(): Promise<void> {
     if (!newSpaceName.trim()) {
       setNotice('请输入空间名称。');
       return;
     }
-    const space = await api.createSpace(newSpaceName.trim(), newSpaceDescription.trim());
-    await api.setActiveSpace(space.id);
+    
+    if (editingSpace) {
+      await api.updateSpace(editingSpace.id, newSpaceName.trim(), newSpaceDescription.trim());
+      setNotice('空间已更新。');
+    } else {
+      const space = await api.createSpace(newSpaceName.trim(), newSpaceDescription.trim());
+      await api.setActiveSpace(space.id);
+      setNotice('已创建并打开空间。');
+    }
+    
+    setEditingSpace(null);
     setNewSpaceName('');
     setNewSpaceDescription('');
-    setNotice('已创建并打开空间。');
+    setIsSpaceModalOpen(false);
     await refresh();
+  }
+
+  async function confirmDelete(): Promise<void> {
+    if (!spaceToDelete) return;
+    await api.deleteSpace(spaceToDelete);
+    if (activeSpace?.id === spaceToDelete) {
+      setActiveSpace(null);
+      setSelectedPaper(null);
+    }
+    setNotice('空间已删除。');
+    setIsDeleteConfirmOpen(false);
+    setSpaceToDelete(null);
+    await refresh();
+  }
+
+  function openDeleteConfirm(e: React.MouseEvent, spaceId: string): void {
+    e.stopPropagation();
+    setSpaceToDelete(spaceId);
+    setIsDeleteConfirmOpen(true);
   }
 
   async function setActive(space: Space): Promise<void> {
@@ -116,6 +209,7 @@ export default function App(): JSX.Element {
     if (!query.trim()) return;
     const searchResults = await api.search(query.trim());
     setResults(searchResults);
+    setActiveView('search');
   }
 
   async function parseSelected(): Promise<void> {
@@ -141,151 +235,347 @@ export default function App(): JSX.Element {
     setAgentStatus(await api.agentStatus());
   }
 
+  if (initialLoadStatus !== 'ready') {
+    return (
+      <main className="startup-shell">
+        <div className="startup-panel">
+          <div className="brand-mark startup-mark">P</div>
+          <h1>论文知识引擎</h1>
+          {initialLoadStatus === 'loading' ? (
+            <>
+              <div className="startup-spinner" />
+              <p>正在启动论文知识引擎</p>
+            </>
+          ) : (
+            <>
+              <p>启动失败：{initialLoadError || '无法连接本地 API'}</p>
+              <button className="btn-secondary" onClick={() => void refresh({ initial: true })}>
+                <RotateCcw size={14} />
+                重试
+              </button>
+            </>
+          )}
+        </div>
+      </main>
+    );
+  }
+
   return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">P</div>
-          <div>
-            <h1>本地论文知识引擎</h1>
-            <p>Idea Space 文献工作台</p>
+    <>
+      <main className="app-shell">
+        <aside className="sidebar">
+          <div className="brand">
+            <div className="brand-mark">P</div>
+            <div>
+              <h1>论文知识引擎</h1>
+              <p>Idea Space 工作台</p>
+            </div>
           </div>
-        </div>
 
-        <section className="new-space">
-          <label>新空间</label>
-          <input value={newSpaceName} onChange={(event) => setNewSpaceName(event.target.value)} placeholder="例如：小样本鲁棒性" />
-          <textarea value={newSpaceDescription} onChange={(event) => setNewSpaceDescription(event.target.value)} placeholder="研究目标、假设或约束" />
-          <button onClick={() => void createSpace()}>创建空间</button>
-        </section>
-
-        <nav className="space-list">
-          {spaces.map((space) => (
-            <button
-              key={space.id}
-              className={space.id === activeSpace?.id ? 'space-item active' : 'space-item'}
-              onClick={() => void setActive(space)}
-            >
-              <FolderOpen size={16} />
-              <span>{space.name}</span>
-            </button>
-          ))}
-        </nav>
-      </aside>
-
-      <section className="workspace">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">当前空间</p>
-            <h2>{activeSpace?.name || '未选择空间'}</h2>
-          </div>
-          <div className="topbar-actions">
-            <button className={agentStatus?.enabled ? 'status enabled' : 'status'} onClick={() => void toggleAgent()}>
-              <Plug size={16} />
-              {agentStatus?.enabled ? '智能代理已启用' : '智能代理未启用'}
+          <div className="sidebar-actions">
+            <button className="btn-new-space" onClick={openCreateModal}>
+              <Plus size={18} />
+              <span>新建空间</span>
             </button>
           </div>
-        </header>
 
-        <section className="command-row">
-          <label className="dropzone">
-            <UploadCloud size={20} />
-            <span>拖拽或选择 PDF</span>
-            <input type="file" accept="application/pdf,.pdf" onChange={(event) => event.target.files?.[0] && void upload(event.target.files[0])} />
-          </label>
-          <div className="searchbox">
-            <Search size={18} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && void runSearch()} placeholder="搜索方法、指标、结果或局限性" />
-            <button onClick={() => void runSearch()}>检索</button>
-          </div>
-        </section>
+          <nav className="space-list">
+            {spaces.map((space) => (
+              <div
+                key={space.id}
+                className={space.id === activeSpace?.id ? 'space-item-wrapper active' : 'space-item-wrapper'}
+                onClick={() => void setActive(space)}
+              >
+                <div className="space-item-main">
+                  <FolderOpen size={16} />
+                  <span>{space.name}</span>
+                </div>
+                <div className="space-item-actions">
+                  <button onClick={(e) => openEditModal(e, space)} title="编辑空间">
+                    <Edit2 size={12} />
+                  </button>
+                  <button onClick={(e) => openDeleteConfirm(e, space.id)} title="删除空间">
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </nav>
+        </aside>
 
-        {notice ? <div className="notice">{notice}</div> : null}
-
-        <section className="content-grid">
-          <div className="panel papers-panel">
-            <div className="panel-header">
-              <h3>论文列表</h3>
-              <span>{papers.length} 篇</span>
+        <section className="workspace">
+          <header className="topbar">
+            <div>
+              <p className="eyebrow">当前工作空间</p>
+              <h2>{activeSpace?.name || '未选择空间'}</h2>
             </div>
-            <div className="paper-list">
-              {papers.map((paper) => (
-                <button key={paper.id} className={selectedPaper?.id === paper.id ? 'paper-row active' : 'paper-row'} onClick={() => void openPaper(paper)}>
-                  <FileText size={18} />
-                  <span>
-                    <strong>{paper.title || '未命名论文'}</strong>
-                    <small>{paper.authors || '作者未填写'} · {parseLabel(paper.parse_status)}</small>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="panel results-panel">
-            <div className="panel-header">
-              <h3>文献检索</h3>
-              <span>{results.length} 条结果</span>
-            </div>
-            <div className="result-list">
-              {results.map((result) => (
-                <article key={result.passage_id} className="result-item">
-                  <strong>{result.paper_title || result.paper_id}</strong>
-                  <p dangerouslySetInnerHTML={{ __html: result.snippet }} />
-                  <small>第 {result.page_number} 页 · {result.section}</small>
-                </article>
-              ))}
-            </div>
-          </div>
-        </section>
-      </section>
-
-      <aside className="inspector">
-        <div className="inspector-header">
-          <p className="eyebrow">论文 Inspector</p>
-          <h2>{selectedPaper?.title || '选择一篇论文'}</h2>
-        </div>
-        {selectedPaper ? (
-          <>
-            <div className="meta-list">
-              <span>作者：{selectedPaper.authors || '未填写'}</span>
-              <span>年份：{selectedPaper.year || '未填写'}</span>
-              <span>关系：{selectedPaper.relation_to_idea}</span>
-              <span>状态：{parseLabel(selectedPaper.parse_status)}</span>
-            </div>
-            <div className="inspector-actions">
-              <button onClick={() => void parseSelected()}>解析 PDF</button>
-              <button onClick={() => void extractSelected()}>
-                <ShieldCheck size={16} />
-                启发式抽取
+            <div className="topbar-actions">
+              <button 
+                className={agentStatus?.enabled ? 'status enabled' : 'status'} 
+                onClick={() => void toggleAgent()}
+                disabled={!activeSpace}
+              >
+                <Zap size={14} fill={agentStatus?.enabled ? 'currentColor' : 'none'} />
+                {agentStatus?.enabled ? '智能代理已启用' : '智能代理已禁用'}
               </button>
             </div>
-            <div className="tabs">
-              {cardTabs.map((tab) => (
-                <button key={tab} className={tab === activeTab ? 'active' : ''} onClick={() => setActiveTab(tab)}>
-                  {cardLabel(tab)}
+          </header>
+
+          {activeSpace ? (
+            <>
+              <div className="workspace-nav">
+                <button 
+                  className={activeView === 'library' ? 'nav-item active' : 'nav-item'} 
+                  onClick={() => setActiveView('library')}
+                >
+                  资源库
                 </button>
-              ))}
+                <button 
+                  className={activeView === 'search' ? 'nav-item active' : 'nav-item'} 
+                  onClick={() => setActiveView('search')}
+                >
+                  深度检索
+                </button>
+              </div>
+
+              {activeView === 'library' ? (
+                <div className="view-container library-view">
+                  <div className="view-header">
+                    <div className="view-title">
+                      <h3>我的论文</h3>
+                      <span className="badge">{papers.length}</span>
+                    </div>
+                    <label className="btn-upload">
+                      <UploadCloud size={16} />
+                      <span>导入 PDF</span>
+                      <input type="file" accept="application/pdf,.pdf" onChange={(event) => event.target.files?.[0] && void upload(event.target.files[0])} />
+                    </label>
+                  </div>
+
+                  <div className="paper-grid">
+                    {papers.length > 0 ? (
+                      papers.map((paper) => (
+                        <button key={paper.id} className={selectedPaper?.id === paper.id ? 'paper-card active' : 'paper-card'} onClick={() => void openPaper(paper)}>
+                          <div className="paper-card-icon">
+                            <FileText size={24} />
+                          </div>
+                          <div className="paper-card-content">
+                            <strong>{paper.title || '未命名论文'}</strong>
+                            <div className="paper-card-meta">
+                              <span>{paper.authors || '作者未知'}</span>
+                              <span className="dot">·</span>
+                              <span>{parseLabel(paper.parse_status)}</span>
+                            </div>
+                          </div>
+                        </button>
+                      ))
+                    ) : (
+                      <div className="empty-state">
+                        <p>该空间下暂无论文，请先导入。</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="view-container search-view">
+                  <div className="search-interface">
+                    <div className="search-input-wrapper">
+                      <Search size={20} className="text-tertiary" />
+                      <input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && void runSearch()} placeholder="搜索方法、指标、结果或局限性..." autoFocus />
+                      <button className="btn-primary" onClick={() => void runSearch()}>开始检索</button>
+                    </div>
+                  </div>
+
+                  <div className="search-results-list">
+                    <div className="results-info">
+                      检索到 {results.length} 条相关片段
+                    </div>
+                    {results.length > 0 ? (
+                      results.map((result) => (
+                        <article key={result.passage_id} className="search-result-card">
+                          <div className="result-source">
+                            <FileText size={14} />
+                            <span>{result.paper_title || result.paper_id}</span>
+                            <span className="dot">·</span>
+                            <span>第 {result.page_number} 页</span>
+                          </div>
+                          <p dangerouslySetInnerHTML={{ __html: result.snippet }} />
+                          <div className="result-footer">
+                            {result.section || '正文章节'}
+                          </div>
+                        </article>
+                      ))
+                    ) : (
+                      <div className="empty-state">
+                        <p>输入关键词并检索以查看结果。</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+
+            <div className="empty-state" style={{ marginTop: '10%', textAlign: 'center' }}>
+              <FolderOpen size={64} style={{ marginBottom: '24px', opacity: 0.1 }} />
+              <h3 style={{ marginBottom: '8px', color: 'var(--text-secondary)' }}>开启您的研究之旅</h3>
+              <p style={{ maxWidth: '300px', margin: '0 auto', color: 'var(--text-tertiary)' }}>
+                请在左侧选择一个现有的研究空间，或者点击“新建空间”开始管理您的文献。
+              </p>
             </div>
-            <div className="card-list">
-              {visibleCards.map((card) => (
-                <article key={card.id} className="knowledge-card">
-                  <strong>{cardLabel(card.card_type)}</strong>
-                  <p>{card.summary}</p>
-                  <small>置信度 {card.confidence.toFixed(2)} · {card.source_passage_id ? '有来源' : '手动卡片'}</small>
-                </article>
-              ))}
+          )}
+        </section>
+
+        <aside className={isInspectorOpen ? 'inspector' : 'inspector collapsed'}>
+          <button className="inspector-toggle" onClick={() => setIsInspectorOpen(!isInspectorOpen)}>
+            {isInspectorOpen ? '→' : '←'}
+          </button>
+
+          {isInspectorOpen && (
+            <div className="inspector-content">
+              {!activeSpace ? (
+                <div className="empty-state" style={{ marginTop: '40%' }}>
+                  <p>请先激活一个研究空间</p>
+                </div>
+              ) : selectedPaper ? (
+                <>
+                  <div className="inspector-header">
+                    <div className="paper-status-tag">{parseLabel(selectedPaper.parse_status)}</div>
+                    <h2>{selectedPaper.title || '未命名论文'}</h2>
+                    <p className="paper-authors">{selectedPaper.authors || '作者未知'}</p>
+                  </div>
+
+                  <div className="ai-supercharge">
+                    <button className="btn-ai-extract" onClick={() => void extractSelected()}>
+                      <Zap size={16} fill="white" />
+                      <span>AI 深度抽取知识卡片</span>
+                    </button>
+                    <button className="btn-text-only" onClick={() => void parseSelected()}>
+                      重新解析原文
+                    </button>
+                  </div>
+
+                  <div className="inspector-section">
+                    <div className="section-title">核心元数据</div>
+                    <div className="meta-pills">
+                      <div className="meta-pill">
+                        <label>出版年份</label>
+                        <span>{selectedPaper.year || '未知'}</span>
+                      </div>
+                      <div className="meta-pill">
+                        <label>研究关系</label>
+                        <span>{selectedPaper.relation_to_idea || '未定义'}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="inspector-section">
+                    <div className="section-title">知识图谱卡片</div>
+                    <div className="tabs-container">
+                      <div className="tabs">
+                        {cardTabs.map((tab) => (
+                          <button key={tab} className={tab === activeTab ? `tab-btn active ${tab.toLowerCase().replace(' ', '-')}` : 'tab-btn'} onClick={() => setActiveTab(tab)}>
+                            {cardLabel(tab)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="card-list">
+                      {visibleCards.length > 0 ? (
+                        visibleCards.map((card) => (
+                          <article key={card.id} className={`knowledge-card-fancy ${card.card_type.toLowerCase().replace(' ', '-')}`}>
+                            <div className="card-type-indicator">{cardLabel(card.card_type)}</div>
+                            <p>{card.summary}</p>
+                            <div className="card-footer">
+                              <span>置信度 {(card.confidence * 100).toFixed(0)}%</span>
+                              {card.source_passage_id && <span className="ai-badge">AI 提取</span>}
+                            </div>
+                          </article>
+                        ))
+                      ) : (
+                        <div className="empty-state-small">
+                          <p>暂无此类知识点，尝试“AI 深度抽取”</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="inspector-section">
+                    <div className="section-title">关键原文片段</div>
+                    <div className="passage-previews">
+                      {passages.slice(0, 3).map((passage) => (
+                        <div key={passage.id} className="passage-card-mini">
+                          {passage.original_text}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="empty-state" style={{ marginTop: '40%' }}>
+                  <FileText size={48} style={{ marginBottom: '16px', opacity: 0.1 }} />
+                  <h3>准备就绪</h3>
+                  <p>在左侧选择一篇论文<br/>开始深度分析</p>
+                </div>
+              )}
             </div>
-            <div className="passage-preview">
-              <h3>原文片段</h3>
-              {passages.slice(0, 6).map((passage) => (
-                <p key={passage.id}>{passage.original_text}</p>
-              ))}
+          )}
+        </aside>
+
+      </main>
+
+      {isSpaceModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsSpaceModalOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>{editingSpace ? '编辑研究空间' : '新建研究空间'}</h2>
+            <div className="form-group">
+              <label>空间名称</label>
+              <input 
+                value={newSpaceName} 
+                onChange={(e) => setNewSpaceName(e.target.value)} 
+                placeholder="例如：大模型推理优化" 
+                autoFocus
+              />
             </div>
-          </>
-        ) : (
-          <p className="empty">从论文列表选择一篇论文查看详情。</p>
-        )}
-      </aside>
-    </main>
+            <div className="form-group">
+              <label>空间描述</label>
+              <textarea 
+                value={newSpaceDescription} 
+                onChange={(e) => setNewSpaceDescription(e.target.value)} 
+                placeholder="描述此空间的研究目标、关注点或特定的研究假设..." 
+                rows={4}
+              />
+            </div>
+            <div className="modal-actions">
+              <button className="btn-secondary" onClick={() => setIsSpaceModalOpen(false)}>取消</button>
+              <button className="btn-primary" onClick={() => void saveSpace()}>
+                {editingSpace ? '保存修改' : '创建并进入'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {isDeleteConfirmOpen && (
+        <div className="modal-overlay" onClick={() => setIsDeleteConfirmOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>确认删除空间？</h2>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '24px', lineHeight: '1.6' }}>
+              此操作将使该空间及其关联的论文在列表中不可见。虽然数据仍保留在数据库中，但在当前界面下将无法访问。
+            </p>
+            <div className="modal-actions">
+              <button className="btn-secondary" onClick={() => setIsDeleteConfirmOpen(false)}>取消</button>
+              <button className="btn-danger" onClick={() => void confirmDelete()}>确定删除</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {notice && (
+        <div className="notice" onClick={() => setNotice('')}>
+          {notice}
+        </div>
+      )}
+    </>
   );
 }

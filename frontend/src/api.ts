@@ -42,6 +42,10 @@ export const api = {
   listSpaces: () => request<Space[]>('/api/spaces'),
   createSpace: (name: string, description: string) =>
     request<Space>('/api/spaces', { method: 'POST', body: JSON.stringify({ name, description }) }),
+  updateSpace: (spaceId: string, name: string, description: string) =>
+    request<Space>(`/api/spaces/${spaceId}`, { method: 'PATCH', body: JSON.stringify({ name, description }) }),
+  deleteSpace: (spaceId: string) =>
+    request<{ status: string; space_id: string }>(`/api/spaces/${spaceId}`, { method: 'DELETE' }),
   setActiveSpace: (spaceId: string) =>
     request<{ active_space_id: string; space: Space }>(`/api/spaces/active/${spaceId}`, { method: 'PUT' }),
   getActiveSpace: () => request<Space>('/api/spaces/active'),

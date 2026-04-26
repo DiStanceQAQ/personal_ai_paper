@@ -65,3 +65,12 @@ def test_static_ui_uses_chinese_core_copy() -> None:
         assert copy in html
     for copy in forbidden_core_copy:
         assert copy not in html
+
+
+def test_react_app_gates_shell_until_initial_data_loads() -> None:
+    """Desktop UI should not show an empty workspace before startup data loads."""
+    source = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+
+    assert "initialLoadStatus" in source
+    assert "正在启动论文知识引擎" in source
+    assert "initialLoadStatus !== 'ready'" in source

@@ -8,11 +8,65 @@ from agent_executor import analyze_paper_with_llm
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
+ACTIVE_SPACE_KEY = "active_space"
+AGENT_ACCESS_KEY = "agent_access"
+LEGACY_AGENT_ACCESS_KEY = "agent_enabled"
+MCP_SERVER_NAME = "paper-knowledge-engine"
+MCP_TRANSPORT = "stdio"
+
+
 class LLMConfig(BaseModel):
     llm_provider: str = "openai"
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o"
     llm_api_key: str | None = None
+
+
+def _get_agent_access_value() -> str:
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT value FROM app_state WHERE key = ?",
+            (AGENT_ACCESS_KEY,),
+        ).fetchone()
+        if row:
+            return str(row["value"])
+
+        legacy_row = conn.execute(
+            "SELECT value FROM app_state WHERE key = ?",
+            (LEGACY_AGENT_ACCESS_KEY,),
+        ).fetchone()
+        return str(legacy_row["value"]) if legacy_row else "disabled"
+    finally:
+        conn.close()
+
+
+def _set_agent_access_value(value: str) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (AGENT_ACCESS_KEY, value),
+        )
+        conn.execute("DELETE FROM app_state WHERE key = ?", (LEGACY_AGENT_ACCESS_KEY,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _get_active_space() -> dict[str, Any] | None:
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """SELECT s.id, s.name, s.description, s.status, s.created_at, s.updated_at
+               FROM spaces s
+               JOIN app_state a ON a.value = s.id
+               WHERE a.key = ? AND s.status != 'deleted'""",
+            (ACTIVE_SPACE_KEY,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 @router.get("/config")
 async def get_agent_config() -> dict[str, Any]:
@@ -73,26 +127,31 @@ async def run_deep_analysis(paper_id: str) -> dict[str, Any]:
     return result
 
 @router.get("/status")
-async def get_agent_status() -> dict[str, bool]:
+async def get_agent_status() -> dict[str, Any]:
     """Get the current agent status."""
-    conn = get_connection()
-    try:
-        row = conn.execute("SELECT value FROM app_state WHERE key = 'agent_enabled'").fetchone()
-        return {"enabled": row["value"] == "enabled" if row else False}
-    finally:
-        conn.close()
+    return {
+        "enabled": _get_agent_access_value() == "enabled",
+        "server_name": MCP_SERVER_NAME,
+        "transport": MCP_TRANSPORT,
+        "active_space": _get_active_space(),
+    }
 
 @router.put("/status")
 async def set_agent_status(enabled: bool = Body(..., embed=True)) -> dict[str, bool]:
     """Enable or disable the agent."""
-    conn = get_connection()
-    try:
-        value = "enabled" if enabled else "disabled"
-        conn.execute(
-            "INSERT INTO app_state (key, value) VALUES ('agent_enabled', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (value,)
-        )
-        conn.commit()
-        return {"enabled": enabled}
-    finally:
-        conn.close()
+    _set_agent_access_value("enabled" if enabled else "disabled")
+    return {"enabled": enabled}
+
+
+@router.put("/enable")
+async def enable_agent() -> dict[str, str]:
+    """Enable agent access for MCP tools."""
+    _set_agent_access_value("enabled")
+    return {"status": "enabled"}
+
+
+@router.put("/disable")
+async def disable_agent() -> dict[str, str]:
+    """Disable agent access for MCP tools."""
+    _set_agent_access_value("disabled")
+    return {"status": "disabled"}

@@ -279,7 +279,7 @@
             <div><strong>智能代理访问（MCP）</strong> — 传输方式：<code>stdio</code></div>
             <div style="margin-top:2px;">暴露空间：<span class="space-exposed" id="agentExposedSpace">无</span></div>
         </div>
-        <label class="toggle-switch" title="启用或关闭本地智能代理访问">
+        <label class="toggle-switch" title="启用或关闭本地MCP访问">
             <input type="checkbox" id="agentToggle" onchange="toggleAgentAccess()">
             <span class="toggle-slider"></span>
         </label>
@@ -1000,7 +1000,7 @@
                     body: JSON.stringify({ enabled })
                 });
                 await loadAgentStatus();
-            } catch (e) { showError('更新智能代理访问状态失败。'); }
+            } catch (e) { showError('更新MCP访问状态失败。'); }
         }
 
         // --- Update loadSpaces to show/hide papers section ---

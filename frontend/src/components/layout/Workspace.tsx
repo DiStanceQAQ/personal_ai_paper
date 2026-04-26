@@ -54,7 +54,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
             disabled={!activeSpace}
           >
             <Zap size={14} fill={agentStatus?.enabled ? 'currentColor' : 'none'} />
-            {agentStatus?.enabled ? '智能代理已启用' : '智能代理已禁用'}
+            {agentStatus?.enabled ? 'MCP已启用' : 'MCP已禁用'}
           </button>
           
           <button 

@@ -325,7 +325,7 @@ export default function App(): JSX.Element {
       const newStatus = await api.agentStatus();
       setAgentStatus(newStatus);
     } catch {
-      setNotice({ message: '智能代理状态切换失败。', type: 'error' });
+      setNotice({ message: 'MCP状态切换失败。', type: 'error' });
     }
   }
 

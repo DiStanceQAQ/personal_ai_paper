@@ -1,11 +1,13 @@
 """Full-text search using SQLite FTS5."""
 
 from pathlib import Path
+import re
 from typing import Any
 
 from db import get_connection
 
 FTS_TABLE = "passages_fts"
+TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 
 
 def ensure_fts_index(database_path: Path | None = None) -> None:
@@ -42,6 +44,12 @@ def rebuild_fts_index(database_path: Path | None = None) -> None:
         conn.close()
 
 
+def _to_safe_fts_query(query: str) -> str:
+    """Convert user search text to a safe FTS5 query made of quoted terms."""
+    terms = TOKEN_RE.findall(query)
+    return " ".join(f'"{term}"' for term in terms)
+
+
 def search_passages(
     query: str,
     space_id: str,
@@ -52,6 +60,10 @@ def search_passages(
 
     Returns results with paper title, section, page number, snippet, and match score.
     """
+    fts_query = _to_safe_fts_query(query)
+    if not fts_query:
+        return []
+
     conn = get_connection(database_path)
     try:
         rows = conn.execute(
@@ -74,7 +86,7 @@ def search_passages(
             ORDER BY rank
             LIMIT ?
             """,
-            (query, space_id, limit),
+            (fts_query, space_id, limit),
         ).fetchall()
 
         return [dict(r) for r in rows]

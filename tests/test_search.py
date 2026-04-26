@@ -145,6 +145,31 @@ def test_search_space_isolation() -> None:
         conn.close()
 
 
+def test_search_treats_fts_syntax_characters_as_plain_text() -> None:
+    """User search text containing FTS punctuation should not raise syntax errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+
+        conn.execute("INSERT INTO spaces (id, name) VALUES ('space-1', 'A')")
+        conn.execute(
+            "INSERT INTO papers (id, space_id, title, parse_status) VALUES ('p1', 'space-1', 'P1', 'parsed')"
+        )
+        conn.execute(
+            """INSERT INTO passages (id, paper_id, space_id, section, original_text)
+               VALUES ('pass1', 'p1', 'space-1', 'method',
+                       'alpha beta C++ query syntax should be treated as text')"""
+        )
+        conn.commit()
+        rebuild_fts_index(database_path=db_path)
+
+        for query in ("alpha-beta", "C++", '"unterminated'):
+            results = search_passages(query, "space-1", database_path=db_path)
+            assert isinstance(results, list)
+
+        conn.close()
+
+
 @pytest.mark.asyncio
 async def test_search_api_requires_active_space(client: AsyncClient) -> None:
     """Test search returns 400 without active space."""
@@ -171,3 +196,16 @@ async def test_search_api_no_results(client: AsyncClient) -> None:
     resp = await client.get("/api/search", params={"q": "xyzzy_notfound"})
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+@pytest.mark.asyncio
+async def test_search_api_rejects_deleted_active_space(client: AsyncClient) -> None:
+    """A stale deleted active space should not be searchable."""
+    space_id = await _setup_space_with_passage(client, "transformer model")
+    delete_resp = await client.delete(f"/api/spaces/{space_id}")
+    assert delete_resp.status_code == 200
+
+    resp = await client.get("/api/search", params={"q": "transformer"})
+
+    assert resp.status_code == 400
+    assert "active space" in resp.json()["detail"].lower()

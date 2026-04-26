@@ -6,34 +6,37 @@ from typing import Any
 from db import get_connection
 from llm_client import call_llm
 
-SYSTEM_PROMPT = """You are an expert scientific research assistant. Your task is to analyze the provided text passages from a research paper and extract structured information.
+SYSTEM_PROMPT = """你是一位专业的学术科研助理。你的任务是分析提供的论文片段，并提取结构化的信息。
+
+输出语言要求：
+无论论文原文使用的是什么语言（如英文），你必须使用【准确、专业、精炼的中文】来填写 JSON 中的所有内容。
 
 OUTPUT FORMAT:
 You MUST return a JSON object with the following structure:
 {
   "metadata": {
-    "title": "Actual paper title",
-    "authors": "Full author list",
+    "title": "论文的真实标题",
+    "authors": "完整的作者列表",
     "year": 2024,
-    "abstract": "Brief one-sentence summary (TL;DR)",
-    "venue": "Publication venue (e.g. CVPR 2023, Nature, arXiv)",
-    "doi": "Digital Object Identifier if found",
-    "relation_to_idea": "One of: baseline, inspiring, background, result_comparison, unclassified"
+    "abstract": "一句话极简总结（TL;DR），不超过 150 字",
+    "venue": "发表渠道（如 CVPR 2023, Nature 等）",
+    "doi": "DOI 标识符（如果找到）",
+    "relation_to_idea": "必须是以下之一: baseline, inspiring, background, result_comparison, unclassified"
   },
   "knowledge_cards": [
     {
       "card_type": "Method",
-      "summary": "Concise summary of a specific method, model, or approach used.",
+      "summary": "对特定方法、模型或实验步骤的精炼中文总结。",
       "source_passage_index": 0
     }
   ]
 }
 
 RESEARCH RELATION TYPES:
-- baseline: The paper provides the fundamental theory or model you are building upon.
-- inspiring: The paper provides interesting ideas or insights for your research.
-- result_comparison: This paper's results are used as a comparison for yours.
-- background: General contextual information.
+- baseline: 作为你研究基础的理论或基准模型。
+- inspiring: 提供了有趣的思路或见解。
+- result_comparison: 用于与你的结果进行对比。
+- background: 一般背景信息。
 
 CARD TYPES:
 - Method, Metric, Result, Limitation, Claim, Failure Mode.

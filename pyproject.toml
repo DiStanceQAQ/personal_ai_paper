@@ -26,10 +26,12 @@ dev = [
 
 [tool.setuptools]
 py-modules = [
+    "agent_executor",
     "api_sidecar",
     "card_extractor",
     "config",
     "db",
+    "llm_client",
     "main",
     "mcp_server",
     "parser",

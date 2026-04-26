@@ -1,5 +1,6 @@
 import React from 'react';
 import { UploadCloud, Search, FileText, FolderOpen, Zap, Info } from 'lucide-react';
+import DOMPurify from 'dompurify';
 import type { Paper, SearchResult, Space, AgentStatus } from '../../types';
 import { PaperCard } from '../ui/PaperCard';
 
@@ -146,7 +147,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                       <span>{result.paper_title || result.paper_id}</span>
                     </div>
 
-                    <p dangerouslySetInnerHTML={{ __html: result.snippet }} />
+                    <p dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(result.snippet) }} />
 
                     <div className="result-meta">
                       <span className="result-section-badge">{result.section || '正文'}</span>

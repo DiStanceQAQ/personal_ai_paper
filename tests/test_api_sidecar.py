@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import api_sidecar
+import pytest
 import uvicorn
 from api_sidecar import ServerSettings, parse_args
 
@@ -59,3 +60,29 @@ def test_main_sets_data_dir_before_importing_app(
         str(tmp_path.resolve()),
         (fake_app, "127.0.0.1", 9412, "info"),
     ]
+
+
+def test_startup_trace_is_quiet_by_default(
+    monkeypatch: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("PAPER_ENGINE_STARTUP_TRACE", raising=False)
+
+    api_sidecar.startup_trace("main_entry")
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+
+def test_startup_trace_writes_structured_timing(
+    monkeypatch: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("PAPER_ENGINE_STARTUP_TRACE", "1")
+
+    api_sidecar.startup_trace("app_import_done", port=9412)
+
+    captured = capsys.readouterr()
+    assert "[paper-engine startup] python event=app_import_done" in captured.err
+    assert "elapsed_ms=" in captured.err
+    assert "port=9412" in captured.err

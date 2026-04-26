@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { AgentStatus, KnowledgeCard, Paper, Passage, SearchResult, Space } from './types';
 
 const DEFAULT_BACKEND = 'http://127.0.0.1:8000';
@@ -10,7 +10,10 @@ export async function initializeBackendBaseUrl(): Promise<string> {
   try {
     const url = await invoke<string>('backend_url');
     cachedBackendUrl = url.replace(/\/$/, '');
-  } catch {
+  } catch (error) {
+    if (isTauri()) {
+      throw error;
+    }
     cachedBackendUrl = window.localStorage.getItem('paper-engine-backend-url') || DEFAULT_BACKEND;
   }
   return cachedBackendUrl;

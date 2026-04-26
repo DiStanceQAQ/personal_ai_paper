@@ -208,7 +208,7 @@ async def delete_card(card_id: str) -> dict[str, str]:
 
 @router.post("/extract/{paper_id}")
 async def extract_cards(paper_id: str) -> dict[str, Any]:
-    """Trigger the 'Extraction' phase. Now primarily guides the user to use an external Agent."""
+    """Run local low-confidence heuristic card extraction for a paper."""
     space_id = _get_active_space_id()
 
     conn = get_connection()
@@ -230,7 +230,8 @@ async def extract_cards(paper_id: str) -> dict[str, Any]:
                 "status": "no_passages",
                 "paper_id": paper_id,
                 "card_count": 0,
-                "message": "请先点击“解析原文”完成本地切片预处理。",
+                "mode": "heuristic",
+                "message": "没有可抽取的原文片段。",
             }
 
         passage_list = [dict(p) for p in passages]
@@ -245,12 +246,31 @@ async def extract_cards(paper_id: str) -> dict[str, Any]:
                     (meta["title"][:500], paper_id),
                 )
 
+        cards = extract_cards_from_passages(passage_list, paper_id, space_id)
+        for card in cards:
+            conn.execute(
+                """INSERT OR REPLACE INTO knowledge_cards
+                   (id, space_id, paper_id, source_passage_id, card_type, summary, confidence, user_edited)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    card["id"],
+                    card["space_id"],
+                    card["paper_id"],
+                    card["source_passage_id"],
+                    card["card_type"],
+                    card["summary"],
+                    card["confidence"],
+                    card["user_edited"],
+                ),
+            )
+
         conn.commit()
         return {
-            "status": "ready_for_agent",
+            "status": "extracted",
             "paper_id": paper_id,
-            "card_count": 0,
-            "message": "本地 RAG 预处理已就绪。请在您的 AI 助手（如 Claude/Cursor）中连接此 MCP 服务，并使用 get_full_paper_text 工具执行深度分析。",
+            "card_count": len(cards),
+            "mode": "heuristic",
+            "message": "启发式抽取结果需要人工检查和修正。",
         }
     finally:
         conn.close()

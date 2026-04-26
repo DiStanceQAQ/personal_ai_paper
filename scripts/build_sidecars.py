@@ -90,9 +90,13 @@ def main(argv: list[str] | None = None) -> int:
     target_triple = host_triple()
     targets: list[tuple[str, str, tuple[str, ...]]] = []
     if args.target in {"api", "all"}:
-        targets.append(("paper-engine-api", "api_sidecar.py", ("main",)))
+        targets.append((
+            "paper-engine-api", 
+            "api_sidecar.py", 
+            ("main", "agent_executor", "llm_client", "db", "parser", "config", "search")
+        ))
     if args.target in {"mcp", "all"}:
-        targets.append(("paper-engine-mcp", "mcp_server.py", ()))
+        targets.append(("paper-engine-mcp", "mcp_server.py", ("db", "config")))
 
     for sidecar_name, entrypoint, hidden_imports in targets:
         binary = build_onefile(sidecar_name, entrypoint, hidden_imports)

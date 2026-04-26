@@ -1,7 +1,21 @@
-import { Edit2, FileText, FolderOpen, MoreVertical, Plus, RotateCcw, Search, ShieldCheck, Trash2, UploadCloud, Zap } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
 import type { AgentStatus, KnowledgeCard, Paper, Passage, SearchResult, Space } from './types';
+
+// Layout Components
+import { Sidebar } from './components/layout/Sidebar';
+import { Workspace } from './components/layout/Workspace';
+import { Inspector } from './components/layout/Inspector';
+
+// UI Components
+import { LoadingOverlay } from './components/ui/LoadingOverlay';
+import { Toast } from './components/ui/Toast';
+
+// Modals
+import { SettingsModal } from './components/modals/SettingsModal';
+import { SpaceModal } from './components/modals/SpaceModal';
+import { ConfirmModal } from './components/modals/ConfirmModal';
+import { MCPGuideModal } from './components/modals/MCPGuideModal';
 
 const cardTabs = ['Method', 'Metric', 'Result', 'Failure Mode', 'Limitation', 'Claim'] as const;
 
@@ -33,13 +47,9 @@ function parseLabel(status: string): string {
   return labels[status] || status;
 }
 
-type InitialLoadStatus = 'loading' | 'ready' | 'error';
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export default function App(): JSX.Element {
+  // --- State ---
+  const [isAppReady, setIsAppReady] = useState(false);
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [activeSpace, setActiveSpace] = useState<Space | null>(null);
   const [papers, setPapers] = useState<Paper[]>([]);
@@ -52,530 +62,383 @@ export default function App(): JSX.Element {
   const [activeTab, setActiveTab] = useState<(typeof cardTabs)[number]>('Method');
   const [activeView, setActiveView] = useState<'library' | 'search'>('library');
   const [isInspectorOpen, setIsInspectorOpen] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(false);
   
-  // 空间模态框状态
+  // Modals
   const [isSpaceModalOpen, setIsSpaceModalOpen] = useState(false);
   const [editingSpace, setEditingSpace] = useState<Space | null>(null);
   const [newSpaceName, setNewSpaceName] = useState('');
   const [newSpaceDescription, setNewSpaceDescription] = useState('');
-  
-  // 删除确认模态框状态
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [spaceToDelete, setSpaceToDelete] = useState<string | null>(null);
-  
-  const [notice, setNotice] = useState('');
-  const [initialLoadStatus, setInitialLoadStatus] = useState<InitialLoadStatus>('loading');
-  const [initialLoadError, setInitialLoadError] = useState('');
+  const [isPaperDeleteConfirmOpen, setIsPaperDeleteConfirmOpen] = useState(false);
+  const [paperToDelete, setPaperToDelete] = useState<string | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isMCPGuideOpen, setIsMCPGuideOpen] = useState(false);
+  const [projectRoot, setProjectRoot] = useState<string>('');
 
+  const [llmConfig, setLlmConfig] = useState({
+    llm_provider: 'openai',
+    llm_base_url: 'https://api.openai.com/v1',
+    llm_model: 'gpt-4o',
+    llm_api_key: '',
+    has_api_key: false
+  });
+  
+  const [notice, setNotice] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+
+  // --- Derived State ---
   const visibleCards = useMemo(
     () => cards.filter((card) => card.card_type === activeTab),
     [cards, activeTab],
   );
 
-  async function refresh(options: { initial?: boolean } = {}): Promise<void> {
-    if (options.initial) {
-      setInitialLoadStatus('loading');
-      setInitialLoadError('');
-    }
-
-    try {
-      const loadedSpaces = await api.listSpaces();
-      setSpaces(loadedSpaces);
-
-      let active: Space | null = null;
-      try {
-        active = await api.getActiveSpace();
-      } catch {
-        active = loadedSpaces[0] || null;
-        if (active) {
-          await api.setActiveSpace(active.id);
-        }
-      }
-      setActiveSpace(active);
-
-      const [loadedPapers, status]: [Paper[], AgentStatus] = active
-        ? await Promise.all([
-            api.listPapers(),
-            api.agentStatus(),
-          ])
-        : [[], await api.agentStatus()];
-      setPapers(loadedPapers);
-      setAgentStatus(status);
-      if (options.initial) {
-        setInitialLoadStatus('ready');
-      }
-    } catch (err) {
-      console.error('刷新数据失败:', err);
-      if (options.initial) {
-        setInitialLoadError(errorMessage(err));
-        setInitialLoadStatus('error');
-      }
-    }
-  }
-
-  async function openPaper(paper: Paper): Promise<void> {
-    setSelectedPaper(paper);
-    const [paperPassages, paperCards] = await Promise.all([
-      api.listPassages(paper.id),
-      api.listCards(paper.id),
-    ]);
-    setPassages(paperPassages);
-    setCards(paperCards);
-  }
-
+  // --- Effects ---
   useEffect(() => {
     if (notice) {
-      const timer = setTimeout(() => setNotice(''), 3000);
+      const timer = setTimeout(() => setNotice(null), 3500);
       return () => clearTimeout(timer);
     }
   }, [notice]);
 
   useEffect(() => {
-    void refresh({ initial: true });
+    async function init() {
+      let retryCount = 0;
+      while (retryCount < 20) {
+        try {
+          await api.health();
+          break; 
+        } catch {
+          await new Promise(r => setTimeout(r, 500));
+          retryCount++;
+        }
+      }
+      await Promise.all([refresh(), loadLlmConfig(), loadAppInfo()]);
+      setIsAppReady(true);
+    }
+    init();
   }, []);
 
-  // 空间 CRUD 逻辑
-  function openCreateModal(): void {
-    setEditingSpace(null);
-    setNewSpaceName('');
-    setNewSpaceDescription('');
-    setIsSpaceModalOpen(true);
+  // --- Actions ---
+  async function loadAppInfo(): Promise<void> {
+    try {
+      const info = await api.getAppInfo();
+      setProjectRoot(info.project_root);
+    } catch {
+      console.warn('无法获取应用信息。');
+    }
   }
 
-  function openEditModal(e: React.MouseEvent, space: Space): void {
-    e.stopPropagation();
-    setEditingSpace(space);
-    setNewSpaceName(space.name);
-    setNewSpaceDescription(space.description || '');
-    setIsSpaceModalOpen(true);
+  async function refresh(): Promise<void> {
+    try {
+      const loadedSpaces = await api.listSpaces();
+      setSpaces(loadedSpaces);
+      try {
+        const active = await api.getActiveSpace();
+        setActiveSpace(active);
+        const [loadedPapers, status] = await Promise.all([
+          api.listPapers(),
+          api.agentStatus(),
+        ]);
+        setPapers(loadedPapers);
+        setAgentStatus(status);
+      } catch {
+        setActiveSpace(null);
+      }
+    } catch (err) {
+      console.error('连接后端失败:', err);
+      setNotice({ message: '无法连接到后端 Sidecar，请检查应用状态。', type: 'error' });
+    }
+  }
+
+  async function openPaper(paper: Paper): Promise<void> {
+    setSelectedPaper(paper);
+    try {
+      const [paperPassages, paperCards] = await Promise.all([
+        api.listPassages(paper.id),
+        api.listCards(paper.id),
+      ]);
+      setPassages(paperPassages);
+      setCards(paperCards);
+    } catch {
+      setNotice({ message: '获取论文详情失败。', type: 'error' });
+    }
+  }
+
+  async function loadLlmConfig(): Promise<void> {
+    try {
+      const config = await api.getAgentConfig();
+      setLlmConfig({ ...config, llm_api_key: '' });
+    } catch {
+      console.warn('无法加载 LLM 配置。');
+    }
+  }
+
+  async function saveLlmConfig(): Promise<void> {
+    try {
+      await api.updateAgentConfig(llmConfig);
+      setNotice({ message: 'LLM 配置保存成功。', type: 'success' });
+      setIsSettingsOpen(false);
+      await loadLlmConfig();
+    } catch {
+      setNotice({ message: '保存配置失败。', type: 'error' });
+    }
+  }
+
+  async function copyToClipboard(text: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(text);
+      setNotice({ message: '配置已复制到剪贴板。', type: 'success' });
+    } catch {
+      setNotice({ message: '复制失败。', type: 'error' });
+    }
   }
 
   async function saveSpace(): Promise<void> {
     if (!newSpaceName.trim()) {
-      setNotice('请输入空间名称。');
+      setNotice({ message: '请输入空间名称。', type: 'error' });
       return;
     }
-    
-    if (editingSpace) {
-      await api.updateSpace(editingSpace.id, newSpaceName.trim(), newSpaceDescription.trim());
-      setNotice('空间已更新。');
-    } else {
-      const space = await api.createSpace(newSpaceName.trim(), newSpaceDescription.trim());
-      await api.setActiveSpace(space.id);
-      setNotice('已创建并打开空间。');
+    try {
+      if (editingSpace) {
+        await api.updateSpace(editingSpace.id, newSpaceName.trim(), newSpaceDescription.trim());
+        setNotice({ message: '空间更新成功。', type: 'success' });
+      } else {
+        const space = await api.createSpace(newSpaceName.trim(), newSpaceDescription.trim());
+        await api.setActiveSpace(space.id);
+        setNotice({ message: '新空间已创建并激活。', type: 'success' });
+      }
+      setIsSpaceModalOpen(false);
+      await refresh();
+    } catch {
+      setNotice({ message: '操作空间失败。', type: 'error' });
     }
-    
-    setEditingSpace(null);
-    setNewSpaceName('');
-    setNewSpaceDescription('');
-    setIsSpaceModalOpen(false);
-    await refresh();
   }
 
   async function confirmDelete(): Promise<void> {
     if (!spaceToDelete) return;
-    await api.deleteSpace(spaceToDelete);
-    if (activeSpace?.id === spaceToDelete) {
-      setActiveSpace(null);
-      setSelectedPaper(null);
+    try {
+      await api.deleteSpace(spaceToDelete);
+      if (activeSpace?.id === spaceToDelete) {
+        setActiveSpace(null);
+        setSelectedPaper(null);
+      }
+      setNotice({ message: '研究空间已删除。', type: 'success' });
+    } catch {
+      setNotice({ message: '删除空间失败。', type: 'error' });
+    } finally {
+      setIsDeleteConfirmOpen(false);
+      await refresh();
     }
-    setNotice('空间已删除。');
-    setIsDeleteConfirmOpen(false);
-    setSpaceToDelete(null);
-    await refresh();
   }
 
-  function openDeleteConfirm(e: React.MouseEvent, spaceId: string): void {
-    e.stopPropagation();
-    setSpaceToDelete(spaceId);
-    setIsDeleteConfirmOpen(true);
+  async function confirmPaperDelete(): Promise<void> {
+    if (!paperToDelete) return;
+    try {
+      await api.deletePaper(paperToDelete);
+      if (selectedPaper?.id === paperToDelete) {
+        setSelectedPaper(null);
+        setPassages([]);
+        setCards([]);
+      }
+      setNotice({ message: '论文已从库中移除。', type: 'success' });
+    } catch {
+      setNotice({ message: '移除论文失败。', type: 'error' });
+    } finally {
+      setIsPaperDeleteConfirmOpen(false);
+      setPaperToDelete(null);
+      await refresh();
+    }
   }
 
   async function setActive(space: Space): Promise<void> {
-    await api.setActiveSpace(space.id);
-    setSelectedPaper(null);
-    setPassages([]);
-    setCards([]);
-    await refresh();
+    if (activeSpace?.id === space.id) return;
+    try {
+      await api.setActiveSpace(space.id);
+      setSelectedPaper(null);
+      setPassages([]);
+      setCards([]);
+      await refresh();
+    } catch {
+      setNotice({ message: '切换空间失败。', type: 'error' });
+    }
   }
 
   async function upload(file: File): Promise<void> {
-    await api.uploadPaper(file);
-    setNotice('论文已导入。');
-    await refresh();
+    setIsProcessing(true);
+    setNotice({ message: '正在导入并预处理 PDF 文件...', type: 'success' });
+    try {
+      await api.uploadPaper(file);
+      setNotice({ message: '导入成功。', type: 'success' });
+      await refresh();
+    } catch (err: any) {
+      setNotice({ message: err.message || '文件导入失败。', type: 'error' });
+    } finally {
+      setIsProcessing(false);
+    }
   }
 
   async function runSearch(): Promise<void> {
     if (!query.trim()) return;
-    const searchResults = await api.search(query.trim());
-    setResults(searchResults);
-    setActiveView('search');
-  }
-
-  async function parseSelected(): Promise<void> {
-    if (!selectedPaper) return;
-    const parsed = await api.parsePaper(selectedPaper.id);
-    setNotice(`解析完成：${parsed.passage_count} 个片段。`);
-    const updated = await api.getPaper(selectedPaper.id);
-    await openPaper(updated);
-    await refresh();
+    try {
+      const searchResults = await api.search(query.trim());
+      setResults(searchResults);
+      setActiveView('search');
+    } catch {
+      setNotice({ message: '搜索请求失败。', type: 'error' });
+    }
   }
 
   async function extractSelected(): Promise<void> {
     if (!selectedPaper) return;
-    const extracted = await api.extractCards(selectedPaper.id);
-    setNotice(extracted.message || `启发式抽取完成：${extracted.card_count} 张卡片。`);
-    const paperCards = await api.listCards(selectedPaper.id);
-    setCards(paperCards);
+    const config = await api.getAgentConfig();
+    if (!config.has_api_key && config.llm_provider !== 'ollama') {
+      setNotice({ message: '请先在左下角完成 LLM 配置（API Key）后再执行解析。', type: 'error' });
+      setIsSettingsOpen(true);
+      return;
+    }
+    setIsProcessing(true);
+    try {
+      setNotice({ message: '正在进行 PDF 物理切片和 RAG 预处理...', type: 'success' });
+      await api.parsePaper(selectedPaper.id);
+      setNotice({ message: '正在调用内置 Agent 进行深度语义分析...', type: 'success' });
+      const result = await api.runDeepAnalysis(selectedPaper.id);
+      setNotice({ message: `AI 解析成功！识别了元数据并提取了 ${result.card_count} 张卡片。`, type: 'success' });
+      const [updatedPaper, paperCards] = await Promise.all([
+        api.getPaper(selectedPaper.id),
+        api.listCards(selectedPaper.id),
+      ]);
+      setSelectedPaper(updatedPaper);
+      setCards(paperCards);
+      await refresh();
+    } catch (err: any) {
+      setNotice({ message: `AI 解析失败: ${err.message || '请检查模型配置'}`, type: 'error' });
+    } finally {
+      setIsProcessing(false);
+    }
   }
 
   async function toggleAgent(): Promise<void> {
-    const enabled = agentStatus ? !agentStatus.enabled : true;
-    await api.setAgentStatus(enabled);
-    setAgentStatus(await api.agentStatus());
+    try {
+      const enabled = agentStatus ? !agentStatus.enabled : true;
+      await api.setAgentStatus(enabled);
+      const newStatus = await api.agentStatus();
+      setAgentStatus(newStatus);
+    } catch {
+      setNotice({ message: '智能代理状态切换失败。', type: 'error' });
+    }
   }
 
-  if (initialLoadStatus !== 'ready') {
+  if (!isAppReady) {
     return (
-      <main className="startup-shell">
-        <div className="startup-panel">
-          <div className="brand-mark startup-mark">P</div>
-          <h1>论文知识引擎</h1>
-          {initialLoadStatus === 'loading' ? (
-            <>
-              <div className="startup-spinner" />
-              <p>正在启动论文知识引擎</p>
-            </>
-          ) : (
-            <>
-              <p>启动失败：{initialLoadError || '无法连接本地 API'}</p>
-              <button className="btn-secondary" onClick={() => void refresh({ initial: true })}>
-                <RotateCcw size={14} />
-                重试
-              </button>
-            </>
-          )}
+      <div style={{ height: '100vh', display: 'grid', placeItems: 'center', background: 'var(--bg-main)' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div className="spinner" style={{ margin: '0 auto 20px auto' }}></div>
+          <p style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>正在拉起本地 AI 引擎...</p>
         </div>
-      </main>
+      </div>
     );
   }
 
   return (
     <>
       <main className="app-shell">
-        <aside className="sidebar">
-          <div className="brand">
-            <div className="brand-mark">P</div>
-            <div>
-              <h1>论文知识引擎</h1>
-              <p>Idea Space 工作台</p>
-            </div>
-          </div>
+        <Sidebar
+          spaces={spaces}
+          activeSpace={activeSpace}
+          onSelectSpace={setActive}
+          onOpenCreateModal={() => { setEditingSpace(null); setNewSpaceName(''); setNewSpaceDescription(''); setIsSpaceModalOpen(true); }}
+          onOpenEditModal={(e, space) => { e.stopPropagation(); setEditingSpace(space); setNewSpaceName(space.name); setNewSpaceDescription(space.description || ''); setIsSpaceModalOpen(true); }}
+          onOpenDeleteConfirm={(e, id) => { e.stopPropagation(); setSpaceToDelete(id); setIsDeleteConfirmOpen(true); }}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+        />
 
-          <div className="sidebar-actions">
-            <button className="btn-new-space" onClick={openCreateModal}>
-              <Plus size={18} />
-              <span>新建空间</span>
-            </button>
-          </div>
+        <Workspace
+          activeSpace={activeSpace}
+          agentStatus={agentStatus}
+          onToggleAgent={toggleAgent}
+          onOpenMCPGuide={() => setIsMCPGuideOpen(true)}
+          activeView={activeView}
+          setActiveView={setActiveView}
+          papers={papers}
+          selectedPaper={selectedPaper}
+          onSelectPaper={openPaper}
+          onDeletePaper={(e, id) => { e.stopPropagation(); setPaperToDelete(id); setIsPaperDeleteConfirmOpen(true); }}
+          onUpload={upload}
+          query={query}
+          setQuery={setQuery}
+          onSearch={runSearch}
+          results={results}
+          parseLabel={parseLabel}
+        />
 
-          <nav className="space-list">
-            {spaces.map((space) => (
-              <div
-                key={space.id}
-                className={space.id === activeSpace?.id ? 'space-item-wrapper active' : 'space-item-wrapper'}
-                onClick={() => void setActive(space)}
-              >
-                <div className="space-item-main">
-                  <FolderOpen size={16} />
-                  <span>{space.name}</span>
-                </div>
-                <div className="space-item-actions">
-                  <button onClick={(e) => openEditModal(e, space)} title="编辑空间">
-                    <Edit2 size={12} />
-                  </button>
-                  <button onClick={(e) => openDeleteConfirm(e, space.id)} title="删除空间">
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </nav>
-        </aside>
-
-        <section className="workspace">
-          <header className="topbar">
-            <div>
-              <p className="eyebrow">当前工作空间</p>
-              <h2>{activeSpace?.name || '未选择空间'}</h2>
-            </div>
-            <div className="topbar-actions">
-              <button 
-                className={agentStatus?.enabled ? 'status enabled' : 'status'} 
-                onClick={() => void toggleAgent()}
-                disabled={!activeSpace}
-              >
-                <Zap size={14} fill={agentStatus?.enabled ? 'currentColor' : 'none'} />
-                {agentStatus?.enabled ? '智能代理已启用' : '智能代理已禁用'}
-              </button>
-            </div>
-          </header>
-
-          {activeSpace ? (
-            <>
-              <div className="workspace-nav">
-                <button 
-                  className={activeView === 'library' ? 'nav-item active' : 'nav-item'} 
-                  onClick={() => setActiveView('library')}
-                >
-                  资源库
-                </button>
-                <button 
-                  className={activeView === 'search' ? 'nav-item active' : 'nav-item'} 
-                  onClick={() => setActiveView('search')}
-                >
-                  深度检索
-                </button>
-              </div>
-
-              {activeView === 'library' ? (
-                <div className="view-container library-view">
-                  <div className="view-header">
-                    <div className="view-title">
-                      <h3>我的论文</h3>
-                      <span className="badge">{papers.length}</span>
-                    </div>
-                    <label className="btn-upload">
-                      <UploadCloud size={16} />
-                      <span>导入 PDF</span>
-                      <input type="file" accept="application/pdf,.pdf" onChange={(event) => event.target.files?.[0] && void upload(event.target.files[0])} />
-                    </label>
-                  </div>
-
-                  <div className="paper-grid">
-                    {papers.length > 0 ? (
-                      papers.map((paper) => (
-                        <button key={paper.id} className={selectedPaper?.id === paper.id ? 'paper-card active' : 'paper-card'} onClick={() => void openPaper(paper)}>
-                          <div className="paper-card-icon">
-                            <FileText size={24} />
-                          </div>
-                          <div className="paper-card-content">
-                            <strong>{paper.title || '未命名论文'}</strong>
-                            <div className="paper-card-meta">
-                              <span>{paper.authors || '作者未知'}</span>
-                              <span className="dot">·</span>
-                              <span>{parseLabel(paper.parse_status)}</span>
-                            </div>
-                          </div>
-                        </button>
-                      ))
-                    ) : (
-                      <div className="empty-state">
-                        <p>该空间下暂无论文，请先导入。</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <div className="view-container search-view">
-                  <div className="search-interface">
-                    <div className="search-input-wrapper">
-                      <Search size={20} className="text-tertiary" />
-                      <input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && void runSearch()} placeholder="搜索方法、指标、结果或局限性..." autoFocus />
-                      <button className="btn-primary" onClick={() => void runSearch()}>开始检索</button>
-                    </div>
-                  </div>
-
-                  <div className="search-results-list">
-                    <div className="results-info">
-                      检索到 {results.length} 条相关片段
-                    </div>
-                    {results.length > 0 ? (
-                      results.map((result) => (
-                        <article key={result.passage_id} className="search-result-card">
-                          <div className="result-source">
-                            <FileText size={14} />
-                            <span>{result.paper_title || result.paper_id}</span>
-                            <span className="dot">·</span>
-                            <span>第 {result.page_number} 页</span>
-                          </div>
-                          <p dangerouslySetInnerHTML={{ __html: result.snippet }} />
-                          <div className="result-footer">
-                            {result.section || '正文章节'}
-                          </div>
-                        </article>
-                      ))
-                    ) : (
-                      <div className="empty-state">
-                        <p>输入关键词并检索以查看结果。</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-
-            <div className="empty-state" style={{ marginTop: '10%', textAlign: 'center' }}>
-              <FolderOpen size={64} style={{ marginBottom: '24px', opacity: 0.1 }} />
-              <h3 style={{ marginBottom: '8px', color: 'var(--text-secondary)' }}>开启您的研究之旅</h3>
-              <p style={{ maxWidth: '300px', margin: '0 auto', color: 'var(--text-tertiary)' }}>
-                请在左侧选择一个现有的研究空间，或者点击“新建空间”开始管理您的文献。
-              </p>
-            </div>
-          )}
-        </section>
-
-        <aside className={isInspectorOpen ? 'inspector' : 'inspector collapsed'}>
-          <button className="inspector-toggle" onClick={() => setIsInspectorOpen(!isInspectorOpen)}>
-            {isInspectorOpen ? '→' : '←'}
-          </button>
-
-          {isInspectorOpen && (
-            <div className="inspector-content">
-              {!activeSpace ? (
-                <div className="empty-state" style={{ marginTop: '40%' }}>
-                  <p>请先激活一个研究空间</p>
-                </div>
-              ) : selectedPaper ? (
-                <>
-                  <div className="inspector-header">
-                    <div className="paper-status-tag">{parseLabel(selectedPaper.parse_status)}</div>
-                    <h2>{selectedPaper.title || '未命名论文'}</h2>
-                    <p className="paper-authors">{selectedPaper.authors || '作者未知'}</p>
-                  </div>
-
-                  <div className="ai-supercharge">
-                    <button className="btn-ai-extract" onClick={() => void extractSelected()}>
-                      <Zap size={16} fill="white" />
-                      <span>AI 深度抽取知识卡片</span>
-                    </button>
-                    <button className="btn-text-only" onClick={() => void parseSelected()}>
-                      重新解析原文
-                    </button>
-                  </div>
-
-                  <div className="inspector-section">
-                    <div className="section-title">核心元数据</div>
-                    <div className="meta-pills">
-                      <div className="meta-pill">
-                        <label>出版年份</label>
-                        <span>{selectedPaper.year || '未知'}</span>
-                      </div>
-                      <div className="meta-pill">
-                        <label>研究关系</label>
-                        <span>{selectedPaper.relation_to_idea || '未定义'}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="inspector-section">
-                    <div className="section-title">知识图谱卡片</div>
-                    <div className="tabs-container">
-                      <div className="tabs">
-                        {cardTabs.map((tab) => (
-                          <button key={tab} className={tab === activeTab ? `tab-btn active ${tab.toLowerCase().replace(' ', '-')}` : 'tab-btn'} onClick={() => setActiveTab(tab)}>
-                            {cardLabel(tab)}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="card-list">
-                      {visibleCards.length > 0 ? (
-                        visibleCards.map((card) => (
-                          <article key={card.id} className={`knowledge-card-fancy ${card.card_type.toLowerCase().replace(' ', '-')}`}>
-                            <div className="card-type-indicator">{cardLabel(card.card_type)}</div>
-                            <p>{card.summary}</p>
-                            <div className="card-footer">
-                              <span>置信度 {(card.confidence * 100).toFixed(0)}%</span>
-                              {card.source_passage_id && <span className="ai-badge">AI 提取</span>}
-                            </div>
-                          </article>
-                        ))
-                      ) : (
-                        <div className="empty-state-small">
-                          <p>暂无此类知识点，尝试“AI 深度抽取”</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="inspector-section">
-                    <div className="section-title">关键原文片段</div>
-                    <div className="passage-previews">
-                      {passages.slice(0, 3).map((passage) => (
-                        <div key={passage.id} className="passage-card-mini">
-                          {passage.original_text}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="empty-state" style={{ marginTop: '40%' }}>
-                  <FileText size={48} style={{ marginBottom: '16px', opacity: 0.1 }} />
-                  <h3>准备就绪</h3>
-                  <p>在左侧选择一篇论文<br/>开始深度分析</p>
-                </div>
-              )}
-            </div>
-          )}
-        </aside>
-
+        <Inspector
+          isOpen={isInspectorOpen}
+          onToggle={() => setIsInspectorOpen(!isInspectorOpen)}
+          selectedPaper={selectedPaper}
+          activeSpace={activeSpace}
+          agentStatus={agentStatus}
+          onToggleAgent={toggleAgent}
+          onExtract={extractSelected}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          visibleCards={visibleCards}
+          cardTabs={cardTabs}
+          cardLabel={cardLabel}
+          parseLabel={parseLabel}
+        />
       </main>
 
-      {isSpaceModalOpen && (
-        <div className="modal-overlay" onClick={() => setIsSpaceModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>{editingSpace ? '编辑研究空间' : '新建研究空间'}</h2>
-            <div className="form-group">
-              <label>空间名称</label>
-              <input 
-                value={newSpaceName} 
-                onChange={(e) => setNewSpaceName(e.target.value)} 
-                placeholder="例如：大模型推理优化" 
-                autoFocus
-              />
-            </div>
-            <div className="form-group">
-              <label>空间描述</label>
-              <textarea 
-                value={newSpaceDescription} 
-                onChange={(e) => setNewSpaceDescription(e.target.value)} 
-                placeholder="描述此空间的研究目标、关注点或特定的研究假设..." 
-                rows={4}
-              />
-            </div>
-            <div className="modal-actions">
-              <button className="btn-secondary" onClick={() => setIsSpaceModalOpen(false)}>取消</button>
-              <button className="btn-primary" onClick={() => void saveSpace()}>
-                {editingSpace ? '保存修改' : '创建并进入'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {isDeleteConfirmOpen && (
-        <div className="modal-overlay" onClick={() => setIsDeleteConfirmOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>确认删除空间？</h2>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '24px', lineHeight: '1.6' }}>
-              此操作将使该空间及其关联的论文在列表中不可见。虽然数据仍保留在数据库中，但在当前界面下将无法访问。
-            </p>
-            <div className="modal-actions">
-              <button className="btn-secondary" onClick={() => setIsDeleteConfirmOpen(false)}>取消</button>
-              <button className="btn-danger" onClick={() => void confirmDelete()}>确定删除</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onSave={saveLlmConfig}
+        config={llmConfig}
+        setConfig={setLlmConfig}
+      />
 
-      {notice && (
-        <div className="notice" onClick={() => setNotice('')}>
-          {notice}
-        </div>
-      )}
+      <SpaceModal
+        isOpen={isSpaceModalOpen}
+        onClose={() => setIsSpaceModalOpen(false)}
+        onSave={saveSpace}
+        isEditing={!!editingSpace}
+        name={newSpaceName}
+        setName={setNewSpaceName}
+        description={newSpaceDescription}
+        setDescription={setNewSpaceDescription}
+      />
+
+      <ConfirmModal
+        isOpen={isDeleteConfirmOpen}
+        title="确认删除空间？"
+        message="此空间内所有的论文、解析结果和知识卡片将不再显示。数据仍保留在数据库中，但当前界面将无法访问。"
+        onConfirm={confirmDelete}
+        onCancel={() => setIsDeleteConfirmOpen(false)}
+      />
+
+      <ConfirmModal
+        isOpen={isPaperDeleteConfirmOpen}
+        title="确认从库中移除这篇论文？"
+        message="该操作将删除该论文的所有物理分片、搜索索引和已提取的卡片，并删除磁盘上的 PDF 文件。"
+        onConfirm={confirmPaperDelete}
+        onCancel={() => setIsPaperDeleteConfirmOpen(false)}
+      />
+
+      <MCPGuideModal
+        isOpen={isMCPGuideOpen}
+        onClose={() => setIsMCPGuideOpen(false)}
+        onCopy={copyToClipboard}
+        projectPath={projectRoot}
+      />
+
+      <LoadingOverlay isVisible={isProcessing} message={notice?.message || ''} />
+
+      <Toast 
+        message={notice?.message || ''} 
+        type={notice?.type || 'success'}
+        isVisible={!!notice && !isProcessing} 
+        onClose={() => setNotice(null)} 
+      />
     </>
   );
 }

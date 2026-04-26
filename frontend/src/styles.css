@@ -301,26 +301,95 @@ button {
   width: 100%;
   display: flex;
   gap: 16px;
-  padding: 20px;
+  padding: 16px;
   text-align: left;
+  align-items: flex-start;
 }
 
 .paper-card-icon {
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
   background: var(--bg-main);
   border-radius: var(--radius-md);
   display: grid;
   place-items: center;
   color: var(--text-tertiary);
   flex-shrink: 0;
+  margin-top: 2px;
 }
 
 .paper-card-wrapper.active .paper-card-icon { background: white; color: var(--accent); }
 
-.paper-card-content { flex: 1; overflow: hidden; }
-.paper-card-content strong { display: block; font-size: 14px; font-weight: 700; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.paper-card-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-tertiary); }
+.paper-card-content { 
+  flex: 1; 
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.paper-card-title { 
+  display: block; 
+  font-size: 15px; 
+  font-weight: 700; 
+  line-height: 1.5; 
+  color: var(--text-primary);
+  /* 取消截断，允许换行 */
+  white-space: normal; 
+}
+
+.paper-card-meta-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.paper-card-authors {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 80%;
+}
+
+.paper-card-year {
+  color: var(--text-tertiary);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.paper-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.paper-card-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.status-badge {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+}
+
+.status-badge.parsed { background: #ecfdf5; color: #059669; }
+.status-badge.pending { background: #fef3c7; color: #92400e; }
+.status-badge.error { background: #fef2f2; color: #dc2626; }
+.status-badge.parsing { background: var(--accent-soft); color: var(--accent); }
 
 .paper-card-actions {
   position: absolute;
@@ -450,7 +519,36 @@ button {
 .inspector-section { display: flex; flex-direction: column; gap: 16px; }
 .section-title { font-size: 11px; font-weight: 800; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.1em; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
 
-.meta-pills { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.meta-pills-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.abstract-card {
+  background: var(--accent-soft);
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(37, 99, 235, 0.1);
+}
+
+.abstract-card p {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--accent);
+  font-weight: 500;
+  margin: 0;
+  font-style: italic;
+}
+
+.abstract-card p::before {
+  content: "TL;DR: ";
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 10px;
+  margin-right: 4px;
+}
+
 .meta-pill { background: var(--bg-main); padding: 12px; border-radius: var(--radius-md); }
 .meta-pill label { display: block; font-size: 10px; font-weight: 700; color: var(--text-tertiary); margin-bottom: 4px; }
 .meta-pill span { font-size: 13px; font-weight: 600; }
@@ -509,7 +607,7 @@ button {
 
 /* 封装 Select 组件样式 */
 .select-wrapper { position: relative; width: 100%; }
-.custom-select { width: 100%; height: 44px; padding: 0 40px 0 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); font-size: 14px; background: white; appearance: none; -webkit-appearance: none; cursor: pointer; display: block; transition: all 0.2s; color: var(--text-primary); line-height: 42px; vertical-align: middle; }
+.custom-select { width: 100%; height: 44px; padding: 0 40px 0 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); font-size: 14px; background: white; appearance: none; -webkit-appearance: none; cursor: pointer; display: block; transition: all 0.2s; color: var(--text-primary); line-height: 42px; }
 .custom-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .select-arrow { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-tertiary); display: flex; align-items: center; }
 

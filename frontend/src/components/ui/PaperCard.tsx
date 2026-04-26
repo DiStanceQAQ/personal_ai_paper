@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, Trash2 } from 'lucide-react';
+import { FileText, Trash2, Calendar, Globe } from 'lucide-react';
 import type { Paper } from '../../types';
 
 interface PaperCardProps {
@@ -21,14 +21,24 @@ export const PaperCard: React.FC<PaperCardProps> = ({
     <div className={isSelected ? 'paper-card-wrapper active' : 'paper-card-wrapper'}>
       <button className="paper-card-main" onClick={() => onSelect(paper)}>
         <div className="paper-card-icon">
-          <FileText size={24} />
+          <FileText size={20} />
         </div>
         <div className="paper-card-content">
-          <strong>{paper.title || '未命名论文'}</strong>
-          <div className="paper-card-meta">
-            <span>{paper.authors || '作者未知'}</span>
-            <span className="dot">·</span>
-            <span>{parseLabel(paper.parse_status)}</span>
+          <strong className="paper-card-title">{paper.title || '未命名论文'}</strong>
+          
+          <div className="paper-card-meta-line">
+            <span className="paper-card-authors">{paper.authors || '作者未知'}</span>
+            {paper.year && <span className="paper-card-year">({paper.year})</span>}
+          </div>
+
+          <div className="paper-card-footer">
+            <div className="paper-card-source">
+              <Globe size={12} />
+              <span>{paper.venue || '未知来源'}</span>
+            </div>
+            <span className={`status-badge ${paper.parse_status}`}>
+              {parseLabel(paper.parse_status)}
+            </span>
           </div>
         </div>
       </button>

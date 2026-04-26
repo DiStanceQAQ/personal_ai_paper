@@ -1,5 +1,5 @@
 import React from 'react';
-import { Cpu, Zap, FileText } from 'lucide-react';
+import { Cpu, Zap, FileText, Globe, BookOpen } from 'lucide-react';
 import type { Paper, KnowledgeCard, AgentStatus, Passage } from '../../types';
 import { KnowledgeCardFancy } from '../ui/KnowledgeCardFancy';
 
@@ -17,6 +17,18 @@ interface InspectorProps {
   cardTabs: readonly string[];
   cardLabel: (type: string) => string;
   parseLabel: (status: string) => string;
+}
+
+function relationLabel(rel: string): string {
+  const labels: Record<string, string> = {
+    baseline: '基础理论/基准',
+    competing: '竞争方案',
+    inspiring: '灵感来源',
+    result_comparison: '对比分析',
+    background: '背景背景',
+    unclassified: '未分类',
+  };
+  return labels[rel] || rel;
 }
 
 export const Inspector: React.FC<InspectorProps> = ({
@@ -48,25 +60,44 @@ export const Inspector: React.FC<InspectorProps> = ({
                 <h2>{selectedPaper.title || '未命名论文'}</h2>
                 <p className="paper-authors">{selectedPaper.authors || '作者未知'}</p>
               </div>
+
+              {selectedPaper.abstract && (
+                <div className="inspector-section">
+                  <div className="abstract-card">
+                    <p>{selectedPaper.abstract}</p>
+                  </div>
+                </div>
+              )}
+
               <div className="ai-supercharge">
                 <button className="btn-ai-extract" onClick={onExtract}>
-                  <Cpu size={16} fill="white" />
+                  <Cpu size={16} />
                   <span>一键执行 AI 深度解析</span>
                 </button>
               </div>
+
               <div className="inspector-section">
                 <div className="section-title">核心元数据</div>
-                <div className="meta-pills">
+                <div className="meta-pills-grid">
                   <div className="meta-pill">
                     <label>出版年份</label>
                     <span>{selectedPaper.year || '未知'}</span>
                   </div>
                   <div className="meta-pill">
                     <label>研究关系</label>
-                    <span>{selectedPaper.relation_to_idea}</span>
+                    <span>{relationLabel(selectedPaper.relation_to_idea)}</span>
+                  </div>
+                  <div className="meta-pill">
+                    <label>发表渠道</label>
+                    <span>{selectedPaper.venue || '未知'}</span>
+                  </div>
+                  <div className="meta-pill">
+                    <label>DOI / 标识符</label>
+                    <span>{selectedPaper.doi || '无'}</span>
                   </div>
                 </div>
               </div>
+
               <div className="inspector-section">
                 <div className="section-title">知识卡片</div>
                 <div className="tabs">
@@ -86,6 +117,11 @@ export const Inspector: React.FC<InspectorProps> = ({
                   {visibleCards.map((card) => (
                     <KnowledgeCardFancy key={card.id} card={card} cardLabel={cardLabel} />
                   ))}
+                  {visibleCards.length === 0 && (
+                    <div className="empty-state-small" style={{ textAlign: 'center', padding: '24px', opacity: 0.5, border: '1px dashed var(--border)', borderRadius: '12px' }}>
+                      <p>该分类下暂无内容</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </>

@@ -4,8 +4,6 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import pymupdf  # PyMuPDF
-
 
 def extract_passages_from_pdf(
     file_path: Path,
@@ -21,6 +19,8 @@ def extract_passages_from_pdf(
     passages: list[dict[str, Any]] = []
 
     try:
+        import pymupdf  # PyMuPDF
+
         doc = pymupdf.open(str(file_path))
     except Exception:
         # File is not a valid PDF or cannot be opened

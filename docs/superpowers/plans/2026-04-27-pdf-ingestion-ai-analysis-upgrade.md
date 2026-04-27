@@ -838,11 +838,11 @@ git commit -m "feat: expose richer MCP source metadata"
 - Create: `scripts/eval_pdf_pipeline.py`
 - Test: `tests/eval/test_pdf_parse_quality.py`
 
-- [ ] Evaluate generated golden PDFs for heading detection, table isolation, OCR routing, references filtering, source stability, and passage token budgets.
-- [ ] Output JSON metrics with keys: `heading_recall`, `table_isolation`, `reference_filter_precision`, `stable_source_ratio`, `max_token_violation_count`, `parse_success_rate`.
-- [ ] Run: `pytest tests/eval/test_pdf_parse_quality.py -q`
-- [ ] Expected thresholds: `parse_success_rate=1.0`, `stable_source_ratio>=0.95`, `max_token_violation_count=0`, `reference_filter_precision>=0.90`.
-- [ ] Commit:
+- [x] Evaluate generated golden PDFs for heading detection, table isolation, OCR routing, references filtering, source stability, and passage token budgets.
+- [x] Output JSON metrics with keys: `heading_recall`, `table_isolation`, `reference_filter_precision`, `stable_source_ratio`, `max_token_violation_count`, `parse_success_rate`.
+- [x] Run: `pytest tests/eval/test_pdf_parse_quality.py -q`
+- [x] Expected thresholds: `parse_success_rate=1.0`, `stable_source_ratio>=0.95`, `max_token_violation_count=0`, `reference_filter_precision>=0.90`.
+- [x] Commit:
 
 ```bash
 git add tests/eval/test_pdf_parse_quality.py scripts/eval_pdf_pipeline.py

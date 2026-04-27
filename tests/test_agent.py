@@ -206,6 +206,62 @@ async def test_agent_config_llamaparse_only_update_preserves_llm_settings(
     assert data["has_llamaparse_api_key"] is True
 
 
+@pytest.mark.asyncio
+async def test_analyze_route_returns_pipeline_run_metadata(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The analyze endpoint keeps the legacy status while exposing pipeline run counts."""
+    import db as db_module
+    import routes_agent
+
+    conn = db_module.get_connection()
+    try:
+        conn.execute("INSERT INTO spaces (id, name) VALUES (?, ?)", ("space-1", "A"))
+        conn.execute(
+            "INSERT INTO papers (id, space_id, title) VALUES (?, ?, ?)",
+            ("paper-1", "space-1", "Paper"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    calls: list[tuple[str, str]] = []
+
+    async def fake_analyze_paper_with_llm(
+        paper_id: str,
+        space_id: str,
+    ) -> dict[str, object]:
+        calls.append((paper_id, space_id))
+        return {
+            "status": "success",
+            "card_count": 3,
+            "analysis_run_id": "analysis-run-1",
+            "accepted_card_count": 3,
+            "rejected_card_count": 1,
+            "metadata_confidence": 0.73,
+        }
+
+    monkeypatch.setattr(
+        routes_agent,
+        "analyze_paper_with_llm",
+        fake_analyze_paper_with_llm,
+    )
+
+    resp = await client.post("/api/agent/analyze/paper-1")
+
+    assert resp.status_code == 200
+    assert calls == [("paper-1", "space-1")]
+    assert resp.json() == {
+        "status": "success",
+        "card_count": 3,
+        "analysis_run_id": "analysis-run-1",
+        "accepted_card_count": 3,
+        "rejected_card_count": 1,
+        "metadata_confidence": 0.73,
+    }
+
+
 # ── MCP Tool Access Control ──────────────────────────────────────────
 
 

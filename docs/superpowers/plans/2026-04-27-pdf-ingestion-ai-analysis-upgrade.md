@@ -682,7 +682,7 @@ git commit -m "feat: extract source-grounded AI card batches"
 - [x] Limit final AI-generated cards to 20 by default while keeping rejected and overflow diagnostics in `analysis_runs`.
 - [x] Run: `pytest tests/test_analysis_pipeline_dedup.py -q`
 - [x] Expected: PASS; duplicate method/result cards collapse deterministically.
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add analysis_pipeline.py tests/test_analysis_pipeline_dedup.py
@@ -717,10 +717,10 @@ git commit -m "feat: preserve user cards during AI analysis"
 - Test: `tests/test_agent_executor.py`
 - Test: `tests/test_agent.py`
 
-- [ ] Replace single-prompt analysis with `run_paper_analysis(paper_id, space_id)`.
-- [ ] Keep `/api/agent/analyze/{paper_id}` response compatible and add `analysis_run_id`, `accepted_card_count`, `rejected_card_count`, `metadata_confidence`.
-- [ ] Run: `pytest tests/test_agent_executor.py tests/test_agent.py -q`
-- [ ] Expected: PASS with mocked analysis pipeline.
+- [x] Replace single-prompt analysis with `run_paper_analysis(paper_id, space_id)`.
+- [x] Keep `/api/agent/analyze/{paper_id}` response compatible and add `analysis_run_id`, `accepted_card_count`, `rejected_card_count`, `metadata_confidence`.
+- [x] Run: `pytest tests/test_agent_executor.py tests/test_agent.py -q`
+- [x] Expected: PASS with mocked analysis pipeline.
 - [ ] Commit:
 
 ```bash

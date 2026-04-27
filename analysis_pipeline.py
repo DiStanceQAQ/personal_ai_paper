@@ -13,6 +13,7 @@ from typing import Any, TypeAlias
 from pydantic import BaseModel, ValidationError
 
 from analysis_models import (
+    AnalysisQualityReport,
     CardExtraction,
     CardExtractionBatch,
     MergedAnalysisResult,
@@ -27,6 +28,7 @@ from analysis_verifier import (
     SourceVerificationResult,
     verify_extraction_batch_sources,
 )
+from db import get_connection
 from llm_client import LLMStructuredOutputError, call_llm_schema
 from pdf_chunker import count_text_tokens
 
@@ -109,6 +111,14 @@ class CardRankingResult:
     cards: list[CardExtraction]
     rejected_cards: list[RejectedCardDiagnostic]
     diagnostics: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PaperAnalysisRunResult:
+    """Persisted output from a complete multi-stage paper analysis run."""
+
+    analysis_run_id: str
+    result: MergedAnalysisResult
 
 
 @dataclass(frozen=True)
@@ -706,6 +716,300 @@ def deduplicate_and_rank_cards_stage(
         rejected_cards=list(rejected_cards),
         diagnostics=diagnostics,
     )
+
+
+async def run_paper_analysis(paper_id: str, space_id: str) -> PaperAnalysisRunResult:
+    """Run metadata extraction, card extraction, ranking, and persistence."""
+    conn = get_connection()
+    try:
+        _ensure_analysis_paper_exists(conn, paper_id, space_id)
+        passages = _load_analysis_passages(conn, paper_id, space_id)
+        if not passages:
+            raise ValueError("No passages found. Please parse PDF first.")
+        elements = _load_analysis_elements(conn, paper_id, space_id)
+        grobid_metadata = _load_latest_grobid_metadata(conn, paper_id, space_id)
+        provider, model = _load_llm_identity(conn)
+    finally:
+        conn.close()
+
+    metadata = await extract_metadata_stage(
+        paper_id,
+        passages,
+        elements,
+        grobid_metadata,
+    )
+    batches = select_analysis_passage_batches(passages)
+    card_result = await extract_card_batches_stage(paper_id, space_id, batches)
+    ranked_cards = deduplicate_and_rank_cards_stage(
+        card_result.accepted_cards,
+        rejected_cards=card_result.rejected_cards,
+        batches=batches,
+    )
+    result = _merged_analysis_result(
+        paper_id=paper_id,
+        space_id=space_id,
+        metadata=metadata,
+        passages=passages,
+        batches=batches,
+        ranked_cards=ranked_cards,
+        provider=provider,
+        model=model,
+        grobid_metadata_present=bool(grobid_metadata),
+    )
+
+    conn = get_connection()
+    try:
+        _update_paper_metadata(conn, result)
+        analysis_run_id = persist_analysis_result(conn, result)
+        conn.commit()
+    finally:
+        conn.close()
+
+    return PaperAnalysisRunResult(
+        analysis_run_id=analysis_run_id,
+        result=result,
+    )
+
+
+def _ensure_analysis_paper_exists(
+    conn: sqlite3.Connection,
+    paper_id: str,
+    space_id: str,
+) -> None:
+    row = conn.execute(
+        "SELECT 1 FROM papers WHERE id = ? AND space_id = ?",
+        (paper_id, space_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("Paper not found")
+
+
+def _load_analysis_passages(
+    conn: sqlite3.Connection,
+    paper_id: str,
+    space_id: str,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT id, paper_id, space_id, section, page_number, paragraph_index,
+               original_text, parse_confidence, passage_type, parse_run_id,
+               element_ids_json, heading_path_json, bbox_json, token_count,
+               char_count, content_hash, parser_backend, extraction_method,
+               quality_flags_json
+        FROM passages
+        WHERE paper_id = ? AND space_id = ?
+        ORDER BY page_number, paragraph_index, id
+        """,
+        (paper_id, space_id),
+    ).fetchall()
+    return [_analysis_passage_from_row(row) for row in rows]
+
+
+def _analysis_passage_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    data = _row_dict(row)
+    data["heading_path"] = _json_list_from_db(data.pop("heading_path_json", "[]"))
+    data["element_ids"] = _json_list_from_db(data.pop("element_ids_json", "[]"))
+    data["quality_flags"] = _json_list_from_db(data.pop("quality_flags_json", "[]"))
+    data["bbox"] = _json_value_from_db(data.pop("bbox_json", None))
+    return data
+
+
+def _load_analysis_elements(
+    conn: sqlite3.Connection,
+    paper_id: str,
+    space_id: str,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT id, parse_run_id, paper_id, space_id, element_index, element_type,
+               text, page_number, bbox_json, heading_path_json, metadata_json
+        FROM document_elements
+        WHERE paper_id = ? AND space_id = ?
+        ORDER BY element_index, id
+        """,
+        (paper_id, space_id),
+    ).fetchall()
+    return [_analysis_element_from_row(row) for row in rows]
+
+
+def _analysis_element_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    data = _row_dict(row)
+    data["heading_path"] = _json_list_from_db(data.pop("heading_path_json", "[]"))
+    data["metadata"] = _json_object_from_db(data.pop("metadata_json", "{}"))
+    data["bbox"] = _json_value_from_db(data.pop("bbox_json", None))
+    return data
+
+
+def _load_latest_grobid_metadata(
+    conn: sqlite3.Connection,
+    paper_id: str,
+    space_id: str,
+) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT metadata_json
+        FROM parse_runs
+        WHERE paper_id = ? AND space_id = ?
+        ORDER BY completed_at DESC, started_at DESC, id DESC
+        LIMIT 1
+        """,
+        (paper_id, space_id),
+    ).fetchone()
+    if row is None:
+        return {}
+
+    metadata = _json_object_from_db(row["metadata_json"])
+    grobid = metadata.get("grobid")
+    if not isinstance(grobid, Mapping):
+        return {}
+    grobid_metadata = grobid.get("metadata")
+    if not isinstance(grobid_metadata, Mapping):
+        return {}
+    return {str(key): value for key, value in grobid_metadata.items()}
+
+
+def _load_llm_identity(conn: sqlite3.Connection) -> tuple[str, str]:
+    rows = conn.execute(
+        "SELECT key, value FROM app_state WHERE key IN (?, ?)",
+        ("llm_provider", "llm_model"),
+    ).fetchall()
+    config = {str(row["key"]): str(row["value"]) for row in rows}
+    provider = config.get("llm_provider", "openai").strip() or "openai"
+    model = config.get("llm_model", "gpt-4o").strip() or "gpt-4o"
+    return provider, model
+
+
+def _merged_analysis_result(
+    *,
+    paper_id: str,
+    space_id: str,
+    metadata: PaperMetadataExtraction,
+    passages: Sequence[PipelineInput],
+    batches: Sequence[AnalysisPassageBatch],
+    ranked_cards: CardRankingResult,
+    provider: str,
+    model: str,
+    grobid_metadata_present: bool,
+) -> MergedAnalysisResult:
+    diagnostics = {
+        **ranked_cards.diagnostics,
+        "analysis_batch_count": len(batches),
+        "source_passage_count": len(passages),
+    }
+    warnings: list[str] = []
+    if not batches:
+        warnings.append("no_analysis_batches_selected")
+    if ranked_cards.rejected_cards:
+        warnings.append(f"{len(ranked_cards.rejected_cards)} rejected cards omitted")
+
+    return MergedAnalysisResult(
+        paper_id=paper_id,
+        space_id=space_id,
+        metadata=metadata,
+        cards=ranked_cards.cards,
+        quality=AnalysisQualityReport(
+            accepted_card_count=len(ranked_cards.cards),
+            rejected_card_count=len(ranked_cards.rejected_cards),
+            source_coverage=_analysis_source_coverage(ranked_cards.cards, passages),
+            warnings=warnings,
+            diagnostics=diagnostics,
+        ),
+        model=model,
+        provider=provider,
+        extractor_version="analysis-v2",
+        metadata_extra={
+            "analysis_batch_count": len(batches),
+            "source_passage_count": len(passages),
+            "grobid_metadata_present": grobid_metadata_present,
+        },
+    )
+
+
+def _analysis_source_coverage(
+    cards: Sequence[CardExtraction],
+    passages: Sequence[PipelineInput],
+) -> float | None:
+    available_source_ids = {
+        _optional_string(_object_to_mapping(passage), "id", "source_id")
+        for passage in passages
+    }
+    available_source_ids.discard("")
+    if not available_source_ids:
+        return None
+
+    cited_source_ids = {
+        source_id
+        for card in cards
+        for source_id in card.source_passage_ids
+        if source_id in available_source_ids
+    }
+    return len(cited_source_ids) / len(available_source_ids)
+
+
+def _update_paper_metadata(
+    conn: sqlite3.Connection,
+    result: MergedAnalysisResult,
+) -> None:
+    metadata = result.metadata
+    authors = ", ".join(metadata.authors)
+    conn.execute(
+        """
+        UPDATE papers
+        SET title = CASE WHEN ? != '' THEN ? ELSE title END,
+            authors = CASE WHEN ? != '' THEN ? ELSE authors END,
+            year = CASE WHEN ? IS NOT NULL THEN ? ELSE year END,
+            abstract = CASE WHEN ? != '' THEN ? ELSE abstract END,
+            venue = CASE WHEN ? != '' THEN ? ELSE venue END,
+            doi = CASE WHEN ? != '' THEN ? ELSE doi END,
+            arxiv_id = CASE WHEN ? != '' THEN ? ELSE arxiv_id END
+        WHERE id = ? AND space_id = ?
+        """,
+        (
+            metadata.title,
+            metadata.title,
+            authors,
+            authors,
+            metadata.year,
+            metadata.year,
+            metadata.abstract,
+            metadata.abstract,
+            metadata.venue,
+            metadata.venue,
+            metadata.doi,
+            metadata.doi,
+            metadata.arxiv_id,
+            metadata.arxiv_id,
+            result.paper_id,
+            result.space_id,
+        ),
+    )
+
+
+def _row_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return {key: row[key] for key in row.keys()}
+
+
+def _json_value_from_db(value: Any) -> Any:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
+
+
+def _json_object_from_db(value: Any) -> dict[str, Any]:
+    parsed = _json_value_from_db(value)
+    if not isinstance(parsed, Mapping):
+        return {}
+    return {str(key): item for key, item in parsed.items()}
+
+
+def _json_list_from_db(value: Any) -> list[str]:
+    parsed = _json_value_from_db(value)
+    if not isinstance(parsed, Sequence) or isinstance(parsed, (bytes, bytearray, str)):
+        return []
+    return [str(item).strip() for item in parsed if str(item).strip()]
 
 
 def persist_analysis_result(
@@ -1391,9 +1695,11 @@ def _dedupe_strings(values: Sequence[str]) -> list[str]:
 __all__ = [
     "AnalysisPassageBatch",
     "CardRankingResult",
+    "PaperAnalysisRunResult",
     "deduplicate_and_rank_cards_stage",
     "extract_card_batches_stage",
     "extract_metadata_stage",
     "persist_analysis_result",
+    "run_paper_analysis",
     "select_analysis_passage_batches",
 ]

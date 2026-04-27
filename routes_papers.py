@@ -10,7 +10,13 @@ from fastapi import APIRouter, Body, HTTPException, UploadFile
 
 import config
 from db import get_connection
-from parser import extract_passages_from_pdf
+from pdf_backend_base import ParserBackendError
+from parser import (
+    chunk_parse_document,
+    inspect_pdf,
+    persist_parse_result,
+    route_parse,
+)
 from search import FTS_TABLE
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
@@ -57,6 +63,38 @@ def _papers_dir(space_id: str) -> Path:
     p = config.SPACES_DIR / space_id / "papers"
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _parse_response(
+    *,
+    status: str,
+    paper_id: str,
+    passage_count: int,
+    parse_run_id: str | None,
+    backend: str | None,
+    quality_score: float | None,
+    warnings: list[str] | None,
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "paper_id": paper_id,
+        "passage_count": passage_count,
+        "parse_run_id": parse_run_id,
+        "backend": backend,
+        "quality_score": quality_score,
+        "warnings": warnings or [],
+    }
+
+
+def _parser_error_warnings(
+    warnings: list[str] | None,
+    exc: BaseException,
+) -> list[str]:
+    merged = list(warnings or [])
+    error_detail = " ".join(str(exc).split())
+    if error_detail:
+        merged.append(f"parser_error:{error_detail}")
+    return merged
 
 
 @router.post("/upload")
@@ -238,47 +276,52 @@ async def parse_paper(paper_id: str) -> dict[str, Any]:
         conn.commit()
 
         space_id = str(row["space_id"])
-        passages = extract_passages_from_pdf(file_path, paper_id, space_id)
-
-        if not passages:
-            # Parsing produced no passages
+        quality = inspect_pdf(file_path)
+        try:
+            document = route_parse(file_path, paper_id, space_id, quality)
+        except ParserBackendError as exc:
+            conn.rollback()
             conn.execute(
                 "UPDATE papers SET parse_status = 'error' WHERE id = ?",
                 (paper_id,),
             )
             conn.commit()
-            return {"status": "error", "paper_id": paper_id, "passage_count": 0}
+            return _parse_response(
+                status="error",
+                paper_id=paper_id,
+                passage_count=0,
+                parse_run_id=None,
+                backend=None,
+                quality_score=quality.quality_score,
+                warnings=_parser_error_warnings(quality.warnings, exc),
+            )
 
-        # Replace existing parsed content for this paper after successful extraction.
-        # Passage IDs are regenerated on each parse, so stale rows must be cleared.
-        conn.execute(
-            """UPDATE knowledge_cards
-               SET source_passage_id = NULL, updated_at = datetime('now')
-               WHERE paper_id = ? AND source_passage_id IS NOT NULL""",
-            (paper_id,),
+        passages = chunk_parse_document(document)
+
+        if not passages:
+            conn.rollback()
+            conn.execute(
+                "UPDATE papers SET parse_status = 'error' WHERE id = ?",
+                (paper_id,),
+            )
+            conn.commit()
+            return _parse_response(
+                status="error",
+                paper_id=paper_id,
+                passage_count=0,
+                parse_run_id=None,
+                backend=document.backend,
+                quality_score=document.quality.quality_score,
+                warnings=document.quality.warnings,
+            )
+
+        parse_run_id = persist_parse_result(
+            conn,
+            paper_id,
+            space_id,
+            document,
+            passages,
         )
-        conn.execute(f"DELETE FROM {FTS_TABLE} WHERE paper_id = ?", (paper_id,))
-        conn.execute("DELETE FROM passages WHERE paper_id = ?", (paper_id,))
-
-        # Insert passages and sync to FTS
-        for p in passages:
-            conn.execute(
-                """INSERT OR REPLACE INTO passages
-                   (id, paper_id, space_id, section, page_number,
-                    paragraph_index, original_text, parse_confidence, passage_type)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    p["id"], p["paper_id"], p["space_id"], p["section"],
-                    p["page_number"], p["paragraph_index"], p["original_text"],
-                    p["parse_confidence"], p["passage_type"],
-                ),
-            )
-            conn.execute(
-                f"""INSERT OR REPLACE INTO {FTS_TABLE}
-                   (passage_id, paper_id, space_id, section, original_text)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (p["id"], p["paper_id"], p["space_id"], p["section"], p["original_text"]),
-            )
 
         conn.execute(
             "UPDATE papers SET parse_status = 'parsed' WHERE id = ?",
@@ -286,16 +329,21 @@ async def parse_paper(paper_id: str) -> dict[str, Any]:
         )
         conn.commit()
 
-        return {
-            "status": "parsed",
-            "paper_id": paper_id,
-            "passage_count": len(passages),
-        }
+        return _parse_response(
+            status="parsed",
+            paper_id=paper_id,
+            passage_count=len(passages),
+            parse_run_id=parse_run_id,
+            backend=document.backend,
+            quality_score=document.quality.quality_score,
+            warnings=document.quality.warnings,
+        )
     except HTTPException:
         raise
     except Exception as e:
         print(f"Error parsing paper {paper_id}:")
         traceback.print_exc()
+        conn.rollback()
         conn.execute(
             "UPDATE papers SET parse_status = 'error' WHERE id = ?",
             (paper_id,),

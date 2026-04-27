@@ -61,7 +61,7 @@ async def _setup_space_with_passage(client: AsyncClient, text: str = "transforme
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
         doc = pymupdf.open()
         page = doc.new_page()
-        page.insert_text((50, 50), text, fontsize=11)
+        page.insert_text((72, 150), text, fontsize=11)
         doc.save(f.name)
         doc.close()
         pdf_bytes = Path(f.name).read_bytes()
@@ -72,7 +72,14 @@ async def _setup_space_with_passage(client: AsyncClient, text: str = "transforme
         files={"file": ("test.pdf", pdf_bytes, "application/pdf")},
     )
     paper_id = resp.json()["id"]
-    await client.post(f"/api/papers/{paper_id}/parse")
+    parse_resp = await client.post(f"/api/papers/{paper_id}/parse")
+    assert parse_resp.status_code == 200
+    parse_data = parse_resp.json()
+    assert parse_data["status"] == "parsed"
+    assert parse_data["parse_run_id"]
+    assert parse_data["backend"]
+    assert "quality_score" in parse_data
+    assert isinstance(parse_data["warnings"], list)
 
     return space_id
 
@@ -191,7 +198,10 @@ async def test_search_api_returns_results(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_search_api_no_results(client: AsyncClient) -> None:
     """Test search with no matching results."""
-    await _setup_space_with_passage(client, "transformer model")
+    await _setup_space_with_passage(
+        client,
+        "transformer model with enough surrounding context for body extraction",
+    )
 
     resp = await client.get("/api/search", params={"q": "xyzzy_notfound"})
     assert resp.status_code == 200
@@ -201,7 +211,10 @@ async def test_search_api_no_results(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_search_api_rejects_deleted_active_space(client: AsyncClient) -> None:
     """A stale deleted active space should not be searchable."""
-    space_id = await _setup_space_with_passage(client, "transformer model")
+    space_id = await _setup_space_with_passage(
+        client,
+        "transformer model with enough surrounding context for body extraction",
+    )
     delete_resp = await client.delete(f"/api/spaces/{space_id}")
     assert delete_resp.status_code == 200
 

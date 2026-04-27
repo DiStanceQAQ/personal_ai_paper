@@ -76,7 +76,7 @@ def _make_text_pdf(text: str) -> bytes:
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
         doc = pymupdf.open()  # type: ignore[no-untyped-call]
         page = doc.new_page()
-        page.insert_text((50, 50), text, fontsize=11)
+        page.insert_text((72, 150), text, fontsize=11)
         doc.save(f.name)  # type: ignore[no-untyped-call]
         doc.close()  # type: ignore[no-untyped-call]
         pdf_bytes = Path(f.name).read_bytes()
@@ -316,6 +316,19 @@ async def test_parse_paper(client: AsyncClient) -> None:
     data = resp.json()
     assert data["paper_id"] == paper_id
     assert data["status"] in ("parsed", "error")
+    assert set(data) >= {
+        "status",
+        "paper_id",
+        "passage_count",
+        "parse_run_id",
+        "backend",
+        "quality_score",
+        "warnings",
+    }
+    assert isinstance(data["warnings"], list)
+    if data["status"] == "parsed":
+        assert data["parse_run_id"]
+        assert data["backend"]
 
 
 @pytest.mark.asyncio
@@ -334,8 +347,57 @@ async def test_parse_preserves_error_status(client: AsyncClient) -> None:
     # Paper should still exist
     resp = await client.get(f"/api/papers/{paper_id}")
     assert resp.status_code == 200
-    # parse_status should be either 'parsed' or 'error', not 'pending'
-    assert resp.json()["parse_status"] in ("parsed", "error", "parsing")
+    # parse_status should be terminal after the parse request completes.
+    assert resp.json()["parse_status"] in ("parsed", "error")
+
+
+@pytest.mark.asyncio
+async def test_parse_invalid_pdf_returns_compatible_error_response(
+    client: AsyncClient,
+) -> None:
+    """Invalid PDFs should preserve the parse endpoint's legacy error contract."""
+    await _create_and_activate_space(client)
+
+    resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("invalid.pdf", b"not actually a pdf", "application/pdf")},
+    )
+    assert resp.status_code == 200
+    paper_id = resp.json()["id"]
+
+    parse_resp = await client.post(f"/api/papers/{paper_id}/parse")
+    assert parse_resp.status_code == 200
+    data = parse_resp.json()
+    assert data["status"] == "error"
+    assert data["paper_id"] == paper_id
+    assert data["passage_count"] == 0
+    assert data["parse_run_id"] is None
+    assert "backend" in data
+    assert "quality_score" in data
+    assert isinstance(data["warnings"], list)
+    assert data["warnings"]
+
+    paper_resp = await client.get(f"/api/papers/{paper_id}")
+    assert paper_resp.status_code == 200
+    assert paper_resp.json()["parse_status"] == "error"
+
+    import db as db_module
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        passage_count = conn.execute(
+            "SELECT COUNT(*) FROM passages WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchone()[0]
+        fts_count = conn.execute(
+            "SELECT COUNT(*) FROM passages_fts WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert passage_count == 0
+    assert fts_count == 0
 
 
 @pytest.mark.asyncio
@@ -390,27 +452,28 @@ async def test_reparsing_replaces_existing_passages_and_fts_rows(
 
     first_parse = await client.post(f"/api/papers/{paper_id}/parse")
     assert first_parse.status_code == 200
-    assert first_parse.json()["status"] == "parsed"
+    first_parse_data = first_parse.json()
+    assert first_parse_data["status"] == "parsed"
+    assert first_parse_data["parse_run_id"]
+    assert first_parse_data["backend"]
+    assert "quality_score" in first_parse_data
+    assert isinstance(first_parse_data["warnings"], list)
 
     first_passages = await client.get(f"/api/papers/{paper_id}/passages")
     assert first_passages.status_code == 200
     first_passages_data = first_passages.json()
     first_count = len(first_passages_data)
     assert first_count > 0
-    expected_provenance_defaults = {
-        "parse_run_id": None,
-        "element_ids_json": "[]",
-        "heading_path_json": "[]",
-        "bbox_json": None,
-        "token_count": None,
-        "char_count": None,
-        "content_hash": None,
-        "parser_backend": "",
-        "extraction_method": "",
-        "quality_flags_json": "[]",
-    }
-    for column_name, expected_value in expected_provenance_defaults.items():
-        assert first_passages_data[0][column_name] == expected_value
+    first_passage = first_passages_data[0]
+    assert first_passage["parse_run_id"] == first_parse_data["parse_run_id"]
+    assert first_passage["element_ids_json"] != "[]"
+    assert first_passage["heading_path_json"] is not None
+    assert first_passage["token_count"] is not None
+    assert first_passage["char_count"] is not None
+    assert first_passage["content_hash"]
+    assert first_passage["parser_backend"] == first_parse_data["backend"]
+    assert first_passage["extraction_method"]
+    assert first_passage["quality_flags_json"] is not None
 
     first_search = await client.get("/api/search", params={"q": "transformer"})
     assert first_search.status_code == 200
@@ -419,7 +482,10 @@ async def test_reparsing_replaces_existing_passages_and_fts_rows(
 
     second_parse = await client.post(f"/api/papers/{paper_id}/parse")
     assert second_parse.status_code == 200
-    assert second_parse.json()["status"] == "parsed"
+    second_parse_data = second_parse.json()
+    assert second_parse_data["status"] == "parsed"
+    assert second_parse_data["parse_run_id"]
+    assert second_parse_data["parse_run_id"] != first_parse_data["parse_run_id"]
 
     second_passages = await client.get(f"/api/papers/{paper_id}/passages")
     assert second_passages.status_code == 200

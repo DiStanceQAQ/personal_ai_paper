@@ -12,6 +12,25 @@ npm --prefix frontend install
 npm run tauri build
 ```
 
+This default command bundles the normal local parser stack: PyMuPDF,
+PyMuPDF4LLM, the parser router, structured chunking, persistence, and analysis
+modules. It does not intentionally bundle heavy optional parser dependencies.
+
+To build a sidecar that includes Docling for advanced local PDF parsing, install
+the optional extra before building:
+
+```bash
+.venv/bin/python -m pip install -e ".[dev,pdf-advanced]"
+.venv/bin/python scripts/build_sidecars.py --target all
+npm run tauri build
+```
+
+GROBID is not bundled in the desktop app. Run it as a separate HTTP service and
+configure `grobid_base_url` in the app database. LlamaParse is also not bundled;
+it uses the runtime HTTP client and only runs when a LlamaParse API key is
+configured. See [PDF ingestion configuration](pdf-ingestion.md) for parser
+backend order, setup commands, and privacy notes.
+
 The root `npm run tauri build` script sets CI mode for the Tauri CLI. On macOS this skips Finder AppleScript DMG window customization, which keeps local automation and CI builds from hanging while still producing a valid unsigned DMG.
 
 The unsigned `.dmg` is generated under:
@@ -33,6 +52,9 @@ npm --prefix frontend install
 python scripts/build_sidecars.py --target all
 npm run tauri build
 ```
+
+Use `python -m pip install -e ".[dev,pdf-advanced]"` instead when building a
+Windows sidecar that should include Docling.
 
 Formal distribution requires Windows code signing.
 

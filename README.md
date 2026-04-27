@@ -29,6 +29,16 @@ make frontend-install
 npm install
 ```
 
+## PDF 解析后端
+
+默认安装包含 PyMuPDF 和 PyMuPDF4LLM，适合本地解析带原生文本的论文 PDF。需要本地高级版面解析时安装：
+
+```bash
+pip install -e ".[pdf-advanced]"
+```
+
+解析路由会根据 PDF 质量自动选择 PyMuPDF4LLM、Docling、LlamaParse 或旧版 PyMuPDF；GROBID 可作为可选的论文元数据和参考文献增强服务。详细配置、隐私影响和后端取舍见 [docs/pdf-ingestion.md](docs/pdf-ingestion.md)。
+
 ## 启动后端 Web 版
 
 这是最简单的启动方式，适合先确认 API 和内置静态页面可用：

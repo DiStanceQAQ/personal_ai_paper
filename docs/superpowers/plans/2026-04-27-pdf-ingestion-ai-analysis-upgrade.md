@@ -889,11 +889,11 @@ git commit -m "test: add PDF pipeline performance budget"
 - Modify: `README.md`
 - Modify: `docs/packaging.md`
 
-- [ ] Document backend order, optional dependencies, GROBID setup, Docling setup, LlamaParse setup, privacy implications, and expected quality modes.
-- [ ] Include exact commands for installing local advanced parsing: `pip install -e ".[pdf-advanced]"`.
-- [ ] Run: `python -m py_compile api_sidecar.py`
-- [ ] Expected: PASS.
-- [ ] Commit:
+- [x] Document backend order, optional dependencies, GROBID setup, Docling setup, LlamaParse setup, privacy implications, and expected quality modes.
+- [x] Include exact commands for installing local advanced parsing: `pip install -e ".[pdf-advanced]"`.
+- [x] Run: `python -m py_compile api_sidecar.py`
+- [x] Expected: PASS.
+- [x] Commit:
 
 ```bash
 git add docs/pdf-ingestion.md README.md docs/packaging.md

@@ -1,5 +1,17 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import type { AgentStatus, KnowledgeCard, Paper, Passage, SearchResult, Space } from './types';
+import type {
+  AgentStatus,
+  DocumentElement,
+  DocumentElementType,
+  DocumentTable,
+  KnowledgeCard,
+  Paper,
+  ParsePaperResponse,
+  ParseRun,
+  Passage,
+  SearchResult,
+  Space,
+} from './types';
 
 const DEFAULT_BACKEND = 'http://127.0.0.1:8000';
 
@@ -60,7 +72,20 @@ export const api = {
     return request<Paper>('/api/papers/upload', { method: 'POST', body });
   },
   parsePaper: (paperId: string) =>
-    request<{ status: string; paper_id: string; passage_count: number }>(`/api/papers/${paperId}/parse`, { method: 'POST' }),
+    request<ParsePaperResponse>(`/api/papers/${paperId}/parse`, { method: 'POST' }),
+  listParseRuns: (paperId: string) => request<ParseRun[]>(`/api/papers/${paperId}/parse-runs`),
+  listDocumentElements: (
+    paperId: string,
+    filters: { type?: DocumentElementType; page?: number; limit?: number } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (filters.type) params.set('type', filters.type);
+    if (filters.page !== undefined) params.set('page', String(filters.page));
+    if (filters.limit !== undefined) params.set('limit', String(filters.limit));
+    const query = params.toString();
+    return request<DocumentElement[]>(`/api/papers/${paperId}/elements${query ? `?${query}` : ''}`);
+  },
+  listDocumentTables: (paperId: string) => request<DocumentTable[]>(`/api/papers/${paperId}/tables`),
   listPassages: (paperId: string) => request<Passage[]>(`/api/papers/${paperId}/passages`),
   listCards: (paperId?: string, cardType?: string) => {
     const params = new URLSearchParams();

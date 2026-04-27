@@ -511,11 +511,11 @@ git commit -m "feat: expose PDF parse diagnostics"
 - Modify: `frontend/src/types.ts`
 - Modify: `frontend/src/api.ts`
 
-- [ ] Add TypeScript types `ParseRun`, `DocumentElement`, `DocumentTable`, and extended parse response fields.
-- [ ] Add API methods `listParseRuns`, `listDocumentElements`, and `listDocumentTables`.
-- [ ] Run: `npm run frontend:typecheck`
-- [ ] Expected: PASS.
-- [ ] Commit:
+- [x] Add TypeScript types `ParseRun`, `DocumentElement`, `DocumentTable`, and extended parse response fields.
+- [x] Add API methods `listParseRuns`, `listDocumentElements`, and `listDocumentTables`.
+- [x] Run: `npm run frontend:typecheck`
+- [x] Expected: PASS.
+- [x] Commit:
 
 ```bash
 git add frontend/src/types.ts frontend/src/api.ts

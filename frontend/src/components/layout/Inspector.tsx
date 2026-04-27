@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Cpu, FileText, Plus, Edit2 } from 'lucide-react';
+import { AlertTriangle, Clock3, Cpu, Database, Edit2, FileText, Gauge, Plus, Server, Table2 } from 'lucide-react';
 import type { Paper, KnowledgeCard, AgentStatus, Space } from '../../types';
 import { KnowledgeCardFancy } from '../ui/KnowledgeCardFancy';
 
@@ -35,6 +35,28 @@ function relationLabel(rel: string): string {
   return labels[rel] || rel;
 }
 
+function formatQualityScore(score: number | null | undefined): string {
+  if (score == null) return '未知';
+  const normalized = score <= 1 ? score * 100 : score;
+  return `${Math.round(normalized)}%`;
+}
+
+function formatCount(count: number | null | undefined): string {
+  return typeof count === 'number' ? count.toLocaleString() : '未知';
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return '未知';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '未知';
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
 export const Inspector: React.FC<InspectorProps> = ({
   isOpen,
   onToggle,
@@ -56,6 +78,7 @@ export const Inspector: React.FC<InspectorProps> = ({
 }) => {
   const [newCardText, setNewCardText] = useState('');
   const [isAdding, setIsAdding] = useState(false);
+  const parseDiagnostics = selectedPaper?.parse_diagnostics;
 
   const handleAddManual = () => {
     if (!newCardText.trim()) return;
@@ -102,6 +125,42 @@ export const Inspector: React.FC<InspectorProps> = ({
                   <Cpu size={16} />
                   <span>一键执行 AI 深度解析</span>
                 </button>
+              </div>
+
+              <div className="inspector-section">
+                <div className="section-title">解析质量</div>
+                <div className="parse-quality-grid">
+                  <div className="parse-quality-item">
+                    <Server size={14} />
+                    <label>解析器</label>
+                    <span>{parseDiagnostics?.parser_backend || '未知'}</span>
+                  </div>
+                  <div className="parse-quality-item">
+                    <Gauge size={14} />
+                    <label>质量评分</label>
+                    <span>{formatQualityScore(parseDiagnostics?.quality_score)}</span>
+                  </div>
+                  <div className={parseDiagnostics?.warning_count ? 'parse-quality-item has-warning' : 'parse-quality-item'}>
+                    <AlertTriangle size={14} />
+                    <label>警告</label>
+                    <span>{formatCount(parseDiagnostics?.warning_count)}</span>
+                  </div>
+                  <div className="parse-quality-item">
+                    <Database size={14} />
+                    <label>切片</label>
+                    <span>{formatCount(parseDiagnostics?.passage_count)}</span>
+                  </div>
+                  <div className="parse-quality-item">
+                    <Table2 size={14} />
+                    <label>表格</label>
+                    <span>{formatCount(parseDiagnostics?.table_count)}</span>
+                  </div>
+                  <div className="parse-quality-item wide">
+                    <Clock3 size={14} />
+                    <label>最后解析</label>
+                    <span>{formatDateTime(parseDiagnostics?.last_parse_time)}</span>
+                  </div>
+                </div>
               </div>
 
               <div className="inspector-section">

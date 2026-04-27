@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, Trash2, Calendar, Globe } from 'lucide-react';
+import { AlertTriangle, FileText, Gauge, Globe, Server, Trash2 } from 'lucide-react';
 import type { Paper } from '../../types';
 
 interface PaperCardProps {
@@ -17,6 +17,12 @@ export const PaperCard: React.FC<PaperCardProps> = ({
   onDelete,
   parseLabel,
 }) => {
+  const diagnostics = paper.parse_diagnostics;
+  const qualityScore =
+    diagnostics?.quality_score == null
+      ? null
+      : `${Math.round((diagnostics.quality_score <= 1 ? diagnostics.quality_score * 100 : diagnostics.quality_score))}%`;
+
   return (
     <div className={isSelected ? 'paper-card-wrapper active' : 'paper-card-wrapper'}>
       <button className="paper-card-main" onClick={() => onSelect(paper)}>
@@ -40,6 +46,28 @@ export const PaperCard: React.FC<PaperCardProps> = ({
               {parseLabel(paper.parse_status)}
             </span>
           </div>
+
+          {diagnostics && (
+            <div className="paper-card-diagnostics" aria-label="解析质量摘要">
+              <span className="diagnostic-chip" title="解析器">
+                <Server size={11} />
+                {diagnostics.parser_backend || '未知解析器'}
+              </span>
+              {qualityScore && (
+                <span className="diagnostic-chip" title="质量评分">
+                  <Gauge size={11} />
+                  {qualityScore}
+                </span>
+              )}
+              <span
+                className={diagnostics.warning_count > 0 ? 'diagnostic-chip warning' : 'diagnostic-chip'}
+                title="解析警告"
+              >
+                <AlertTriangle size={11} />
+                {diagnostics.warning_count}
+              </span>
+            </div>
+          )}
         </div>
       </button>
       <div className="paper-card-actions">

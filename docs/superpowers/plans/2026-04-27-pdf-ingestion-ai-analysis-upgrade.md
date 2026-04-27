@@ -530,10 +530,10 @@ git commit -m "feat: add frontend parse diagnostics API"
 - Modify: `frontend/src/components/layout/Inspector.tsx`
 - Modify: `frontend/src/styles.css`
 
-- [ ] Display parser backend, quality score, warning count, passage count, table count, and last parse time in the paper card or inspector.
-- [ ] Keep the UI compact and work-focused; do not add a marketing-style explanation panel.
-- [ ] Run: `npm run frontend:typecheck && npm run frontend:build`
-- [ ] Expected: PASS.
+- [x] Display parser backend, quality score, warning count, passage count, table count, and last parse time in the paper card or inspector.
+- [x] Keep the UI compact and work-focused; do not add a marketing-style explanation panel.
+- [x] Run: `npm run frontend:typecheck && npm run frontend:build`
+- [x] Expected: PASS.
 - [ ] Commit:
 
 ```bash

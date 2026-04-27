@@ -33,6 +33,15 @@ export interface Space {
   updated_at: string;
 }
 
+export interface PaperParseDiagnostics {
+  parser_backend: string | null;
+  quality_score: number | null;
+  warning_count: number;
+  passage_count: number | null;
+  table_count: number | null;
+  last_parse_time: string | null;
+}
+
 export interface Paper {
   id: string;
   space_id: string;
@@ -51,6 +60,7 @@ export interface Paper {
   file_hash: string;
   imported_at: string;
   parse_status: ParseStatus;
+  parse_diagnostics?: PaperParseDiagnostics;
 }
 
 export interface Passage {

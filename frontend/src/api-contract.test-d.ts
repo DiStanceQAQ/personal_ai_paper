@@ -3,6 +3,8 @@ import type {
   DocumentElement,
   DocumentElementType,
   DocumentTable,
+  Paper,
+  PaperParseDiagnostics,
   ParsePaperResponse,
   ParseRun,
 } from './types';
@@ -26,6 +28,9 @@ type _ListElementsReturnsElements = Assert<
 >;
 type _ListTablesReturnsTables = Assert<
   IsEqual<AsyncReturn<typeof api.listDocumentTables>, DocumentTable[]>
+>;
+type _PaperCarriesOptionalParseDiagnostics = Assert<
+  IsEqual<Paper['parse_diagnostics'], PaperParseDiagnostics | undefined>
 >;
 
 const elementType: DocumentElementType = 'paragraph';

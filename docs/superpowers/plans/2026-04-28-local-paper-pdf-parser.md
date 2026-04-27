@@ -1145,6 +1145,13 @@ def test_mineru_gate_allows_one_active_task() -> None:
     gate.release()
     assert gate.try_acquire() is True
     gate.release()
+
+
+def test_mineru_gate_acquire_can_timeout() -> None:
+    gate = MinerUConcurrencyGate(limit=1)
+    assert gate.acquire(timeout_seconds=0.01) is True
+    assert gate.acquire(timeout_seconds=0.01) is False
+    gate.release()
 ```
 
 - [ ] **Step 2: Run tests and verify failure**
@@ -1184,8 +1191,11 @@ class MinerUConcurrencyGate:
     def try_acquire(self) -> bool:
         return self._semaphore.acquire(blocking=False)
 
-    def acquire(self) -> None:
-        self._semaphore.acquire()
+    def acquire(self, *, timeout_seconds: float | None = None) -> bool:
+        if timeout_seconds is None:
+            self._semaphore.acquire()
+            return True
+        return self._semaphore.acquire(timeout=timeout_seconds)
 
     def release(self) -> None:
         self._semaphore.release()
@@ -1223,9 +1233,11 @@ class MinerUBackend:
         *,
         runner: Callable[[Path], dict[str, Any]] | None = None,
         gate: MinerUConcurrencyGate = MINERU_GATE,
+        acquire_timeout_seconds: float = 600.0,
     ) -> None:
         self._runner = runner or _run_installed_mineru
         self._gate = gate
+        self._acquire_timeout_seconds = acquire_timeout_seconds
 
     def is_available(self) -> bool:
         return self._runner is not _run_installed_mineru or _mineru_available()
@@ -1237,7 +1249,12 @@ class MinerUBackend:
         space_id: str,
         quality_report: PdfQualityReport,
     ) -> ParseDocument:
-        self._gate.acquire()
+        acquired = self._gate.acquire(timeout_seconds=self._acquire_timeout_seconds)
+        if not acquired:
+            raise ParserBackendUnavailable(
+                self.name,
+                f"timed out waiting for MinerU gate after {self._acquire_timeout_seconds}s",
+            )
         try:
             payload = self._runner(file_path)
             return _payload_to_document(payload, paper_id, space_id, quality_report)
@@ -1521,7 +1538,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from pdf_backend_grobid import GrobidClient
+from pdf_backend_grobid import GrobidClient, GrobidClientError
 
 
 def test_grobid_default_timeout_is_sixty_seconds() -> None:
@@ -1543,7 +1560,7 @@ def test_grobid_retries_once_on_timeout(monkeypatch: pytest.MonkeyPatch, tmp_pat
     client = GrobidClient(base_url="http://grobid.test", timeout=60.0, max_retries=1)
     monkeypatch.setattr(client._client, "post", fake_post)
 
-    with pytest.raises(httpx.TimeoutException):
+    with pytest.raises(GrobidClientError, match="processFulltextDocument"):
         client.process_fulltext(pdf)
 
     assert calls == 2
@@ -1564,16 +1581,20 @@ In `GrobidClient.__init__()`:
 ```python
 def __init__(
     self,
-    base_url: str = DEFAULT_GROBID_URL,
-    *,
+    base_url: str,
     timeout: float = 60.0,
+    *,
     max_retries: int = 1,
+    http_client: httpx.Client | None = None,
 ) -> None:
-    self.base_url = base_url.rstrip("/")
+    self.base_url = base_url.strip().rstrip("/")
     self.timeout = timeout
     self.max_retries = max_retries
-    self._client = httpx.Client(timeout=timeout)
+    self._owns_client = http_client is None
+    self._client = http_client or httpx.Client(timeout=timeout)
 ```
+
+Keep the existing `is_alive()` method that calls `/api/isalive`; the worker depends on it before trying fulltext extraction.
 
 Wrap the POST:
 
@@ -1589,11 +1610,11 @@ def _post_pdf(self, endpoint: str, file_path: Path) -> str:
                 )
             response.raise_for_status()
             return response.text
-        except (httpx.TimeoutException, httpx.HTTPError) as exc:
+        except (OSError, httpx.HTTPError) as exc:
             last_exc = exc
             if attempt >= self.max_retries:
-                raise
-    raise RuntimeError("GROBID request failed") from last_exc
+                raise GrobidClientError(f"GROBID {endpoint} request failed") from exc
+    raise GrobidClientError(f"GROBID {endpoint} request failed") from last_exc
 ```
 
 Update `process_header()` and `process_fulltext()` to call `_post_pdf()`.
@@ -2098,7 +2119,9 @@ conn.execute(
 
 - [ ] **Step 4: Implement parse result clone helper**
 
-Add an exported helper in `pdf_persistence.py`:
+Add `clone_parse_result` to the existing `__all__` list in `pdf_persistence.py`. The helper is in the same module as the existing `_json()` helper and `FTS_TABLE` import, so reuse those definitions directly.
+
+Add the exported helper in `pdf_persistence.py`:
 
 ```python
 def clone_parse_result(

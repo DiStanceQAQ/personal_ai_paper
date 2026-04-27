@@ -4,8 +4,10 @@ import tempfile
 from pathlib import Path
 
 import pymupdf
+import pytest
 import parser
 
+from pdf_backend_base import ParserBackendError
 from parser import (
     _guess_passage_type,
     _guess_section,
@@ -139,3 +141,16 @@ def test_extract_passages_delegates_to_legacy_backend(monkeypatch) -> None:
 
     assert result == expected
     assert calls == [(Path("paper.pdf"), "paper-1", "space-1")]
+
+
+def test_extract_passages_propagates_backend_parse_failures(monkeypatch) -> None:
+    """Parse-stage backend errors should preserve legacy propagation behavior."""
+
+    class FakeLegacyBackend:
+        def extract_passages(self, file_path: Path, paper_id: str, space_id: str):
+            raise ParserBackendError("legacy-pymupdf", "failed to parse PDF")
+
+    monkeypatch.setattr(parser, "LegacyPyMuPDFBackend", FakeLegacyBackend)
+
+    with pytest.raises(ParserBackendError, match="failed to parse PDF"):
+        parser.extract_passages_from_pdf(Path("paper.pdf"), "paper-1", "space-1")

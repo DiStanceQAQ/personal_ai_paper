@@ -16,6 +16,10 @@ from pdf_models import ParseDocument, ParseElement, PdfQualityReport
 _BACKEND_NAME = "legacy-pymupdf"
 
 
+class LegacyPyMuPDFOpenError(ParserBackendError):
+    """Raised when the legacy backend cannot import or open a PDF."""
+
+
 def _load_pymupdf() -> Any:
     """Import PyMuPDF lazily so availability failures are explicit."""
     if importlib.util.find_spec("pymupdf") is None:
@@ -72,7 +76,11 @@ class LegacyPyMuPDFBackend:
         except ParserBackendUnavailable:
             raise
         except Exception as exc:
-            raise ParserBackendError(self.name, "failed to open PDF", cause=exc) from exc
+            raise LegacyPyMuPDFOpenError(
+                self.name,
+                "failed to open PDF",
+                cause=exc,
+            ) from exc
 
         passages: list[dict[str, Any]] = []
         try:

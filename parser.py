@@ -3,7 +3,9 @@
 from pathlib import Path
 from typing import Any
 
+from pdf_backend_base import ParserBackendUnavailable
 from pdf_backend_legacy import (
+    LegacyPyMuPDFOpenError,
     LegacyPyMuPDFBackend,
     _guess_passage_type,
     _guess_section,
@@ -22,7 +24,7 @@ def extract_passages_from_pdf(
     """
     try:
         return LegacyPyMuPDFBackend().extract_passages(file_path, paper_id, space_id)
-    except Exception as exc:
+    except (LegacyPyMuPDFOpenError, ParserBackendUnavailable) as exc:
         print(f"Failed to open PDF {file_path}: {exc}")
         return []
 

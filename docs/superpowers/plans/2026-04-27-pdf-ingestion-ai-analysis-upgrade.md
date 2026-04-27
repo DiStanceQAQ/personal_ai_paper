@@ -943,9 +943,9 @@ git commit -m "fix: isolate heuristic card extraction"
 **Files:**
 - Modify only files needed to fix failures found by the gate.
 
-- [ ] Run: `pytest -q`
-- [ ] Run: `mypy .`
-- [ ] Expected: both PASS.
+- [x] Run: `pytest -q`
+- [x] Run: `mypy .`
+- [x] Expected: both PASS.
 - [ ] Commit only if fixes are required:
 
 ```bash

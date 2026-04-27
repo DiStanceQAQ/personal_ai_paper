@@ -24,6 +24,7 @@ from analysis_models import (
     AnalysisQualityReport,
     CardExtraction,
     CardExtractionBatch,
+    CardType,
     MergedAnalysisResult,
     PaperMetadataExtraction,
 )
@@ -588,7 +589,7 @@ def _card(
     summary: str,
     source_passage_ids: list[str],
     *,
-    card_type: str = "Method",
+    card_type: CardType = "Method",
     confidence: float = 0.84,
 ) -> CardExtraction:
     return CardExtraction(
@@ -627,7 +628,7 @@ def _source_passages_from_prompt(user_prompt: str) -> list[dict[str, Any]]:
     return sources
 
 
-def _card_type_for_source(source: Mapping[str, Any]) -> str:
+def _card_type_for_source(source: Mapping[str, Any]) -> CardType:
     section = str(source.get("section", "")).casefold()
     if "result" in section:
         return "Result"

@@ -14,6 +14,7 @@ from pdf_models import PdfQualityReport
 _MIN_NATIVE_TEXT_CHARS = 20
 _MIN_NATIVE_WORDS = 3
 _MIN_COLUMN_WORDS = 8
+_MISSING_LAYOUT_ANALYZER = object()
 
 
 def inspect_pdf(file_path: Path) -> PdfQualityReport:
@@ -120,12 +121,20 @@ def _find_tables_count(page: pymupdf.Page) -> int:
     if find_tables is None:
         return 0
 
+    layout_analyzer = getattr(pymupdf, "_get_layout", _MISSING_LAYOUT_ANALYZER)
     try:
+        if layout_analyzer is not _MISSING_LAYOUT_ANALYZER:
+            # PyMuPDF4LLM activates pymupdf.layout globally. Keep profiling stable by
+            # using PyMuPDF's native table finder behavior for this lightweight route.
+            setattr(pymupdf, "_get_layout", None)
         with contextlib.redirect_stdout(io.StringIO()):
             with contextlib.redirect_stderr(io.StringIO()):
                 result = find_tables()
     except Exception:
         return 0
+    finally:
+        if layout_analyzer is not _MISSING_LAYOUT_ANALYZER:
+            setattr(pymupdf, "_get_layout", layout_analyzer)
 
     tables = getattr(result, "tables", None)
     if tables is None:

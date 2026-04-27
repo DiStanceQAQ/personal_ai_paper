@@ -1,7 +1,10 @@
 """Tests for PDF quality profiling used by parser routing."""
 
+import importlib.util
 from pathlib import Path
 import tomllib
+
+import pytest
 
 from pdf_models import PdfQualityReport
 from pdf_profile import inspect_pdf
@@ -12,6 +15,36 @@ from tests.fixtures.pdf_factory import (
     table_pdf,
     two_column_pdf,
 )
+
+
+def _stacked_textbox_pdf(path: Path) -> Path:
+    import pymupdf
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((54, 54), "Native Text Performance Page", fontsize=12)
+    page.insert_text((54, 76), "Section 1: Local PDF ingestion timing", fontsize=10)
+
+    y = 104
+    for paragraph_index in range(18):
+        text = (
+            "This deterministic native text paragraph exercises PyMuPDF4LLM "
+            "parsing, normalization, and retrieval chunking for page 1, "
+            f"paragraph {paragraph_index + 1}."
+        )
+        page.insert_textbox(
+            pymupdf.Rect(54, y, 540, y + 26),
+            text,
+            fontsize=8,
+        )
+        y += 34
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        doc.save(str(path))
+    finally:
+        doc.close()
+    return path
 
 
 def test_simple_academic_pdf_has_native_text_and_no_routing_flags(
@@ -67,6 +100,30 @@ def test_table_pdf_requests_layout_model(tmp_path: Path) -> None:
     assert report.estimated_table_pages >= 1
     assert report.needs_layout_model is True
     assert "tables_detected" in report.warnings
+
+
+def test_layout_activation_does_not_make_paragraph_pages_look_like_tables(
+    tmp_path: Path,
+) -> None:
+    if importlib.util.find_spec("pymupdf4llm") is None:
+        pytest.skip("pymupdf4llm is required to reproduce layout activation")
+
+    from pdf_backend_pymupdf4llm import PyMuPDF4LLMBackend
+
+    warmup_pdf = simple_academic_pdf(tmp_path / "warmup.pdf")
+    PyMuPDF4LLMBackend().parse(
+        warmup_pdf,
+        paper_id="paper-warmup",
+        space_id="space",
+        quality_report=inspect_pdf(warmup_pdf),
+    )
+    paragraph_pdf = _stacked_textbox_pdf(tmp_path / "paragraphs.pdf")
+
+    report = inspect_pdf(paragraph_pdf)
+
+    assert report.estimated_table_pages == 0
+    assert report.needs_layout_model is False
+    assert "tables_detected" not in report.warnings
 
 
 def test_long_section_pdf_counts_all_native_text_pages(tmp_path: Path) -> None:

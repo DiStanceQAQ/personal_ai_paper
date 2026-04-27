@@ -59,7 +59,8 @@ def _persist_heuristic_card(conn: Any, card: dict[str, Any]) -> bool:
             str(card.get("quality_flags_json", "[]")),
         ),
     )
-    return cursor.rowcount > 0
+    rowcount = int(getattr(cursor, "rowcount", 0))
+    return rowcount > 0
 
 
 def _get_active_space_id() -> str:

@@ -21,6 +21,10 @@ def _create_parse_run_document_tables(conn: sqlite3.Connection) -> None:
     """Create parse run and structured document storage tables."""
     statements = (
         """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_id_space_id_unique
+            ON papers(id, space_id)
+        """,
+        """
         CREATE TABLE IF NOT EXISTS parse_runs (
             id TEXT PRIMARY KEY,
             paper_id TEXT NOT NULL,
@@ -34,9 +38,15 @@ def _create_parse_run_document_tables(conn: sqlite3.Connection) -> None:
             warnings_json TEXT NOT NULL DEFAULT '[]',
             config_json TEXT NOT NULL DEFAULT '{}',
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            FOREIGN KEY (paper_id) REFERENCES papers(id),
+            FOREIGN KEY (paper_id, space_id)
+                REFERENCES papers(id, space_id)
+                ON DELETE CASCADE,
             FOREIGN KEY (space_id) REFERENCES spaces(id)
         )
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_parse_runs_id_paper_space_unique
+            ON parse_runs(id, paper_id, space_id)
         """,
         """
         CREATE TABLE IF NOT EXISTS document_elements (
@@ -51,10 +61,14 @@ def _create_parse_run_document_tables(conn: sqlite3.Connection) -> None:
             bbox_json TEXT,
             heading_path_json TEXT NOT NULL DEFAULT '[]',
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            FOREIGN KEY (parse_run_id) REFERENCES parse_runs(id),
-            FOREIGN KEY (paper_id) REFERENCES papers(id),
-            FOREIGN KEY (space_id) REFERENCES spaces(id)
+            FOREIGN KEY (parse_run_id, paper_id, space_id)
+                REFERENCES parse_runs(id, paper_id, space_id)
+                ON DELETE CASCADE
         )
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_document_elements_id_parse_scope_unique
+            ON document_elements(id, parse_run_id, paper_id, space_id)
         """,
         """
         CREATE TABLE IF NOT EXISTS document_tables (
@@ -69,10 +83,12 @@ def _create_parse_run_document_tables(conn: sqlite3.Connection) -> None:
             cells_json TEXT NOT NULL DEFAULT '[]',
             bbox_json TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            FOREIGN KEY (parse_run_id) REFERENCES parse_runs(id),
-            FOREIGN KEY (paper_id) REFERENCES papers(id),
-            FOREIGN KEY (space_id) REFERENCES spaces(id),
-            FOREIGN KEY (element_id) REFERENCES document_elements(id)
+            FOREIGN KEY (parse_run_id, paper_id, space_id)
+                REFERENCES parse_runs(id, paper_id, space_id)
+                ON DELETE CASCADE,
+            FOREIGN KEY (element_id, parse_run_id, paper_id, space_id)
+                REFERENCES document_elements(id, parse_run_id, paper_id, space_id)
+                ON DELETE CASCADE
         )
         """,
         """
@@ -87,10 +103,12 @@ def _create_parse_run_document_tables(conn: sqlite3.Connection) -> None:
             uri TEXT NOT NULL DEFAULT '',
             bbox_json TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            FOREIGN KEY (parse_run_id) REFERENCES parse_runs(id),
-            FOREIGN KEY (paper_id) REFERENCES papers(id),
-            FOREIGN KEY (space_id) REFERENCES spaces(id),
-            FOREIGN KEY (element_id) REFERENCES document_elements(id)
+            FOREIGN KEY (parse_run_id, paper_id, space_id)
+                REFERENCES parse_runs(id, paper_id, space_id)
+                ON DELETE CASCADE,
+            FOREIGN KEY (element_id, parse_run_id, paper_id, space_id)
+                REFERENCES document_elements(id, parse_run_id, paper_id, space_id)
+                ON DELETE CASCADE
         )
         """,
         """

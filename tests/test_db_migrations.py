@@ -41,6 +41,28 @@ def index_names(conn: sqlite3.Connection, table_name: str) -> set[str]:
     return {row["name"] for row in rows}
 
 
+def index_columns(conn: sqlite3.Connection, index_name: str) -> tuple[str, ...]:
+    """Return indexed column names in index order."""
+    rows = conn.execute(f"PRAGMA index_info({index_name})").fetchall()
+    return tuple(row["name"] for row in rows)
+
+
+def insert_space(conn: sqlite3.Connection, space_id: str) -> None:
+    """Insert a minimal space row."""
+    conn.execute(
+        "INSERT INTO spaces (id, name) VALUES (?, ?)",
+        (space_id, space_id),
+    )
+
+
+def insert_paper(conn: sqlite3.Connection, paper_id: str, space_id: str) -> None:
+    """Insert a minimal paper row."""
+    conn.execute(
+        "INSERT INTO papers (id, space_id, title) VALUES (?, ?, ?)",
+        (paper_id, space_id, paper_id),
+    )
+
+
 def test_apply_migrations_creates_initial_schema_version_row() -> None:
     """Fresh initialized databases advance to the latest schema version."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -234,5 +256,156 @@ def test_migration_one_creates_parse_storage_indexes() -> None:
             "idx_document_assets_parse_run_id",
             "idx_document_assets_element_id",
         }.issubset(index_names(conn, "document_assets"))
+
+        assert index_columns(
+            conn, "idx_document_elements_paper_element_index"
+        ) == ("paper_id", "element_index")
+        assert index_columns(
+            conn, "idx_document_elements_parse_run_id"
+        ) == ("parse_run_id",)
+
+        conn.close()
+
+
+def test_parse_run_rejects_paper_space_mismatch() -> None:
+    """Parse runs must use the same space_id as their paper."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+        insert_space(conn, "space-1")
+        insert_space(conn, "space-2")
+        insert_paper(conn, "paper-1", "space-1")
+        conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO parse_runs (id, paper_id, space_id)
+                VALUES (?, ?, ?)
+                """,
+                ("parse-run-1", "paper-1", "space-2"),
+            )
+
+        conn.close()
+
+
+def test_document_rows_reject_parse_scope_mismatch() -> None:
+    """Document rows must use the same paper and space as their parse run."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+        insert_space(conn, "space-1")
+        insert_space(conn, "space-2")
+        insert_paper(conn, "paper-1", "space-1")
+        insert_paper(conn, "paper-2", "space-2")
+        conn.execute(
+            """
+            INSERT INTO parse_runs (id, paper_id, space_id)
+            VALUES (?, ?, ?)
+            """,
+            ("parse-run-1", "paper-1", "space-1"),
+        )
+        conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO document_elements (
+                    id, parse_run_id, paper_id, space_id, element_index, element_type
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("element-1", "parse-run-1", "paper-2", "space-2", 0, "paragraph"),
+            )
+
+        conn.execute(
+            """
+            INSERT INTO document_elements (
+                id, parse_run_id, paper_id, space_id, element_index, element_type
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("element-2", "parse-run-1", "paper-1", "space-1", 0, "table"),
+        )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO document_tables (
+                    id, parse_run_id, paper_id, space_id, element_id
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("table-1", "parse-run-1", "paper-2", "space-2", "element-2"),
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO document_assets (
+                    id, parse_run_id, paper_id, space_id, element_id
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("asset-1", "parse-run-1", "paper-2", "space-2", "element-2"),
+            )
+
+        conn.close()
+
+
+def test_deleting_paper_cascades_parse_storage_rows() -> None:
+    """Deleting a paper removes parse runs and all child document rows."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+        insert_space(conn, "space-1")
+        insert_paper(conn, "paper-1", "space-1")
+        conn.execute(
+            """
+            INSERT INTO parse_runs (id, paper_id, space_id)
+            VALUES (?, ?, ?)
+            """,
+            ("parse-run-1", "paper-1", "space-1"),
+        )
+        conn.execute(
+            """
+            INSERT INTO document_elements (
+                id, parse_run_id, paper_id, space_id, element_index, element_type
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("element-1", "parse-run-1", "paper-1", "space-1", 0, "table"),
+        )
+        conn.execute(
+            """
+            INSERT INTO document_tables (
+                id, parse_run_id, paper_id, space_id, element_id
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("table-1", "parse-run-1", "paper-1", "space-1", "element-1"),
+        )
+        conn.execute(
+            """
+            INSERT INTO document_assets (
+                id, parse_run_id, paper_id, space_id, element_id
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("asset-1", "parse-run-1", "paper-1", "space-1", "element-1"),
+        )
+        conn.commit()
+
+        conn.execute("DELETE FROM papers WHERE id = ?", ("paper-1",))
+        conn.commit()
+
+        for table_name in (
+            "parse_runs",
+            "document_elements",
+            "document_tables",
+            "document_assets",
+        ):
+            row_count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
+            assert row_count[0] == 0
 
         conn.close()

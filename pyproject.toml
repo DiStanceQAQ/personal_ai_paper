@@ -37,6 +37,7 @@ py-modules = [
     "mcp_server",
     "parser",
     "pdf_models",
+    "pdf_profile",
     "routes_agent",
     "routes_cards",
     "routes_papers",
@@ -62,6 +63,10 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "mcp"
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pdf_profile"
+disable_error_code = ["no-untyped-call"]
 
 [[tool.mypy.overrides]]
 module = ["parser", "tests.test_parser", "tests.test_search", "tests.test_mcp", "tests.test_routes_cards"]

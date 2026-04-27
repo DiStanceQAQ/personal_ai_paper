@@ -1,6 +1,7 @@
 """Tests for PDF quality profiling used by parser routing."""
 
 from pathlib import Path
+import tomllib
 
 from pdf_models import PdfQualityReport
 from pdf_profile import inspect_pdf
@@ -87,3 +88,26 @@ def test_missing_pdf_returns_warning_instead_of_raising(tmp_path: Path) -> None:
     assert report.needs_ocr is True
     assert "pdf_open_failed" in report.warnings
     assert report.metadata["error"]
+
+
+def test_corrupt_pdf_returns_open_warning_instead_of_raising(
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "corrupt.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\nnot a valid pdf body\n%%EOF")
+
+    report = inspect_pdf(pdf_path)
+
+    assert report.page_count == 0
+    assert report.native_text_pages == 0
+    assert report.needs_ocr is True
+    assert "pdf_open_failed" in report.warnings
+    assert report.metadata["error"]
+
+
+def test_pdf_profile_is_in_packaged_module_allow_list() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+    modules = pyproject["tool"]["setuptools"]["py-modules"]
+
+    assert "pdf_profile" in modules

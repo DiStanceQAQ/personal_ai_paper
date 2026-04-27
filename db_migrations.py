@@ -258,6 +258,17 @@ def _create_analysis_run_and_card_provenance_schema(conn: sqlite3.Connection) ->
             ON analysis_runs(id, paper_id, space_id)
         """,
         """
+        CREATE TRIGGER IF NOT EXISTS trg_analysis_runs_scope_immutable
+        BEFORE UPDATE OF paper_id, space_id ON analysis_runs
+        WHEN NEW.paper_id != OLD.paper_id OR NEW.space_id != OLD.space_id
+        BEGIN
+            SELECT RAISE(
+                ABORT,
+                'analysis run paper and space cannot be changed'
+            );
+        END
+        """,
+        """
         ALTER TABLE knowledge_cards
         ADD COLUMN created_by TEXT NOT NULL DEFAULT 'heuristic'
             CHECK(created_by IN ('user', 'heuristic', 'ai'))

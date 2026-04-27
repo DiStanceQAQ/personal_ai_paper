@@ -1165,6 +1165,46 @@ def test_knowledge_cards_enforce_analysis_run_scope() -> None:
         conn.close()
 
 
+def test_analysis_run_scope_is_immutable_after_creation() -> None:
+    """Analysis runs cannot move between papers after cards or sources reference them."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+        insert_provenance_scope_fixture(conn)
+        insert_card(conn, "card-valid-run", "paper-1", "space-1", "analysis-run-1")
+        insert_card_source(
+            conn,
+            "source-valid-run",
+            "card-1",
+            "passage-1",
+            "paper-1",
+            "space-1",
+            "analysis-run-1",
+        )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                UPDATE analysis_runs
+                SET paper_id = ?, space_id = ?
+                WHERE id = ?
+                """,
+                ("paper-2", "space-2", "analysis-run-1"),
+            )
+
+        analysis_run = conn.execute(
+            """
+            SELECT paper_id, space_id
+            FROM analysis_runs
+            WHERE id = ?
+            """,
+            ("analysis-run-1",),
+        ).fetchone()
+        assert dict(analysis_run) == {"paper_id": "paper-1", "space_id": "space-1"}
+
+        conn.close()
+
+
 def test_knowledge_card_sources_apply_expected_delete_actions() -> None:
     """Deleting source parents cascades rows or clears analysis run provenance."""
     with tempfile.TemporaryDirectory() as tmpdir:

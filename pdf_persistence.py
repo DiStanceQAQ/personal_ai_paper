@@ -8,10 +8,16 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
+from embeddings import (
+    EmbeddingProvider,
+    get_embedding_config,
+    get_embedding_provider,
+    serialize_embedding_vector,
+)
 from pdf_models import ParseAsset, ParseDocument, ParseElement, ParseTable, PassageRecord
 from search import FTS_TABLE
 
-__all__ = ["persist_parse_result"]
+__all__ = ["embed_passages_for_parse_run", "persist_parse_result"]
 
 
 def _json(value: Any) -> str:
@@ -26,6 +32,10 @@ def _optional_json(value: Any | None) -> str | None:
 
 def _savepoint_name() -> str:
     return f"persist_parse_result_{uuid.uuid4().hex}"
+
+
+def _embedding_savepoint_name() -> str:
+    return f"embed_parse_run_{uuid.uuid4().hex}"
 
 
 def _storage_id(parse_run_id: str, source_id: str) -> str:
@@ -344,6 +354,133 @@ def _insert_passage(
         ),
     )
     return persisted
+
+
+def _load_parse_run_warnings(conn: sqlite3.Connection, parse_run_id: str) -> list[str]:
+    row = conn.execute(
+        "SELECT warnings_json FROM parse_runs WHERE id = ?",
+        (parse_run_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"parse run {parse_run_id} does not exist")
+
+    try:
+        warnings = json.loads(str(row["warnings_json"] or "[]"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(warnings, list):
+        return []
+    return [str(warning) for warning in warnings]
+
+
+def _append_parse_run_warnings(
+    conn: sqlite3.Connection,
+    parse_run_id: str,
+    warnings: Sequence[str],
+) -> None:
+    if not warnings:
+        return
+
+    merged = _load_parse_run_warnings(conn, parse_run_id)
+    merged.extend(str(warning) for warning in warnings)
+    conn.execute(
+        """
+        UPDATE parse_runs
+        SET warnings_json = ?,
+            completed_at = datetime('now')
+        WHERE id = ?
+        """,
+        (_json(merged), parse_run_id),
+    )
+
+
+def _embedding_warning(exc: BaseException) -> str:
+    detail = " ".join(str(exc).split())
+    if not detail:
+        detail = exc.__class__.__name__
+    return f"embedding_error:{detail}"
+
+
+def _close_provider(provider: EmbeddingProvider) -> None:
+    close = getattr(provider, "close", None)
+    if callable(close):
+        close()
+
+
+def embed_passages_for_parse_run(
+    conn: sqlite3.Connection,
+    parse_run_id: str,
+) -> list[str]:
+    """Generate embeddings for persisted passages when a provider is configured.
+
+    Returns warnings appended to the parse run. Embedding failures are isolated from
+    parse persistence so parsing can still complete successfully.
+    """
+    try:
+        config = get_embedding_config(conn)
+        provider = get_embedding_provider(config)
+    except Exception as exc:
+        warning = _embedding_warning(exc)
+        _append_parse_run_warnings(conn, parse_run_id, [warning])
+        return [warning]
+
+    try:
+        if not provider.is_configured():
+            return []
+
+        rows = conn.execute(
+            """
+            SELECT id, original_text, content_hash
+            FROM passages
+            WHERE parse_run_id = ?
+            ORDER BY page_number, paragraph_index, id
+            """,
+            (parse_run_id,),
+        ).fetchall()
+        if not rows:
+            return []
+
+        texts = [str(row["original_text"]) for row in rows]
+        savepoint = _embedding_savepoint_name()
+        conn.execute(f"SAVEPOINT {savepoint}")
+        try:
+            vectors = provider.embed_texts(texts)
+            if len(vectors) != len(rows):
+                raise ValueError(
+                    f"embedding provider returned {len(vectors)} vectors "
+                    f"for {len(rows)} passages"
+                )
+
+            for row, vector in zip(rows, vectors, strict=True):
+                serialized = serialize_embedding_vector(vector)
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO passage_embeddings (
+                        passage_id, provider, model, dimension,
+                        embedding_json, content_hash, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                    """,
+                    (
+                        str(row["id"]),
+                        provider.provider,
+                        provider.model,
+                        serialized.dimension,
+                        serialized.embedding_json,
+                        row["content_hash"],
+                    ),
+                )
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        except Exception as exc:
+            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+            warning = _embedding_warning(exc)
+            _append_parse_run_warnings(conn, parse_run_id, [warning])
+            return [warning]
+    finally:
+        _close_provider(provider)
+
+    return []
 
 
 def _delete_old_generated_rows(

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, UploadFile
 import config
 from db import get_connection
 from pdf_backend_base import ParserBackendError
+from pdf_persistence import embed_passages_for_parse_run
 from parser import (
     chunk_parse_document,
     inspect_pdf,
@@ -423,6 +424,7 @@ async def parse_paper(paper_id: str) -> dict[str, Any]:
             document,
             passages,
         )
+        embedding_warnings = embed_passages_for_parse_run(conn, parse_run_id)
 
         conn.execute(
             "UPDATE papers SET parse_status = 'parsed' WHERE id = ?",
@@ -437,7 +439,7 @@ async def parse_paper(paper_id: str) -> dict[str, Any]:
             parse_run_id=parse_run_id,
             backend=document.backend,
             quality_score=document.quality.quality_score,
-            warnings=document.quality.warnings,
+            warnings=[*document.quality.warnings, *embedding_warnings],
         )
     except HTTPException:
         raise

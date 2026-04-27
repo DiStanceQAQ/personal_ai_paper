@@ -778,11 +778,11 @@ git commit -m "feat: add optional passage embeddings"
 - Modify: `routes_papers.py`
 - Test: `tests/test_embeddings_parse_integration.py`
 
-- [ ] After passages are persisted, generate embeddings only when an embedding provider is configured.
-- [ ] Store failures as parse warnings; do not fail parsing if embeddings fail.
-- [ ] Run: `pytest tests/test_embeddings_parse_integration.py tests/test_routes_papers.py -q`
-- [ ] Expected: PASS; parse succeeds with embedding provider disabled and stores embeddings when mocked provider is enabled.
-- [ ] Commit:
+- [x] After passages are persisted, generate embeddings only when an embedding provider is configured.
+- [x] Store failures as parse warnings; do not fail parsing if embeddings fail.
+- [x] Run: `pytest tests/test_embeddings_parse_integration.py tests/test_routes_papers.py -q`
+- [x] Expected: PASS; parse succeeds with embedding provider disabled and stores embeddings when mocked provider is enabled.
+- [x] Commit:
 
 ```bash
 git add pdf_persistence.py routes_papers.py tests/test_embeddings_parse_integration.py

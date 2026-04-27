@@ -1,6 +1,7 @@
 """Tests for PDF parser data contract models."""
 
 import json
+import math
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,40 @@ def test_parse_element_accepts_controlled_element_and_extraction_types() -> None
     assert element.extraction_method == "native_text"
     assert element.heading_path == []
     assert element.metadata == {}
+
+
+@pytest.mark.parametrize(
+    ("model_cls", "kwargs"),
+    [
+        (
+            ParseElement,
+            {
+                "id": "element-1",
+                "element_index": 0,
+                "element_type": "paragraph",
+                "extraction_method": "native_text",
+                "backend_confidence": 0.92,
+            },
+        ),
+        (
+            PassageRecord,
+            {
+                "id": "passage-1",
+                "paper_id": "paper-1",
+                "space_id": "space-1",
+                "original_text": "text",
+                "backend_confidence": 0.92,
+            },
+        ),
+    ],
+)
+def test_models_reject_unknown_extra_fields(
+    model_cls: type[Any],
+    kwargs: dict[str, Any],
+) -> None:
+    """Backend-specific fields should be rejected unless stored in metadata."""
+    with pytest.raises(ValidationError):
+        model_cls(**kwargs)
 
 
 @pytest.mark.parametrize("element_type", ["body", "section", "image"])
@@ -435,6 +470,51 @@ def test_models_reject_bbox_without_four_coordinates(
         model_cls(**kwargs)
 
 
+@pytest.mark.parametrize("coordinate", [math.nan, math.inf, -math.inf])
+def test_models_reject_bbox_with_non_finite_coordinates(coordinate: float) -> None:
+    """Bounding box coordinates should be finite numbers."""
+    with pytest.raises(ValidationError):
+        ParseElement(
+            id="element-1",
+            element_index=0,
+            element_type="paragraph",
+            extraction_method="native_text",
+            bbox=[0.0, coordinate, 10.0, 20.0],
+        )
+
+
+@pytest.mark.parametrize(
+    "bbox",
+    [
+        [10.0, 0.0, 9.0, 20.0],
+        [0.0, 20.0, 10.0, 19.0],
+    ],
+)
+def test_models_reject_bbox_with_inverted_bounds(bbox: list[float]) -> None:
+    """Bounding boxes should keep x0 <= x1 and y0 <= y1."""
+    with pytest.raises(ValidationError):
+        PassageRecord(
+            id="passage-1",
+            paper_id="paper-1",
+            space_id="space-1",
+            original_text="text",
+            bbox=bbox,
+        )
+
+
+def test_models_accept_bbox_with_ordered_negative_coordinates() -> None:
+    """Negative coordinates are valid when bounds remain ordered."""
+    element = ParseElement(
+        id="element-1",
+        element_index=0,
+        element_type="paragraph",
+        extraction_method="native_text",
+        bbox=[-10.0, -20.0, -1.0, -2.0],
+    )
+
+    assert element.bbox == [-10.0, -20.0, -1.0, -2.0]
+
+
 def test_chunk_candidate_rejects_page_end_before_page_start() -> None:
     """ChunkCandidate should keep page ranges internally consistent."""
     with pytest.raises(ValidationError):
@@ -444,4 +524,27 @@ def test_chunk_candidate_rejects_page_end_before_page_start() -> None:
             text="text",
             page_start=5,
             page_end=4,
+        )
+
+
+def test_chunk_candidate_rejects_empty_element_ids() -> None:
+    """ChunkCandidate should reference at least one source parse element."""
+    with pytest.raises(ValidationError):
+        ChunkCandidate(id="chunk-1", element_ids=[], text="text")
+
+
+def test_chunk_candidate_rejects_empty_text() -> None:
+    """ChunkCandidate should not store empty chunk text."""
+    with pytest.raises(ValidationError):
+        ChunkCandidate(id="chunk-1", element_ids=["element-1"], text="")
+
+
+def test_passage_record_rejects_empty_original_text() -> None:
+    """PassageRecord should not store empty passage text."""
+    with pytest.raises(ValidationError):
+        PassageRecord(
+            id="passage-1",
+            paper_id="paper-1",
+            space_id="space-1",
+            original_text="",
         )

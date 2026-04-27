@@ -1,9 +1,10 @@
 """Pydantic data contracts for structured PDF parsing."""
 
 import json
+import math
 from typing import Annotated, Any, Final, Literal, Self, TypeAlias
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 ElementType: TypeAlias = Literal[
     "title",
@@ -40,7 +41,25 @@ PassageType: TypeAlias = Literal[
     "body",
 ]
 
-BBox: TypeAlias = Annotated[list[float], Field(min_length=4, max_length=4)]
+
+def _validate_bbox(value: list[float]) -> list[float]:
+    """Validate PDF-style bounding box coordinates."""
+    if any(not math.isfinite(coordinate) for coordinate in value):
+        raise ValueError("bbox coordinates must be finite numbers")
+
+    x0, y0, x1, y1 = value
+    if x0 > x1:
+        raise ValueError("bbox x0 must be less than or equal to x1")
+    if y0 > y1:
+        raise ValueError("bbox y0 must be less than or equal to y1")
+    return value
+
+
+BBox: TypeAlias = Annotated[
+    list[float],
+    Field(min_length=4, max_length=4),
+    AfterValidator(_validate_bbox),
+]
 
 ELEMENT_TYPES: Final[tuple[ElementType, ...]] = (
     "title",
@@ -78,7 +97,13 @@ PASSAGE_TYPES: Final[tuple[PassageType, ...]] = (
 )
 
 
-class PdfQualityReport(BaseModel):
+class _ParserContractModel(BaseModel):
+    """Shared configuration for parser contract models."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PdfQualityReport(_ParserContractModel):
     """Quality signals gathered before or during PDF parsing."""
 
     page_count: int = Field(default=0, ge=0)
@@ -93,7 +118,7 @@ class PdfQualityReport(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class ParseElement(BaseModel):
+class ParseElement(_ParserContractModel):
     """A single structured text or layout element extracted from a PDF."""
 
     id: str
@@ -107,7 +132,7 @@ class ParseElement(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class ParseTable(BaseModel):
+class ParseTable(_ParserContractModel):
     """A normalized table extracted from a parsed document."""
 
     id: str
@@ -120,7 +145,7 @@ class ParseTable(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class ParseAsset(BaseModel):
+class ParseAsset(_ParserContractModel):
     """A non-text asset extracted from a parsed document."""
 
     id: str
@@ -132,7 +157,7 @@ class ParseAsset(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class ParseDocument(BaseModel):
+class ParseDocument(_ParserContractModel):
     """Complete structured parse output for a paper."""
 
     paper_id: str
@@ -146,12 +171,12 @@ class ParseDocument(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class ChunkCandidate(BaseModel):
+class ChunkCandidate(_ParserContractModel):
     """Candidate passage chunk assembled from one or more parse elements."""
 
     id: str
-    element_ids: list[str]
-    text: str
+    element_ids: list[str] = Field(min_length=1)
+    text: str = Field(min_length=1)
     heading_path: list[str] = Field(default_factory=list)
     page_start: int = Field(default=0, ge=0)
     page_end: int = Field(default=0, ge=0)
@@ -169,7 +194,7 @@ class ChunkCandidate(BaseModel):
         return self
 
 
-class PassageRecord(BaseModel):
+class PassageRecord(_ParserContractModel):
     """Storage-ready passage row with structured parse provenance."""
 
     id: str
@@ -178,7 +203,7 @@ class PassageRecord(BaseModel):
     section: str = ""
     page_number: int = Field(default=0, ge=0)
     paragraph_index: int = Field(default=0, ge=0)
-    original_text: str = ""
+    original_text: str = Field(min_length=1)
     parse_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     passage_type: PassageType = "body"
     parse_run_id: str | None = None

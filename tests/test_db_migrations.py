@@ -29,8 +29,20 @@ def create_schema_connection(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    """Return column names for a table."""
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row["name"] for row in rows}
+
+
+def index_names(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    """Return index names for a table."""
+    rows = conn.execute(f"PRAGMA index_list({table_name})").fetchall()
+    return {row["name"] for row in rows}
+
+
 def test_apply_migrations_creates_initial_schema_version_row() -> None:
-    """Fresh initialized databases default to schema version 0."""
+    """Fresh initialized databases advance to the latest schema version."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         conn = create_schema_connection(db_path)
@@ -41,9 +53,9 @@ def test_apply_migrations_creates_initial_schema_version_row() -> None:
         apply_migrations(conn)
 
         rows = schema_version_rows(conn)
-        assert get_schema_version(conn) == 0
+        assert get_schema_version(conn) == 1
         assert len(rows) == 1
-        assert rows[0]["value"] == "0"
+        assert rows[0]["value"] == "1"
 
         conn.close()
 
@@ -149,8 +161,78 @@ def test_init_db_runs_migrations_idempotently() -> None:
         conn = init_db(database_path=db_path)
 
         rows = schema_version_rows(conn)
-        assert get_schema_version(conn) == 0
+        assert get_schema_version(conn) == 1
         assert len(rows) == 1
-        assert rows[0]["value"] == "0"
+        assert rows[0]["value"] == "1"
+
+        conn.close()
+
+
+def test_migration_one_creates_parse_run_and_document_element_tables() -> None:
+    """Migration 1 creates parse storage tables with JSON text columns."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+
+        tables = set(get_table_names(conn))
+        assert {
+            "parse_runs",
+            "document_elements",
+            "document_tables",
+            "document_assets",
+        }.issubset(tables)
+        assert get_schema_version(conn) == 1
+
+        assert {
+            "warnings_json",
+            "config_json",
+            "metadata_json",
+        }.issubset(table_columns(conn, "parse_runs"))
+        assert {
+            "bbox_json",
+            "heading_path_json",
+            "metadata_json",
+        }.issubset(table_columns(conn, "document_elements"))
+        assert {
+            "cells_json",
+            "bbox_json",
+            "metadata_json",
+        }.issubset(table_columns(conn, "document_tables"))
+        assert {
+            "bbox_json",
+            "metadata_json",
+        }.issubset(table_columns(conn, "document_assets"))
+
+        conn.close()
+
+
+def test_migration_one_creates_parse_storage_indexes() -> None:
+    """Migration 1 adds predictable indexes for parse storage lookups."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+
+        assert {
+            "idx_parse_runs_paper_id",
+            "idx_parse_runs_space_id",
+        }.issubset(index_names(conn, "parse_runs"))
+        assert {
+            "idx_document_elements_paper_id",
+            "idx_document_elements_space_id",
+            "idx_document_elements_parse_run_id",
+            "idx_document_elements_paper_element_index",
+        }.issubset(index_names(conn, "document_elements"))
+        assert {
+            "idx_document_tables_paper_id",
+            "idx_document_tables_space_id",
+            "idx_document_tables_parse_run_id",
+            "idx_document_tables_element_id",
+        }.issubset(index_names(conn, "document_tables"))
+        assert {
+            "idx_document_assets_paper_id",
+            "idx_document_assets_space_id",
+            "idx_document_assets_parse_run_id",
+            "idx_document_assets_element_id",
+        }.issubset(index_names(conn, "document_assets"))
 
         conn.close()

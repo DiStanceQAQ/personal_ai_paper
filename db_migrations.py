@@ -12,10 +12,149 @@ __all__ = [
 ]
 
 SCHEMA_VERSION_KEY = "schema_version"
-LATEST_SCHEMA_VERSION = 0
+LATEST_SCHEMA_VERSION = 1
 
 Migration = Callable[[sqlite3.Connection], None]
-MIGRATIONS: dict[int, Migration] = {}
+
+
+def _create_parse_run_document_tables(conn: sqlite3.Connection) -> None:
+    """Create parse run and structured document storage tables."""
+    statements = (
+        """
+        CREATE TABLE IF NOT EXISTS parse_runs (
+            id TEXT PRIMARY KEY,
+            paper_id TEXT NOT NULL,
+            space_id TEXT NOT NULL,
+            backend TEXT NOT NULL DEFAULT '',
+            extraction_method TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'completed',
+            quality_score REAL,
+            started_at TEXT NOT NULL DEFAULT (datetime('now')),
+            completed_at TEXT,
+            warnings_json TEXT NOT NULL DEFAULT '[]',
+            config_json TEXT NOT NULL DEFAULT '{}',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY (paper_id) REFERENCES papers(id),
+            FOREIGN KEY (space_id) REFERENCES spaces(id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS document_elements (
+            id TEXT PRIMARY KEY,
+            parse_run_id TEXT NOT NULL,
+            paper_id TEXT NOT NULL,
+            space_id TEXT NOT NULL,
+            element_index INTEGER NOT NULL,
+            element_type TEXT NOT NULL,
+            text TEXT NOT NULL DEFAULT '',
+            page_number INTEGER NOT NULL DEFAULT 0,
+            bbox_json TEXT,
+            heading_path_json TEXT NOT NULL DEFAULT '[]',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY (parse_run_id) REFERENCES parse_runs(id),
+            FOREIGN KEY (paper_id) REFERENCES papers(id),
+            FOREIGN KEY (space_id) REFERENCES spaces(id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS document_tables (
+            id TEXT PRIMARY KEY,
+            parse_run_id TEXT NOT NULL,
+            paper_id TEXT NOT NULL,
+            space_id TEXT NOT NULL,
+            element_id TEXT,
+            table_index INTEGER NOT NULL DEFAULT 0,
+            page_number INTEGER NOT NULL DEFAULT 0,
+            caption TEXT NOT NULL DEFAULT '',
+            cells_json TEXT NOT NULL DEFAULT '[]',
+            bbox_json TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY (parse_run_id) REFERENCES parse_runs(id),
+            FOREIGN KEY (paper_id) REFERENCES papers(id),
+            FOREIGN KEY (space_id) REFERENCES spaces(id),
+            FOREIGN KEY (element_id) REFERENCES document_elements(id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS document_assets (
+            id TEXT PRIMARY KEY,
+            parse_run_id TEXT NOT NULL,
+            paper_id TEXT NOT NULL,
+            space_id TEXT NOT NULL,
+            element_id TEXT,
+            asset_type TEXT NOT NULL DEFAULT '',
+            page_number INTEGER NOT NULL DEFAULT 0,
+            uri TEXT NOT NULL DEFAULT '',
+            bbox_json TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY (parse_run_id) REFERENCES parse_runs(id),
+            FOREIGN KEY (paper_id) REFERENCES papers(id),
+            FOREIGN KEY (space_id) REFERENCES spaces(id),
+            FOREIGN KEY (element_id) REFERENCES document_elements(id)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_parse_runs_paper_id
+            ON parse_runs(paper_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_parse_runs_space_id
+            ON parse_runs(space_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_document_elements_paper_id
+            ON document_elements(paper_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_document_elements_space_id
+            ON document_elements(space_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_document_elements_parse_run_id
+            ON document_elements(parse_run_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_document_elements_paper_element_index
+            ON document_elements(paper_id, element_index)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_document_tables_paper_id
+            ON document_tables(paper_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_document_tables_space_id
+            ON document_tables(space_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_document_tables_parse_run_id
+            ON document_tables(parse_run_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_document_tables_element_id
+            ON document_tables(element_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_document_assets_paper_id
+            ON document_assets(paper_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_document_assets_space_id
+            ON document_assets(space_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_document_assets_parse_run_id
+            ON document_assets(parse_run_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_document_assets_element_id
+            ON document_assets(element_id)
+        """,
+    )
+    for statement in statements:
+        conn.execute(statement)
+
+
+MIGRATIONS: dict[int, Migration] = {1: _create_parse_run_document_tables}
 
 
 def _schema_version_row_exists(conn: sqlite3.Connection) -> bool:

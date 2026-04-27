@@ -13,6 +13,7 @@ AGENT_ACCESS_KEY = "agent_access"
 LEGACY_AGENT_ACCESS_KEY = "agent_enabled"
 MCP_SERVER_NAME = "paper-knowledge-engine"
 MCP_TRANSPORT = "stdio"
+DEFAULT_LLAMAPARSE_BASE_URL = "https://api.cloud.llamaindex.ai/api/parsing"
 
 
 class LLMConfig(BaseModel):
@@ -20,6 +21,8 @@ class LLMConfig(BaseModel):
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o"
     llm_api_key: str | None = None
+    llamaparse_base_url: str = DEFAULT_LLAMAPARSE_BASE_URL
+    llamaparse_api_key: str | None = None
 
 
 def _get_agent_access_value() -> str:
@@ -73,13 +76,20 @@ async def get_agent_config() -> dict[str, Any]:
     """Get the current LLM configuration (excluding full API key)."""
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT key, value FROM app_state WHERE key LIKE 'llm_%'").fetchall()
+        rows = conn.execute(
+            "SELECT key, value FROM app_state WHERE key LIKE 'llm_%' OR key LIKE 'llamaparse_%'"
+        ).fetchall()
         config = {row["key"]: row["value"] for row in rows}
         return {
             "llm_provider": config.get("llm_provider", "openai"),
             "llm_base_url": config.get("llm_base_url", "https://api.openai.com/v1"),
             "llm_model": config.get("llm_model", "gpt-4o"),
             "has_api_key": bool(config.get("llm_api_key")),
+            "llamaparse_base_url": config.get(
+                "llamaparse_base_url",
+                DEFAULT_LLAMAPARSE_BASE_URL,
+            ),
+            "has_llamaparse_api_key": bool(config.get("llamaparse_api_key")),
         }
     finally:
         conn.close()
@@ -95,6 +105,8 @@ async def update_agent_config(config: LLMConfig) -> dict[str, str]:
         # Logic: If api_key is empty string or None, don't overwrite the existing one in DB
         if not data.get("llm_api_key"):
             data.pop("llm_api_key", None)
+        if not data.get("llamaparse_api_key"):
+            data.pop("llamaparse_api_key", None)
 
         for key, value in data.items():
             if value is not None:

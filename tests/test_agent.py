@@ -98,6 +98,74 @@ async def test_agent_status_shows_active_space(client: AsyncClient) -> None:
     assert data["active_space"]["name"] == "Agent Test Space"
 
 
+@pytest.mark.asyncio
+async def test_agent_config_redacts_llamaparse_api_key(client: AsyncClient) -> None:
+    """Config GET should expose LlamaParse key presence but not the key itself."""
+    resp = await client.put(
+        "/api/agent/config",
+        json={
+            "llm_provider": "openai",
+            "llm_base_url": "https://api.openai.com/v1",
+            "llm_model": "gpt-4o",
+            "llm_api_key": "llm-secret",
+            "llamaparse_base_url": "https://llamaparse.example/api",
+            "llamaparse_api_key": "llama-secret",
+        },
+    )
+    assert resp.status_code == 200
+
+    resp = await client.get("/api/agent/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["llamaparse_base_url"] == "https://llamaparse.example/api"
+    assert data["has_llamaparse_api_key"] is True
+    assert data["has_api_key"] is True
+    assert "llamaparse_api_key" not in data
+    assert "llm_api_key" not in data
+    assert "llama-secret" not in resp.text
+    assert "llm-secret" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_agent_config_empty_llamaparse_key_does_not_overwrite(
+    client: AsyncClient,
+) -> None:
+    """Empty LlamaParse key updates should preserve an existing configured key."""
+    await client.put(
+        "/api/agent/config",
+        json={
+            "llamaparse_base_url": "https://first.example/api",
+            "llamaparse_api_key": "keep-me",
+        },
+    )
+
+    resp = await client.put(
+        "/api/agent/config",
+        json={
+            "llamaparse_base_url": "https://second.example/api",
+            "llamaparse_api_key": "",
+        },
+    )
+    assert resp.status_code == 200
+
+    resp = await client.get("/api/agent/config")
+    data = resp.json()
+    assert data["llamaparse_base_url"] == "https://second.example/api"
+    assert data["has_llamaparse_api_key"] is True
+
+    import db as db_module
+
+    conn = db_module.get_connection()
+    try:
+        row = conn.execute(
+            "SELECT value FROM app_state WHERE key = ?",
+            ("llamaparse_api_key",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row["value"] == "keep-me"
+
+
 # ── MCP Tool Access Control ──────────────────────────────────────────
 
 

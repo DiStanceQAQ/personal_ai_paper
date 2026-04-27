@@ -855,11 +855,11 @@ git commit -m "test: add PDF parse quality evaluation"
 - Create: `tests/eval/test_ai_analysis_quality.py`
 - Create: `scripts/eval_analysis_pipeline.py`
 
-- [ ] Evaluate mocked and deterministic model outputs for schema adherence, source verification, deduplication, user-card preservation, and full-paper coverage.
-- [ ] Output JSON metrics with keys: `schema_validity_rate`, `source_grounding_rate`, `duplicate_card_rate`, `user_card_preservation_rate`, `late_section_coverage`.
-- [ ] Run: `pytest tests/eval/test_ai_analysis_quality.py -q`
-- [ ] Expected thresholds: `schema_validity_rate=1.0`, `source_grounding_rate=1.0`, `user_card_preservation_rate=1.0`, `duplicate_card_rate<=0.05`, `late_section_coverage=1.0`.
-- [ ] Commit:
+- [x] Evaluate mocked and deterministic model outputs for schema adherence, source verification, deduplication, user-card preservation, and full-paper coverage.
+- [x] Output JSON metrics with keys: `schema_validity_rate`, `source_grounding_rate`, `duplicate_card_rate`, `user_card_preservation_rate`, `late_section_coverage`.
+- [x] Run: `pytest tests/eval/test_ai_analysis_quality.py -q`
+- [x] Expected thresholds: `schema_validity_rate=1.0`, `source_grounding_rate=1.0`, `user_card_preservation_rate=1.0`, `duplicate_card_rate<=0.05`, `late_section_coverage=1.0`.
+- [x] Commit:
 
 ```bash
 git add tests/eval/test_ai_analysis_quality.py scripts/eval_analysis_pipeline.py

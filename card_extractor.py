@@ -1,5 +1,6 @@
 """Utility functions for paper metadata and card processing."""
 
+import json
 import uuid
 from typing import Any
 
@@ -38,6 +39,12 @@ HEURISTIC_CONFIDENCE = {
     "Limitation": 0.5,
     "Metric": 0.5,
 }
+
+HEURISTIC_EXTRACTOR_VERSION = "heuristic-v1"
+HEURISTIC_QUALITY_FLAGS = [
+    "heuristic_low_confidence",
+    "needs_manual_review",
+]
 
 def extract_metadata_from_passages(passages: list[dict[str, Any]]) -> dict[str, str]:
     """Basic metadata extractor to provide initial info before Agent analysis."""
@@ -118,6 +125,7 @@ def _make_card(
     summary: str,
     confidence: float,
 ) -> dict[str, Any]:
+    confidence = min(confidence, 0.55)
     return {
         "id": str(uuid.uuid4()),
         "space_id": space_id,
@@ -127,6 +135,11 @@ def _make_card(
         "summary": summary[:500],
         "confidence": confidence,
         "user_edited": 0,
+        "created_by": "heuristic",
+        "extractor_version": HEURISTIC_EXTRACTOR_VERSION,
+        "analysis_run_id": None,
+        "evidence_json": "{}",
+        "quality_flags_json": json.dumps(HEURISTIC_QUALITY_FLAGS),
     }
 
 

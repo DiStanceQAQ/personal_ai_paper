@@ -926,12 +926,12 @@ git commit -m "build: include upgraded PDF pipeline in sidecars"
 - Test: `tests/test_card_extractor.py`
 - Test: `tests/test_card_extractor_domain_neutral.py`
 
-- [ ] Mark heuristic extraction as `created_by='heuristic'` and low confidence.
-- [ ] Prevent heuristic extraction from overwriting AI cards or user cards.
-- [ ] Keep endpoint behavior compatible and message clear that heuristic cards require manual review.
-- [ ] Run: `pytest tests/test_card_extractor.py tests/test_card_extractor_domain_neutral.py tests/test_routes_cards.py -q`
-- [ ] Expected: PASS.
-- [ ] Commit:
+- [x] Mark heuristic extraction as `created_by='heuristic'` and low confidence.
+- [x] Prevent heuristic extraction from overwriting AI cards or user cards.
+- [x] Keep endpoint behavior compatible and message clear that heuristic cards require manual review.
+- [x] Run: `pytest tests/test_card_extractor.py tests/test_card_extractor_domain_neutral.py tests/test_routes_cards.py -q`
+- [x] Expected: PASS.
+- [x] Commit:
 
 ```bash
 git add card_extractor.py routes_cards.py tests/test_card_extractor.py tests/test_card_extractor_domain_neutral.py tests/test_routes_cards.py

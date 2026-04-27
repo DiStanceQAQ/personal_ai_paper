@@ -21,6 +21,47 @@ def _card_row_to_dict(row: Any) -> dict[str, Any]:
     return dict(row)
 
 
+def _persist_heuristic_card(conn: Any, card: dict[str, Any]) -> bool:
+    """Insert heuristic output without replacing user-owned or AI-owned cards."""
+    cursor = conn.execute(
+        """
+        INSERT INTO knowledge_cards (
+            id, space_id, paper_id, source_passage_id, card_type, summary,
+            confidence, user_edited, created_by, extractor_version,
+            analysis_run_id, evidence_json, quality_flags_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'heuristic', ?, NULL, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            source_passage_id = excluded.source_passage_id,
+            card_type = excluded.card_type,
+            summary = excluded.summary,
+            confidence = excluded.confidence,
+            user_edited = 0,
+            created_by = 'heuristic',
+            extractor_version = excluded.extractor_version,
+            analysis_run_id = NULL,
+            evidence_json = excluded.evidence_json,
+            quality_flags_json = excluded.quality_flags_json,
+            updated_at = datetime('now')
+        WHERE knowledge_cards.created_by = 'heuristic'
+          AND knowledge_cards.user_edited != 1
+        """,
+        (
+            str(card["id"]),
+            str(card["space_id"]),
+            str(card["paper_id"]),
+            card.get("source_passage_id"),
+            str(card["card_type"]),
+            str(card["summary"]),
+            min(float(card.get("confidence", 0.0)), 0.55),
+            str(card.get("extractor_version", "heuristic-v1")),
+            str(card.get("evidence_json", "{}")),
+            str(card.get("quality_flags_json", "[]")),
+        ),
+    )
+    return cursor.rowcount > 0
+
+
 def _get_active_space_id() -> str:
     conn = get_connection()
     try:
@@ -243,7 +284,9 @@ async def extract_cards(paper_id: str) -> dict[str, Any]:
                 "status": "no_passages",
                 "paper_id": paper_id,
                 "card_count": 0,
+                "skipped_card_count": 0,
                 "mode": "heuristic",
+                "review_required": False,
                 "message": "没有可抽取的原文片段。",
             }
 
@@ -260,30 +303,20 @@ async def extract_cards(paper_id: str) -> dict[str, Any]:
                 )
 
         cards = extract_cards_from_passages(passage_list, paper_id, space_id)
+        persisted_count = 0
         for card in cards:
-            conn.execute(
-                """INSERT OR REPLACE INTO knowledge_cards
-                   (id, space_id, paper_id, source_passage_id, card_type, summary, confidence, user_edited)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    card["id"],
-                    card["space_id"],
-                    card["paper_id"],
-                    card["source_passage_id"],
-                    card["card_type"],
-                    card["summary"],
-                    card["confidence"],
-                    card["user_edited"],
-                ),
-            )
+            if _persist_heuristic_card(conn, card):
+                persisted_count += 1
 
         conn.commit()
         return {
             "status": "extracted",
             "paper_id": paper_id,
-            "card_count": len(cards),
+            "card_count": persisted_count,
+            "skipped_card_count": len(cards) - persisted_count,
             "mode": "heuristic",
-            "message": "启发式抽取结果需要人工检查和修正。",
+            "review_required": True,
+            "message": "启发式抽取结果置信度较低，需要人工复核后再使用。",
         }
     finally:
         conn.close()

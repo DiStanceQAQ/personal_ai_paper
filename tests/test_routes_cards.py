@@ -1,5 +1,6 @@
 """Tests for knowledge cards API."""
 
+import json
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
@@ -34,11 +35,15 @@ MANUAL_PROVENANCE = {
 
 HEURISTIC_PROVENANCE = {
     "created_by": "heuristic",
-    "extractor_version": "",
+    "extractor_version": "heuristic-v1",
     "analysis_run_id": None,
     "evidence_json": "{}",
-    "quality_flags_json": "[]",
 }
+
+HEURISTIC_REVIEW_FLAGS = [
+    "heuristic_low_confidence",
+    "needs_manual_review",
+]
 
 
 def assert_prior_card_fields(card: dict[str, object]) -> None:
@@ -56,6 +61,7 @@ def assert_heuristic_provenance(card: dict[str, object]) -> None:
     """Heuristic extraction keeps its non-AI generated provenance."""
     for key, expected_value in HEURISTIC_PROVENANCE.items():
         assert card[key] == expected_value
+    assert json.loads(str(card["quality_flags_json"])) == HEURISTIC_REVIEW_FLAGS
 
 
 @pytest.fixture
@@ -250,7 +256,8 @@ async def test_extract_cards_returns_heuristic_metadata(
     body = resp.json()
     assert body["status"] == "extracted"
     assert body["mode"] == "heuristic"
-    assert body["message"] == "启发式抽取结果需要人工检查和修正。"
+    assert body["review_required"] is True
+    assert "人工复核" in body["message"]
 
     resp = await client.get(f"/api/cards?paper_id={paper_id}")
     assert resp.status_code == 200
@@ -260,3 +267,95 @@ async def test_extract_cards_returns_heuristic_metadata(
     for card in cards:
         assert_prior_card_fields(card)
         assert_heuristic_provenance(card)
+        assert card["confidence"] <= 0.55
+
+
+@pytest.mark.asyncio
+async def test_extract_cards_does_not_replace_user_or_ai_cards_on_id_conflict(
+    client: AsyncClient,
+    setup_space_and_paper: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    space_id, paper_id = setup_space_and_paper
+
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO passages
+               (id, paper_id, space_id, section, original_text)
+               VALUES ('conflict-passage', ?, ?, 'method', ?)""",
+            (paper_id, space_id, "We propose a method."),
+        )
+        conn.execute(
+            """INSERT INTO knowledge_cards
+               (id, space_id, paper_id, source_passage_id, card_type, summary,
+                confidence, user_edited, created_by, extractor_version)
+               VALUES
+               ('manual-card', ?, ?, 'conflict-passage', 'Method',
+                'Manual summary stays', 0.99, 1, 'user', ''),
+               ('ai-card', ?, ?, 'conflict-passage', 'Result',
+                'AI summary stays', 0.88, 0, 'ai', 'analysis-v2')""",
+            (space_id, paper_id, space_id, paper_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    def fake_extract_cards(
+        passages: list[dict[str, object]],
+        extracted_paper_id: str,
+        extracted_space_id: str,
+    ) -> list[dict[str, object]]:
+        base = {
+            "space_id": extracted_space_id,
+            "paper_id": extracted_paper_id,
+            "source_passage_id": "conflict-passage",
+            "card_type": "Method",
+            "confidence": 0.3,
+            "user_edited": 0,
+            "created_by": "heuristic",
+            "extractor_version": "heuristic-v1",
+            "analysis_run_id": None,
+            "evidence_json": "{}",
+            "quality_flags_json": json.dumps(HEURISTIC_REVIEW_FLAGS),
+        }
+        return [
+            {**base, "id": "manual-card", "summary": "Should not replace manual"},
+            {**base, "id": "ai-card", "summary": "Should not replace AI"},
+            {**base, "id": "new-heuristic-card", "summary": "New heuristic"},
+        ]
+
+    monkeypatch.setattr("routes_cards.extract_cards_from_passages", fake_extract_cards)
+
+    resp = await client.post(f"/api/cards/extract/{paper_id}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["card_count"] == 1
+    assert body["skipped_card_count"] == 2
+    assert body["review_required"] is True
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT id, summary, created_by, confidence, extractor_version,
+                      quality_flags_json
+               FROM knowledge_cards
+               WHERE id IN ('manual-card', 'ai-card', 'new-heuristic-card')
+               ORDER BY id"""
+        ).fetchall()
+    finally:
+        conn.close()
+
+    cards = {row["id"]: dict(row) for row in rows}
+    assert cards["manual-card"]["summary"] == "Manual summary stays"
+    assert cards["manual-card"]["created_by"] == "user"
+    assert cards["manual-card"]["confidence"] == 0.99
+    assert cards["ai-card"]["summary"] == "AI summary stays"
+    assert cards["ai-card"]["created_by"] == "ai"
+    assert cards["ai-card"]["extractor_version"] == "analysis-v2"
+    assert cards["new-heuristic-card"]["summary"] == "New heuristic"
+    assert cards["new-heuristic-card"]["created_by"] == "heuristic"
+    assert json.loads(cards["new-heuristic-card"]["quality_flags_json"]) == (
+        HEURISTIC_REVIEW_FLAGS
+    )

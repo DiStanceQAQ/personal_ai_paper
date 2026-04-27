@@ -1,5 +1,7 @@
 """Tests for rules-based card extraction."""
 
+import json
+
 from card_extractor import extract_cards_from_passages
 
 
@@ -71,6 +73,35 @@ def test_extraction_binds_source_passage() -> None:
     for c in cards:
         assert c["source_passage_id"] is not None
         assert c["paper_id"] == "paper-1"
+
+
+def test_heuristic_cards_are_marked_for_manual_review() -> None:
+    passages = [
+        {
+            "id": "p6",
+            "paper_id": "paper-1",
+            "space_id": "space-1",
+            "section": "method",
+            "page_number": 3,
+            "paragraph_index": 0,
+            "original_text": "We present a workflow for measuring sample stability.",
+            "passage_type": "method",
+        }
+    ]
+
+    cards = extract_cards_from_passages(passages, "paper-1", "space-1")
+
+    assert cards
+    for card in cards:
+        assert card["created_by"] == "heuristic"
+        assert card["extractor_version"] == "heuristic-v1"
+        assert card["analysis_run_id"] is None
+        assert card["confidence"] <= 0.55
+        assert card["evidence_json"] == "{}"
+        assert json.loads(card["quality_flags_json"]) == [
+            "heuristic_low_confidence",
+            "needs_manual_review",
+        ]
 
 
 def test_extraction_empty_passages() -> None:

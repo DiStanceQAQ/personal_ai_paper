@@ -47,6 +47,7 @@ py-modules = [
     "pdf_backend_pymupdf4llm",
     "pdf_chunker",
     "pdf_models",
+    "pdf_persistence",
     "pdf_profile",
     "pdf_router",
     "routes_agent",

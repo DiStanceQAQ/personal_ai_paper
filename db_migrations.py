@@ -12,7 +12,7 @@ __all__ = [
 ]
 
 SCHEMA_VERSION_KEY = "schema_version"
-LATEST_SCHEMA_VERSION = 3
+LATEST_SCHEMA_VERSION = 4
 
 Migration = Callable[[sqlite3.Connection], None]
 
@@ -452,10 +452,46 @@ def _create_analysis_run_and_card_provenance_schema(conn: sqlite3.Connection) ->
         conn.execute(statement)
 
 
+def _create_passage_embedding_schema(conn: sqlite3.Connection) -> None:
+    """Create optional embedding storage for passage semantic search."""
+    statements = (
+        """
+        CREATE TABLE IF NOT EXISTS passage_embeddings (
+            passage_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            dimension INTEGER NOT NULL CHECK(dimension > 0),
+            embedding_json TEXT NOT NULL,
+            content_hash TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (passage_id, provider, model),
+            FOREIGN KEY (passage_id)
+                REFERENCES passages(id)
+                ON DELETE CASCADE
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_passage_embeddings_passage_id
+            ON passage_embeddings(passage_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_passage_embeddings_provider_model
+            ON passage_embeddings(provider, model)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_passage_embeddings_content_hash
+            ON passage_embeddings(content_hash)
+        """,
+    )
+    for statement in statements:
+        conn.execute(statement)
+
+
 MIGRATIONS: dict[int, Migration] = {
     1: _create_parse_run_document_tables,
     2: _extend_passages_with_provenance_columns,
     3: _create_analysis_run_and_card_provenance_schema,
+    4: _create_passage_embedding_schema,
 }
 
 

@@ -759,12 +759,12 @@ git commit -m "feat: show AI card source grounding"
 - Create: `embeddings.py`
 - Test: `tests/test_embeddings.py`
 
-- [ ] Add migration `4` creating `passage_embeddings` with `passage_id`, `provider`, `model`, `dimension`, `embedding_json`, `content_hash`, and `created_at`.
-- [ ] Implement provider interface for `none`, OpenAI-compatible embeddings, and local sentence-transformer when optional dependency is installed.
-- [ ] Default provider is `none`; FTS remains functional without embeddings.
-- [ ] Run: `pytest tests/test_embeddings.py tests/test_db_migrations.py -q`
-- [ ] Expected: PASS with mocked providers.
-- [ ] Commit:
+- [x] Add migration `4` creating `passage_embeddings` with `passage_id`, `provider`, `model`, `dimension`, `embedding_json`, `content_hash`, and `created_at`.
+- [x] Implement provider interface for `none`, OpenAI-compatible embeddings, and local sentence-transformer when optional dependency is installed.
+- [x] Default provider is `none`; FTS remains functional without embeddings.
+- [x] Run: `pytest tests/test_embeddings.py tests/test_db_migrations.py -q`
+- [x] Expected: PASS with mocked providers.
+- [x] Commit:
 
 ```bash
 git add db_migrations.py embeddings.py tests/test_embeddings.py tests/test_db_migrations.py

@@ -12,7 +12,7 @@ from db_migrations import apply_migrations, get_schema_version, set_schema_versi
 
 
 SCHEMA_VERSION_KEY = "schema_version"
-EXPECTED_SCHEMA_VERSION = 3
+EXPECTED_SCHEMA_VERSION = 4
 
 
 def schema_version_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -914,6 +914,89 @@ def test_migration_three_creates_analysis_run_and_card_source_schema() -> None:
                 ("id", "paper_id", "space_id"),
             ),
         }.issubset(foreign_key_groups(conn, "knowledge_card_sources"))
+
+        conn.close()
+
+
+def test_migration_four_creates_passage_embedding_schema() -> None:
+    """Migration 4 creates optional passage embedding storage."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+
+        assert "passage_embeddings" in set(get_table_names(conn))
+        assert get_schema_version(conn) == EXPECTED_SCHEMA_VERSION
+
+        columns = table_column_info(conn, "passage_embeddings")
+        expected_columns = {
+            "passage_id": ("TEXT", 1, None),
+            "provider": ("TEXT", 1, None),
+            "model": ("TEXT", 1, None),
+            "dimension": ("INTEGER", 1, None),
+            "embedding_json": ("TEXT", 1, None),
+            "content_hash": ("TEXT", 0, None),
+            "created_at": ("TEXT", 1, "datetime('now')"),
+        }
+        assert expected_columns.keys() <= columns.keys()
+        for column_name, (expected_type, expected_notnull, expected_default) in (
+            expected_columns.items()
+        ):
+            assert columns[column_name]["type"] == expected_type
+            assert columns[column_name]["notnull"] == expected_notnull
+            assert columns[column_name]["dflt_value"] == expected_default
+
+        assert {
+            "sqlite_autoindex_passage_embeddings_1",
+            "idx_passage_embeddings_passage_id",
+            "idx_passage_embeddings_provider_model",
+            "idx_passage_embeddings_content_hash",
+        }.issubset(index_names(conn, "passage_embeddings"))
+        assert_index_columns(
+            conn,
+            {
+                "idx_passage_embeddings_passage_id": ("passage_id",),
+                "idx_passage_embeddings_provider_model": ("provider", "model"),
+                "idx_passage_embeddings_content_hash": ("content_hash",),
+            },
+        )
+        assert {
+            ("passage_id", "passages"),
+        }.issubset(foreign_key_targets(conn, "passage_embeddings"))
+
+        conn.close()
+
+
+def test_deleting_passage_cascades_embedding_rows() -> None:
+    """Deleting a passage removes its stored embeddings."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+        insert_space(conn, "space-1")
+        insert_paper(conn, "paper-1", "space-1")
+        insert_passage(conn, "passage-1", "paper-1", "space-1")
+        conn.execute(
+            """
+            INSERT INTO passage_embeddings (
+                passage_id, provider, model, dimension, embedding_json, content_hash
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "passage-1",
+                "openai",
+                "text-embedding-3-small",
+                3,
+                "[0.1,0.2,0.3]",
+                "hash-1",
+            ),
+        )
+        conn.commit()
+
+        conn.execute("DELETE FROM passages WHERE id = ?", ("passage-1",))
+        conn.commit()
+
+        row_count = conn.execute("SELECT COUNT(*) FROM passage_embeddings").fetchone()
+        assert row_count[0] == 0
 
         conn.close()
 

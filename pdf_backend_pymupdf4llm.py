@@ -104,25 +104,36 @@ class _DocumentBuilder:
 
     def build(self) -> ParseDocument:
         repeated_text = _repeated_margin_text(self.chunks)
+        repeated_markdown_margins = _repeated_markdown_margins(self.chunks)
 
         for chunk_index, chunk in enumerate(self.chunks):
             page_number = _page_number(chunk, chunk_index)
             text = str(chunk.get("text") or "")
             toc_items = _as_list(chunk.get("toc_items"))
+            page_boxes = _as_list(chunk.get("page_boxes"))
+            tables = _as_list(chunk.get("tables"))
             self._add_page_boxes(
                 page_number=page_number,
                 text=text,
-                boxes=_as_list(chunk.get("page_boxes")),
+                boxes=page_boxes,
                 repeated_text=repeated_text,
                 toc_items=toc_items,
             )
             self._add_toc_items(page_number, toc_items)
-            self._add_tables(page_number, _as_list(chunk.get("tables")))
+            if page_boxes:
+                self._add_tables(page_number, tables)
             self._add_assets(page_number, _as_list(chunk.get("images")), "image")
             self._add_assets(page_number, _as_list(chunk.get("graphics")), "graphic")
 
-            if not _as_list(chunk.get("page_boxes")):
-                self._add_markdown_blocks(page_number, text, toc_items)
+            if not page_boxes:
+                consumed_tables = self._add_markdown_blocks(
+                    page_number,
+                    text,
+                    toc_items,
+                    repeated_markdown_margins,
+                    tables,
+                )
+                self._add_tables(page_number, tables[consumed_tables:])
 
         return ParseDocument(
             paper_id=self.paper_id,
@@ -218,40 +229,74 @@ class _DocumentBuilder:
         page_number: int,
         text: str,
         toc_items: list[Any],
-    ) -> None:
-        for block in _markdown_blocks(text):
+        repeated_markdown_margins: tuple[set[str], set[str]],
+        table_metadata: list[Any],
+    ) -> int:
+        consumed_tables = 0
+        blocks = _split_markdown_margin_lines(
+            _markdown_blocks(text),
+            repeated_markdown_margins,
+        )
+        last_block_index = len(blocks) - 1
+        for block_index, block in enumerate(blocks):
             element_type = _element_type_for_markdown(block)
             cleaned_text = _clean_markdown_text(block)
             if not cleaned_text:
                 continue
+            normalized_text = _normalize_repeated_text(cleaned_text)
+            if block_index == 0 and normalized_text in repeated_markdown_margins[0]:
+                element_type = "page_header"
+            elif (
+                block_index == last_block_index
+                and normalized_text in repeated_markdown_margins[1]
+            ):
+                element_type = "page_footer"
+
+            filtered = element_type in {"page_header", "page_footer"}
             if element_type == "heading":
                 self._heading_path = [cleaned_text]
             elif (
                 element_type == "paragraph"
                 and not self._saw_title
+                and not filtered
                 and _looks_like_title(cleaned_text)
             ):
                 element_type = "title"
                 self._saw_title = True
 
+            raw_table = _next_mapping(table_metadata, consumed_tables)
+            table_bbox = _bbox(raw_table.get("bbox")) if raw_table else None
+            table_metadata_values = _table_count_metadata(raw_table) if raw_table else {}
+            if element_type == "table" and raw_table is not None:
+                consumed_tables += 1
+
+            metadata: dict[str, Any] = {
+                "source": "markdown",
+                "toc_items": _matching_toc_items(cleaned_text, toc_items),
+            }
+            if filtered:
+                metadata["filtered"] = True
+            if element_type == "table":
+                metadata.update(table_metadata_values)
+                if raw_table is not None:
+                    metadata["table_metadata_source"] = "tables"
+
             element = self._add_element(
                 element_type=element_type,
                 text=cleaned_text,
                 page_number=page_number,
-                bbox=None,
-                metadata={
-                    "source": "markdown",
-                    "toc_items": _matching_toc_items(cleaned_text, toc_items),
-                },
+                bbox=table_bbox if element_type == "table" else None,
+                metadata=metadata,
             )
             if element.element_type == "table":
                 self._add_table(
                     page_number=page_number,
                     element_id=element.id,
                     cells=_markdown_table_cells(block),
-                    bbox=None,
-                    metadata={"source": "markdown"},
+                    bbox=table_bbox,
+                    metadata={"source": "markdown", **table_metadata_values},
                 )
+        return consumed_tables
 
     def _add_toc_items(self, page_number: int, toc_items: list[Any]) -> None:
         existing_headings = {
@@ -281,13 +326,16 @@ class _DocumentBuilder:
             bbox = _bbox(raw_table.get("bbox"))
             cells = _table_cells(raw_table)
             caption = str(raw_table.get("caption") or "")
+            if not cells and not caption:
+                continue
+            metadata = {"source": "tables", **_table_count_metadata(raw_table)}
             text = caption or _cells_to_markdown(cells) or "Table"
             element = self._add_element(
                 element_type="table",
                 text=text,
                 page_number=page_number,
                 bbox=bbox,
-                metadata={"source": "tables"},
+                metadata=metadata,
             )
             self._add_table(
                 page_number=page_number,
@@ -295,7 +343,7 @@ class _DocumentBuilder:
                 cells=cells,
                 bbox=bbox,
                 caption=caption,
-                metadata={"source": "tables"},
+                metadata=metadata,
             )
 
     def _add_assets(self, page_number: int, assets: list[Any], asset_type: str) -> None:
@@ -486,6 +534,33 @@ def _markdown_blocks(text: str) -> list[str]:
     return blocks
 
 
+def _split_markdown_margin_lines(
+    blocks: list[str],
+    repeated_markdown_margins: tuple[set[str], set[str]],
+) -> list[str]:
+    if not blocks:
+        return blocks
+
+    headers, footers = repeated_markdown_margins
+    split_blocks = list(blocks)
+
+    first_lines = split_blocks[0].splitlines()
+    if (
+        len(first_lines) > 1
+        and _normalize_repeated_text(first_lines[0]) in headers
+    ):
+        split_blocks = [first_lines[0], "\n".join(first_lines[1:]), *split_blocks[1:]]
+
+    last_lines = split_blocks[-1].splitlines()
+    if (
+        len(last_lines) > 1
+        and _normalize_repeated_text(last_lines[-1]) in footers
+    ):
+        split_blocks = [*split_blocks[:-1], "\n".join(last_lines[:-1]), last_lines[-1]]
+
+    return [block for block in split_blocks if block.strip()]
+
+
 def _element_type_for_box(
     *,
     box_class: str,
@@ -578,6 +653,25 @@ def _table_cells(raw_table: Mapping[str, Any]) -> list[list[str]]:
     return _markdown_table_cells(markdown)
 
 
+def _table_count_metadata(raw_table: Mapping[str, Any] | None) -> dict[str, int]:
+    if raw_table is None:
+        return {}
+
+    metadata: dict[str, int] = {}
+    for key in ("rows", "columns"):
+        value = raw_table.get(key)
+        if isinstance(value, int):
+            metadata[key] = value
+    return metadata
+
+
+def _next_mapping(values: list[Any], start_index: int) -> Mapping[str, Any] | None:
+    for value in values[start_index:]:
+        if isinstance(value, Mapping):
+            return value
+    return None
+
+
 def _cells_to_markdown(cells: list[list[str]]) -> str:
     return "\n".join("|" + "|".join(row) + "|" for row in cells)
 
@@ -596,6 +690,40 @@ def _repeated_margin_text(chunks: list[Mapping[str, Any]]) -> set[str]:
             if text:
                 candidates[text] += 1
     return {text for text, count in candidates.items() if count >= 2}
+
+
+def _repeated_markdown_margins(
+    chunks: list[Mapping[str, Any]],
+) -> tuple[set[str], set[str]]:
+    header_candidates: Counter[str] = Counter()
+    footer_candidates: Counter[str] = Counter()
+
+    for chunk in chunks:
+        if _as_list(chunk.get("page_boxes")):
+            continue
+
+        blocks = _markdown_blocks(str(chunk.get("text") or ""))
+        if not blocks:
+            continue
+
+        first_block_lines = blocks[0].splitlines()
+        first_line = first_block_lines[0] if first_block_lines else blocks[0]
+        last_block_lines = blocks[-1].splitlines()
+        last_line = last_block_lines[-1] if last_block_lines else blocks[-1]
+
+        for candidate in {blocks[0], first_line}:
+            normalized = _normalize_repeated_text(_clean_markdown_text(candidate))
+            if normalized:
+                header_candidates[normalized] += 1
+        for candidate in {blocks[-1], last_line}:
+            normalized = _normalize_repeated_text(_clean_markdown_text(candidate))
+            if normalized:
+                footer_candidates[normalized] += 1
+
+    return (
+        {text for text, count in header_candidates.items() if count >= 2},
+        {text for text, count in footer_candidates.items() if count >= 2},
+    )
 
 
 def _normalize_repeated_text(text: str) -> str:

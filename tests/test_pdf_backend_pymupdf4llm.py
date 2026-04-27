@@ -180,6 +180,104 @@ def test_fake_chunk_conversion_covers_text_toc_layout_and_assets(
     )
 
 
+def test_legacy_table_metadata_merges_with_markdown_cells(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Legacy count-only table metadata should not create an empty duplicate."""
+    backend_module = _backend_module()
+    fake_pdf = tmp_path / "legacy-table.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.7\n")
+    chunks = [
+        {
+            "metadata": {"page": 1},
+            "tables": [{"bbox": (1, 2, 3, 4), "rows": 3, "columns": 2}],
+            "text": (
+                "Legacy Table\n\n"
+                "|Metric|Value|\n"
+                "|---|---|\n"
+                "|Accuracy|0.91|\n"
+                "|Recall|0.88|\n"
+            ),
+        }
+    ]
+    fake_module = SimpleNamespace(to_markdown=lambda *args, **kwargs: chunks)
+    monkeypatch.setattr(backend_module, "_load_pymupdf4llm", lambda: fake_module)
+
+    document = backend_module.PyMuPDF4LLMBackend().parse(
+        fake_pdf,
+        paper_id="paper-legacy-table",
+        space_id="space",
+        quality_report=_quality(needs_layout_model=True),
+    )
+
+    assert len(document.tables) == 1
+    table = document.tables[0]
+    assert table.cells == [
+        ["Metric", "Value"],
+        ["Accuracy", "0.91"],
+        ["Recall", "0.88"],
+    ]
+    assert table.bbox == [1.0, 2.0, 3.0, 4.0]
+    assert table.metadata["rows"] == 3
+    assert table.metadata["columns"] == 2
+    assert all(candidate.cells for candidate in document.tables)
+
+
+def test_markdown_only_repeated_margins_are_filtered_not_title(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Repeated first/last markdown blocks should become filtered page margins."""
+    backend_module = _backend_module()
+    fake_pdf = tmp_path / "markdown-margins.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.7\n")
+    chunks = [
+        {
+            "metadata": {"page": 1},
+            "text": (
+                "Repeated Header\n\n"
+                "Real Paper Title\n\n"
+                "Body paragraph on page one.\n\n"
+                "Repeated Footer"
+            ),
+        },
+        {
+            "metadata": {"page": 2},
+            "text": (
+                "Repeated Header\n\n"
+                "## Methods\n\n"
+                "Body paragraph on page two.\n\n"
+                "Repeated Footer"
+            ),
+        },
+    ]
+    fake_module = SimpleNamespace(to_markdown=lambda *args, **kwargs: chunks)
+    monkeypatch.setattr(backend_module, "_load_pymupdf4llm", lambda: fake_module)
+
+    document = backend_module.PyMuPDF4LLMBackend().parse(
+        fake_pdf,
+        paper_id="paper-markdown-margins",
+        space_id="space",
+        quality_report=_quality(),
+    )
+
+    filtered = [
+        element
+        for element in document.elements
+        if element.metadata.get("filtered") is True
+    ]
+    assert [element.element_type for element in filtered].count("page_header") == 2
+    assert [element.element_type for element in filtered].count("page_footer") == 2
+    assert {element.text for element in filtered} == {
+        "Repeated Header",
+        "Repeated Footer",
+    }
+    titles = [element.text for element in document.elements if element.element_type == "title"]
+    assert titles == ["Real Paper Title"]
+    assert all(element.text != "Repeated Header" for element in document.elements if element.element_type == "title")
+
+
 def test_live_simple_academic_pdf_yields_title_heading_and_paragraph(
     tmp_path: Path,
 ) -> None:

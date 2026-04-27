@@ -646,7 +646,7 @@ git commit -m "feat: batch full-paper passages for AI analysis"
 - [x] Reject cards with unsupported card type, empty summary, missing source, or evidence mismatch.
 - [x] Run: `pytest tests/test_analysis_verifier.py -q`
 - [x] Expected: PASS; hallucinated sources and unsupported evidence are rejected.
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add analysis_verifier.py tests/test_analysis_verifier.py
@@ -659,12 +659,12 @@ git commit -m "feat: verify AI card source grounding"
 - Modify: `analysis_pipeline.py`
 - Test: `tests/test_analysis_pipeline_cards.py`
 
-- [ ] For each selected batch, call strict schema extraction and run `analysis_verifier`.
-- [ ] Retry once with a repair prompt when schema validation passes but source verification fails.
-- [ ] Return accepted cards and rejected-card diagnostics.
-- [ ] Run: `pytest tests/test_analysis_pipeline_cards.py -q`
-- [ ] Expected: PASS using mocked LLM responses for success, repair, and rejection.
-- [ ] Commit:
+- [x] For each selected batch, call strict schema extraction and run `analysis_verifier`.
+- [x] Retry once with a repair prompt when schema validation passes but source verification fails.
+- [x] Return accepted cards and rejected-card diagnostics.
+- [x] Run: `pytest tests/test_analysis_pipeline_cards.py -q`
+- [x] Expected: PASS using mocked LLM responses for success, repair, and rejection.
+- [x] Commit:
 
 ```bash
 git add analysis_pipeline.py tests/test_analysis_pipeline_cards.py

@@ -10,8 +10,16 @@ from typing import Any, TypeAlias
 
 from pydantic import BaseModel, ValidationError
 
-from analysis_models import PaperMetadataExtraction
-from analysis_prompts import build_metadata_extraction_prompt
+from analysis_models import CardExtraction, CardExtractionBatch, PaperMetadataExtraction
+from analysis_prompts import (
+    build_card_batch_extraction_prompt,
+    build_metadata_extraction_prompt,
+)
+from analysis_verifier import (
+    RejectedCardDiagnostic,
+    SourceVerificationResult,
+    verify_extraction_batch_sources,
+)
 from llm_client import LLMStructuredOutputError, call_llm_schema
 from pdf_chunker import count_text_tokens
 
@@ -511,6 +519,178 @@ async def extract_metadata_stage(
     )
 
 
+async def extract_card_batches_stage(
+    paper_id: str,
+    space_id: str,
+    batches: Sequence[AnalysisPassageBatch],
+) -> SourceVerificationResult:
+    """Extract and source-verify AI cards for selected passage batches."""
+    accepted_cards: list[CardExtraction] = []
+    rejected_cards: list[RejectedCardDiagnostic] = []
+
+    for batch in batches:
+        try:
+            extraction_batch = await _call_card_batch_extraction(
+                paper_id=paper_id,
+                space_id=space_id,
+                batch=batch,
+            )
+        except (LLMStructuredOutputError, ValidationError, ValueError) as exc:
+            rejected_cards.append(
+                _card_batch_failure_diagnostic(
+                    batch,
+                    stage="initial",
+                    exc=exc,
+                )
+            )
+            continue
+
+        verification = verify_extraction_batch_sources(
+            extraction_batch,
+            batch.passages,
+        )
+        accepted_cards.extend(verification.accepted_cards)
+        if not verification.rejected_cards:
+            continue
+
+        try:
+            repaired_batch = await _call_card_batch_extraction(
+                paper_id=paper_id,
+                space_id=space_id,
+                batch=batch,
+                repair_diagnostics=verification.rejected_cards,
+            )
+        except (LLMStructuredOutputError, ValidationError, ValueError) as exc:
+            rejected_cards.extend(
+                _diagnostics_with_repair_error(verification.rejected_cards, exc)
+            )
+            continue
+
+        repaired_verification = verify_extraction_batch_sources(
+            repaired_batch,
+            batch.passages,
+        )
+        accepted_cards.extend(repaired_verification.accepted_cards)
+        rejected_cards.extend(repaired_verification.rejected_cards)
+
+    return SourceVerificationResult(
+        accepted_cards=accepted_cards,
+        rejected_cards=rejected_cards,
+    )
+
+
+async def _call_card_batch_extraction(
+    *,
+    paper_id: str,
+    space_id: str,
+    batch: AnalysisPassageBatch,
+    repair_diagnostics: Sequence[RejectedCardDiagnostic] | None = None,
+) -> CardExtractionBatch:
+    prompt = build_card_batch_extraction_prompt(
+        paper_id=paper_id,
+        space_id=space_id,
+        batch_index=batch.batch_index,
+        passages=batch.passages,
+    )
+    user_prompt = prompt.user_prompt
+    if repair_diagnostics:
+        user_prompt = _card_batch_repair_prompt(user_prompt, repair_diagnostics)
+
+    response = await call_llm_schema(
+        prompt.system_prompt,
+        user_prompt,
+        prompt.schema_name,
+        prompt.schema,
+    )
+    return CardExtractionBatch.model_validate(response)
+
+
+def _card_batch_repair_prompt(
+    original_user_prompt: str,
+    diagnostics: Sequence[RejectedCardDiagnostic],
+) -> str:
+    return "\n".join(
+        [
+            original_user_prompt,
+            (
+                "Repair request: The previous CardExtractionBatch passed schema "
+                "validation, but source verification rejected the following cards."
+            ),
+            (
+                "Return a CardExtractionBatch containing only corrected replacements "
+                "for rejected cards. Do not repeat accepted cards. Drop any card that "
+                "cannot be repaired from the provided source passages."
+            ),
+            "Rejected diagnostics (JSON):",
+            _diagnostics_json(diagnostics),
+        ]
+    )
+
+
+def _diagnostics_json(diagnostics: Sequence[RejectedCardDiagnostic]) -> str:
+    return json.dumps(
+        [_diagnostic_payload(diagnostic) for diagnostic in diagnostics],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _diagnostic_payload(
+    diagnostic: RejectedCardDiagnostic,
+) -> dict[str, Any]:
+    return {
+        "card_index": diagnostic.card_index,
+        "reason": diagnostic.reason,
+        "message": diagnostic.message,
+        "source_passage_ids": diagnostic.source_passage_ids,
+        "evidence_quote": diagnostic.evidence_quote,
+        "batch_index": diagnostic.batch_index,
+        "metadata": diagnostic.metadata,
+    }
+
+
+def _card_batch_failure_diagnostic(
+    batch: AnalysisPassageBatch,
+    *,
+    stage: str,
+    exc: Exception,
+) -> RejectedCardDiagnostic:
+    return RejectedCardDiagnostic(
+        card_index=-1,
+        reason="invalid_batch",
+        message=f"Card batch extraction failed during {stage}: {exc}",
+        source_passage_ids=list(batch.source_passage_ids),
+        batch_index=batch.batch_index,
+        metadata={
+            "stage": stage,
+            "group_key": batch.group_key,
+            "error": str(exc),
+        },
+    )
+
+
+def _diagnostics_with_repair_error(
+    diagnostics: Sequence[RejectedCardDiagnostic],
+    exc: Exception,
+) -> list[RejectedCardDiagnostic]:
+    return [
+        RejectedCardDiagnostic(
+            card_index=diagnostic.card_index,
+            reason=diagnostic.reason,
+            message=diagnostic.message,
+            source_passage_ids=list(diagnostic.source_passage_ids),
+            evidence_quote=diagnostic.evidence_quote,
+            batch_index=diagnostic.batch_index,
+            metadata={
+                **diagnostic.metadata,
+                "repair_error": str(exc),
+            },
+        )
+        for diagnostic in diagnostics
+    ]
+
+
 class _SourceValue(BaseModel):
     """A normalized value and where it came from."""
 
@@ -795,6 +975,7 @@ def _dedupe_strings(values: Sequence[str]) -> list[str]:
 
 __all__ = [
     "AnalysisPassageBatch",
+    "extract_card_batches_stage",
     "extract_metadata_stage",
     "select_analysis_passage_batches",
 ]

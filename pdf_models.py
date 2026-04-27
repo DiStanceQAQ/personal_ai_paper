@@ -170,6 +170,25 @@ class ParseDocument(_ParserContractModel):
     assets: list[ParseAsset] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_element_references(self) -> Self:
+        """Validate table and asset references against document elements."""
+        element_ids = {element.id for element in self.elements}
+
+        for table in self.tables:
+            if table.element_id is not None and table.element_id not in element_ids:
+                raise ValueError(
+                    f"table {table.id} references unknown element_id {table.element_id}"
+                )
+
+        for asset in self.assets:
+            if asset.element_id is not None and asset.element_id not in element_ids:
+                raise ValueError(
+                    f"asset {asset.id} references unknown element_id {asset.element_id}"
+                )
+
+        return self
+
 
 class ChunkCandidate(_ParserContractModel):
     """Candidate passage chunk assembled from one or more parse elements."""
@@ -217,6 +236,13 @@ class PassageRecord(_ParserContractModel):
     extraction_method: ExtractionMethod | None = None
     quality_flags: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_source_grounding(self) -> Self:
+        """Validate structured provenance has source element IDs."""
+        if self.parse_run_id is not None and not self.element_ids:
+            raise ValueError("element_ids must be set when parse_run_id is set")
+        return self
 
     def to_passage_row(self) -> dict[str, Any]:
         """Return a dict aligned with the migrated passages table columns."""

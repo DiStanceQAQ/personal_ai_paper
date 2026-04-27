@@ -317,6 +317,64 @@ def test_parse_document_nests_quality_elements_tables_and_assets() -> None:
     assert document.assets[0].uri == "assets/figure-1.png"
 
 
+@pytest.mark.parametrize(
+    ("tables", "assets"),
+    [
+        ([ParseTable(id="table-1", element_id="missing-element")], []),
+        (
+            [],
+            [
+                ParseAsset(
+                    id="asset-1",
+                    asset_type="figure",
+                    element_id="missing-element",
+                )
+            ],
+        ),
+    ],
+)
+def test_parse_document_rejects_table_and_asset_references_missing_elements(
+    tables: list[ParseTable],
+    assets: list[ParseAsset],
+) -> None:
+    """ParseDocument should keep table and asset element references grounded."""
+    element = ParseElement(
+        id="element-1",
+        element_index=0,
+        element_type="paragraph",
+        extraction_method="native_text",
+    )
+
+    with pytest.raises(ValidationError):
+        ParseDocument(
+            paper_id="paper-1",
+            space_id="space-1",
+            backend="structured-parser",
+            extraction_method="native_text",
+            quality=PdfQualityReport(),
+            elements=[element],
+            tables=tables,
+            assets=assets,
+        )
+
+
+def test_parse_document_allows_ungrounded_tables_and_assets_without_element_id() -> None:
+    """Legacy or backend-level tables and assets may omit element grounding."""
+    document = ParseDocument(
+        paper_id="paper-1",
+        space_id="space-1",
+        backend="structured-parser",
+        extraction_method="native_text",
+        quality=PdfQualityReport(),
+        elements=[],
+        tables=[ParseTable(id="table-1", element_id=None)],
+        assets=[ParseAsset(id="asset-1", asset_type="figure", element_id=None)],
+    )
+
+    assert document.tables[0].element_id is None
+    assert document.assets[0].element_id is None
+
+
 @pytest.mark.parametrize("passage_type", ["conclusion", "reference", "unknown"])
 def test_passage_record_rejects_unknown_passage_type(passage_type: str) -> None:
     """PassageRecord should enforce the same passage_type vocabulary as SQLite."""
@@ -360,6 +418,34 @@ def test_passage_record_matches_passages_table_and_provenance_fields() -> None:
     assert passage.heading_path == ["Method", "Training"]
     assert passage.extraction_method == "llm_parser"
     assert passage.metadata == {"source": "chunker"}
+
+
+def test_passage_record_allows_legacy_rows_without_parse_run_grounding() -> None:
+    """Legacy passages may omit parse_run_id and element grounding."""
+    passage = PassageRecord(
+        id="passage-1",
+        paper_id="paper-1",
+        space_id="space-1",
+        original_text="Legacy passage text.",
+        parse_run_id=None,
+        element_ids=[],
+    )
+
+    assert passage.parse_run_id is None
+    assert passage.element_ids == []
+
+
+def test_passage_record_rejects_parse_run_without_element_grounding() -> None:
+    """Structured passage provenance should identify source parse elements."""
+    with pytest.raises(ValidationError):
+        PassageRecord(
+            id="passage-1",
+            paper_id="paper-1",
+            space_id="space-1",
+            original_text="Structured passage text.",
+            parse_run_id="run-1",
+            element_ids=[],
+        )
 
 
 def test_passage_record_to_passage_row_maps_provenance_to_json_columns() -> None:

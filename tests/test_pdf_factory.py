@@ -71,7 +71,10 @@ def test_image_only_pdf_has_image_without_selectable_text(tmp_path: Path) -> Non
 
 def test_references_pdf_contains_heading_and_citation_entries(tmp_path: Path) -> None:
     pdf_path = references_pdf(tmp_path / "references.pdf")
-    text = _text_for(pdf_path)
+
+    with pymupdf.open(pdf_path) as doc:
+        assert doc.page_count == 1
+        text = "\n".join(page.get_text() for page in doc)
 
     assert "References" in text
     assert "Smith, J." in text

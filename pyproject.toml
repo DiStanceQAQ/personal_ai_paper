@@ -25,6 +25,7 @@ dev = [
     "mypy>=1.8",
     "pyinstaller>=6.0",
 ]
+pdf-advanced = ["docling>=2.0.0"]
 
 [tool.setuptools]
 py-modules = [
@@ -38,6 +39,7 @@ py-modules = [
     "mcp_server",
     "parser",
     "pdf_backend_base",
+    "pdf_backend_docling",
     "pdf_backend_legacy",
     "pdf_backend_pymupdf4llm",
     "pdf_models",

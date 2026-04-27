@@ -12,6 +12,7 @@ from db_migrations import apply_migrations, get_schema_version, set_schema_versi
 
 
 SCHEMA_VERSION_KEY = "schema_version"
+EXPECTED_SCHEMA_VERSION = 2
 
 
 def schema_version_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -33,6 +34,14 @@ def table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
     """Return column names for a table."""
     rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row["name"] for row in rows}
+
+
+def table_column_info(
+    conn: sqlite3.Connection, table_name: str
+) -> dict[str, sqlite3.Row]:
+    """Return PRAGMA table_info rows keyed by column name."""
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row["name"]: row for row in rows}
 
 
 def index_names(conn: sqlite3.Connection, table_name: str) -> set[str]:
@@ -83,9 +92,9 @@ def test_apply_migrations_creates_initial_schema_version_row() -> None:
         apply_migrations(conn)
 
         rows = schema_version_rows(conn)
-        assert get_schema_version(conn) == 1
+        assert get_schema_version(conn) == EXPECTED_SCHEMA_VERSION
         assert len(rows) == 1
-        assert rows[0]["value"] == "1"
+        assert rows[0]["value"] == str(EXPECTED_SCHEMA_VERSION)
 
         conn.close()
 
@@ -191,9 +200,9 @@ def test_init_db_runs_migrations_idempotently() -> None:
         conn = init_db(database_path=db_path)
 
         rows = schema_version_rows(conn)
-        assert get_schema_version(conn) == 1
+        assert get_schema_version(conn) == EXPECTED_SCHEMA_VERSION
         assert len(rows) == 1
-        assert rows[0]["value"] == "1"
+        assert rows[0]["value"] == str(EXPECTED_SCHEMA_VERSION)
 
         conn.close()
 
@@ -211,7 +220,7 @@ def test_migration_one_creates_parse_run_and_document_element_tables() -> None:
             "document_tables",
             "document_assets",
         }.issubset(tables)
-        assert get_schema_version(conn) == 1
+        assert get_schema_version(conn) == EXPECTED_SCHEMA_VERSION
 
         assert {
             "warnings_json",
@@ -300,6 +309,155 @@ def test_migration_one_creates_parse_storage_indexes() -> None:
                 "idx_document_assets_element_id": ("element_id",),
             },
         )
+
+        conn.close()
+
+
+def test_migration_two_extends_existing_passages_with_provenance_defaults() -> None:
+    """Migration 2 adds nullable/defaulted passage provenance columns."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = create_schema_connection(db_path)
+        insert_space(conn, "space-1")
+        insert_paper(conn, "paper-1", "space-1")
+        conn.execute(
+            """
+            INSERT INTO passages (
+                id, paper_id, space_id, section, page_number, paragraph_index,
+                original_text, parse_confidence, passage_type
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "passage-1",
+                "paper-1",
+                "space-1",
+                "method",
+                3,
+                5,
+                "existing passage",
+                0.9,
+                "method",
+            ),
+        )
+        conn.commit()
+
+        apply_migrations(conn)
+
+        assert get_schema_version(conn) == EXPECTED_SCHEMA_VERSION
+
+        column_info = table_column_info(conn, "passages")
+        expected_columns = {
+            "parse_run_id": ("TEXT", 0, None),
+            "element_ids_json": ("TEXT", 1, "'[]'"),
+            "heading_path_json": ("TEXT", 1, "'[]'"),
+            "bbox_json": ("TEXT", 0, None),
+            "token_count": ("INTEGER", 0, None),
+            "char_count": ("INTEGER", 0, None),
+            "content_hash": ("TEXT", 0, None),
+            "parser_backend": ("TEXT", 1, "''"),
+            "extraction_method": ("TEXT", 1, "''"),
+            "quality_flags_json": ("TEXT", 1, "'[]'"),
+        }
+        assert expected_columns.keys() <= column_info.keys()
+        for column_name, (expected_type, expected_notnull, expected_default) in (
+            expected_columns.items()
+        ):
+            assert column_info[column_name]["type"] == expected_type
+            assert column_info[column_name]["notnull"] == expected_notnull
+            assert column_info[column_name]["dflt_value"] == expected_default
+
+        existing_row = conn.execute(
+            """
+            SELECT parse_run_id, element_ids_json, heading_path_json, bbox_json,
+                   token_count, char_count, content_hash, parser_backend,
+                   extraction_method, quality_flags_json
+            FROM passages
+            WHERE id = ?
+            """,
+            ("passage-1",),
+        ).fetchone()
+        assert dict(existing_row) == {
+            "parse_run_id": None,
+            "element_ids_json": "[]",
+            "heading_path_json": "[]",
+            "bbox_json": None,
+            "token_count": None,
+            "char_count": None,
+            "content_hash": None,
+            "parser_backend": "",
+            "extraction_method": "",
+            "quality_flags_json": "[]",
+        }
+
+        conn.execute(
+            """
+            INSERT INTO passages (id, paper_id, space_id, original_text)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("passage-2", "paper-1", "space-1", "legacy insert still works"),
+        )
+        inserted_row = conn.execute(
+            """
+            SELECT parse_run_id, element_ids_json, heading_path_json, bbox_json,
+                   token_count, char_count, content_hash, parser_backend,
+                   extraction_method, quality_flags_json
+            FROM passages
+            WHERE id = ?
+            """,
+            ("passage-2",),
+        ).fetchone()
+        assert dict(inserted_row) == dict(existing_row)
+
+        conn.close()
+
+
+def test_migration_two_adds_partial_unique_content_hash_index() -> None:
+    """Passages may share NULL hashes but not duplicate hashes per paper."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+
+        index_rows = {
+            row["name"]: row for row in conn.execute("PRAGMA index_list(passages)")
+        }
+        index_row = index_rows["idx_passages_paper_content_hash_unique"]
+        assert index_row["unique"] == 1
+        assert index_row["partial"] == 1
+        assert index_columns(conn, "idx_passages_paper_content_hash_unique") == (
+            "paper_id",
+            "content_hash",
+        )
+        index_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = ?",
+            ("idx_passages_paper_content_hash_unique",),
+        ).fetchone()["sql"]
+        assert "WHERE content_hash IS NOT NULL" in index_sql
+
+        insert_space(conn, "space-1")
+        insert_paper(conn, "paper-1", "space-1")
+        insert_paper(conn, "paper-2", "space-1")
+
+        def insert_passage(
+            passage_id: str, paper_id: str, content_hash: str | None
+        ) -> None:
+            conn.execute(
+                """
+                INSERT INTO passages (
+                    id, paper_id, space_id, original_text, content_hash
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (passage_id, paper_id, "space-1", passage_id, content_hash),
+            )
+
+        insert_passage("passage-1", "paper-1", "hash-1")
+        insert_passage("passage-2", "paper-2", "hash-1")
+        insert_passage("passage-3", "paper-1", None)
+        insert_passage("passage-4", "paper-1", None)
+
+        with pytest.raises(sqlite3.IntegrityError):
+            insert_passage("passage-5", "paper-1", "hash-1")
 
         conn.close()
 

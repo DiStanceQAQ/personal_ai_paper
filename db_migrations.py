@@ -12,7 +12,7 @@ __all__ = [
 ]
 
 SCHEMA_VERSION_KEY = "schema_version"
-LATEST_SCHEMA_VERSION = 1
+LATEST_SCHEMA_VERSION = 2
 
 Migration = Callable[[sqlite3.Connection], None]
 
@@ -172,7 +172,63 @@ def _create_parse_run_document_tables(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
-MIGRATIONS: dict[int, Migration] = {1: _create_parse_run_document_tables}
+def _extend_passages_with_provenance_columns(conn: sqlite3.Connection) -> None:
+    """Add passage provenance fields for structured parse persistence."""
+    statements = (
+        """
+        ALTER TABLE passages
+        ADD COLUMN parse_run_id TEXT REFERENCES parse_runs(id) ON DELETE SET NULL
+        """,
+        """
+        ALTER TABLE passages
+        ADD COLUMN element_ids_json TEXT NOT NULL DEFAULT '[]'
+        """,
+        """
+        ALTER TABLE passages
+        ADD COLUMN heading_path_json TEXT NOT NULL DEFAULT '[]'
+        """,
+        """
+        ALTER TABLE passages
+        ADD COLUMN bbox_json TEXT
+        """,
+        """
+        ALTER TABLE passages
+        ADD COLUMN token_count INTEGER
+        """,
+        """
+        ALTER TABLE passages
+        ADD COLUMN char_count INTEGER
+        """,
+        """
+        ALTER TABLE passages
+        ADD COLUMN content_hash TEXT
+        """,
+        """
+        ALTER TABLE passages
+        ADD COLUMN parser_backend TEXT NOT NULL DEFAULT ''
+        """,
+        """
+        ALTER TABLE passages
+        ADD COLUMN extraction_method TEXT NOT NULL DEFAULT ''
+        """,
+        """
+        ALTER TABLE passages
+        ADD COLUMN quality_flags_json TEXT NOT NULL DEFAULT '[]'
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_passages_paper_content_hash_unique
+            ON passages(paper_id, content_hash)
+            WHERE content_hash IS NOT NULL
+        """,
+    )
+    for statement in statements:
+        conn.execute(statement)
+
+
+MIGRATIONS: dict[int, Migration] = {
+    1: _create_parse_run_document_tables,
+    2: _extend_passages_with_provenance_columns,
+}
 
 
 def _schema_version_row_exists(conn: sqlite3.Connection) -> bool:

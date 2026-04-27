@@ -394,8 +394,23 @@ async def test_reparsing_replaces_existing_passages_and_fts_rows(
 
     first_passages = await client.get(f"/api/papers/{paper_id}/passages")
     assert first_passages.status_code == 200
-    first_count = len(first_passages.json())
+    first_passages_data = first_passages.json()
+    first_count = len(first_passages_data)
     assert first_count > 0
+    expected_provenance_defaults = {
+        "parse_run_id": None,
+        "element_ids_json": "[]",
+        "heading_path_json": "[]",
+        "bbox_json": None,
+        "token_count": None,
+        "char_count": None,
+        "content_hash": None,
+        "parser_backend": "",
+        "extraction_method": "",
+        "quality_flags_json": "[]",
+    }
+    for column_name, expected_value in expected_provenance_defaults.items():
+        assert first_passages_data[0][column_name] == expected_value
 
     first_search = await client.get("/api/search", params={"q": "transformer"})
     assert first_search.status_code == 200

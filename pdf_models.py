@@ -61,6 +61,8 @@ BBox: TypeAlias = Annotated[
     AfterValidator(_validate_bbox),
 ]
 
+NonEmptyString: TypeAlias = Annotated[str, Field(min_length=1)]
+
 ELEMENT_TYPES: Final[tuple[ElementType, ...]] = (
     "title",
     "heading",
@@ -100,7 +102,16 @@ PASSAGE_TYPES: Final[tuple[PassageType, ...]] = (
 class _ParserContractModel(BaseModel):
     """Shared configuration for parser contract models."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+def _reject_duplicate_ids(collection_name: str, ids: list[str]) -> None:
+    """Reject duplicate IDs while preserving the first duplicate in the error."""
+    seen: set[str] = set()
+    for id_value in ids:
+        if id_value in seen:
+            raise ValueError(f"duplicate {collection_name} id {id_value}")
+        seen.add(id_value)
 
 
 class PdfQualityReport(_ParserContractModel):
@@ -121,7 +132,7 @@ class PdfQualityReport(_ParserContractModel):
 class ParseElement(_ParserContractModel):
     """A single structured text or layout element extracted from a PDF."""
 
-    id: str
+    id: NonEmptyString
     element_index: int = Field(ge=0)
     element_type: ElementType
     text: str = ""
@@ -135,7 +146,7 @@ class ParseElement(_ParserContractModel):
 class ParseTable(_ParserContractModel):
     """A normalized table extracted from a parsed document."""
 
-    id: str
+    id: NonEmptyString
     element_id: str | None = None
     table_index: int = Field(default=0, ge=0)
     page_number: int = Field(default=0, ge=0)
@@ -148,7 +159,7 @@ class ParseTable(_ParserContractModel):
 class ParseAsset(_ParserContractModel):
     """A non-text asset extracted from a parsed document."""
 
-    id: str
+    id: NonEmptyString
     element_id: str | None = None
     asset_type: str
     page_number: int = Field(default=0, ge=0)
@@ -160,8 +171,8 @@ class ParseAsset(_ParserContractModel):
 class ParseDocument(_ParserContractModel):
     """Complete structured parse output for a paper."""
 
-    paper_id: str
-    space_id: str
+    paper_id: NonEmptyString
+    space_id: NonEmptyString
     backend: str
     extraction_method: ExtractionMethod
     quality: PdfQualityReport
@@ -173,6 +184,10 @@ class ParseDocument(_ParserContractModel):
     @model_validator(mode="after")
     def validate_element_references(self) -> Self:
         """Validate table and asset references against document elements."""
+        _reject_duplicate_ids("element", [element.id for element in self.elements])
+        _reject_duplicate_ids("table", [table.id for table in self.tables])
+        _reject_duplicate_ids("asset", [asset.id for asset in self.assets])
+
         element_ids = {element.id for element in self.elements}
 
         for table in self.tables:
@@ -193,8 +208,8 @@ class ParseDocument(_ParserContractModel):
 class ChunkCandidate(_ParserContractModel):
     """Candidate passage chunk assembled from one or more parse elements."""
 
-    id: str
-    element_ids: list[str] = Field(min_length=1)
+    id: NonEmptyString
+    element_ids: list[NonEmptyString] = Field(min_length=1)
     text: str = Field(min_length=1)
     heading_path: list[str] = Field(default_factory=list)
     page_start: int = Field(default=0, ge=0)
@@ -216,17 +231,17 @@ class ChunkCandidate(_ParserContractModel):
 class PassageRecord(_ParserContractModel):
     """Storage-ready passage row with structured parse provenance."""
 
-    id: str
-    paper_id: str
-    space_id: str
+    id: NonEmptyString
+    paper_id: NonEmptyString
+    space_id: NonEmptyString
     section: str = ""
     page_number: int = Field(default=0, ge=0)
     paragraph_index: int = Field(default=0, ge=0)
-    original_text: str = Field(min_length=1)
+    original_text: NonEmptyString
     parse_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     passage_type: PassageType = "body"
     parse_run_id: str | None = None
-    element_ids: list[str] = Field(default_factory=list)
+    element_ids: list[NonEmptyString] = Field(default_factory=list)
     heading_path: list[str] = Field(default_factory=list)
     bbox: BBox | None = None
     token_count: int | None = Field(default=None, ge=0)
@@ -286,6 +301,7 @@ __all__ = [
     "BBox",
     "ELEMENT_TYPES",
     "EXTRACTION_METHODS",
+    "NonEmptyString",
     "PASSAGE_TYPES",
     "PassageType",
     "ChunkCandidate",

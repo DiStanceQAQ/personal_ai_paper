@@ -124,6 +124,125 @@ def test_models_reject_unknown_extra_fields(
         model_cls(**kwargs)
 
 
+@pytest.mark.parametrize(
+    ("model_cls", "kwargs"),
+    [
+        (
+            ParseElement,
+            {
+                "id": "",
+                "element_index": 0,
+                "element_type": "paragraph",
+                "extraction_method": "native_text",
+            },
+        ),
+        (ParseTable, {"id": ""}),
+        (ParseAsset, {"id": "", "asset_type": "figure"}),
+        (
+            ParseDocument,
+            {
+                "paper_id": "",
+                "space_id": "space-1",
+                "backend": "structured-parser",
+                "extraction_method": "native_text",
+                "quality": PdfQualityReport(),
+            },
+        ),
+        (
+            ParseDocument,
+            {
+                "paper_id": "paper-1",
+                "space_id": "",
+                "backend": "structured-parser",
+                "extraction_method": "native_text",
+                "quality": PdfQualityReport(),
+            },
+        ),
+        (ChunkCandidate, {"id": "", "element_ids": ["element-1"], "text": "text"}),
+        (ChunkCandidate, {"id": "chunk-1", "element_ids": [""], "text": "text"}),
+        (
+            PassageRecord,
+            {
+                "id": "",
+                "paper_id": "paper-1",
+                "space_id": "space-1",
+                "original_text": "text",
+            },
+        ),
+        (
+            PassageRecord,
+            {
+                "id": "passage-1",
+                "paper_id": "",
+                "space_id": "space-1",
+                "original_text": "text",
+            },
+        ),
+        (
+            PassageRecord,
+            {
+                "id": "passage-1",
+                "paper_id": "paper-1",
+                "space_id": "",
+                "original_text": "text",
+            },
+        ),
+        (
+            PassageRecord,
+            {
+                "id": "passage-1",
+                "paper_id": "paper-1",
+                "space_id": "space-1",
+                "original_text": "text",
+                "parse_run_id": "run-1",
+                "element_ids": [""],
+            },
+        ),
+    ],
+)
+def test_models_reject_empty_required_identity_fields(
+    model_cls: type[Any],
+    kwargs: dict[str, Any],
+) -> None:
+    """Required IDs and identity references should not accept empty strings."""
+    with pytest.raises(ValidationError):
+        model_cls(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("model_cls", "kwargs"),
+    [
+        (
+            ParseElement,
+            {
+                "id": "element-1",
+                "element_index": 0,
+                "element_type": "paragraph",
+                "extraction_method": "native_text",
+                "page_number": "3",
+            },
+        ),
+        (
+            PassageRecord,
+            {
+                "id": "passage-1",
+                "paper_id": "paper-1",
+                "space_id": "space-1",
+                "original_text": "text",
+                "page_number": "3",
+            },
+        ),
+    ],
+)
+def test_models_reject_scalar_type_coercion(
+    model_cls: type[Any],
+    kwargs: dict[str, Any],
+) -> None:
+    """Parser models should reject scalar values with the wrong exact type."""
+    with pytest.raises(ValidationError):
+        model_cls(**kwargs)
+
+
 @pytest.mark.parametrize("element_type", ["body", "section", "image"])
 def test_parse_element_rejects_unknown_element_types(element_type: str) -> None:
     """ParseElement should reject values outside the parser element vocabulary."""
@@ -315,6 +434,54 @@ def test_parse_document_nests_quality_elements_tables_and_assets() -> None:
     assert document.elements[0].id == "element-1"
     assert document.tables[0].cells[1][1] == "0.71"
     assert document.assets[0].uri == "assets/figure-1.png"
+
+
+@pytest.mark.parametrize(
+    ("field_name", "items"),
+    [
+        (
+            "elements",
+            [
+                ParseElement(
+                    id="element-1",
+                    element_index=0,
+                    element_type="paragraph",
+                    extraction_method="native_text",
+                ),
+                ParseElement(
+                    id="element-1",
+                    element_index=1,
+                    element_type="paragraph",
+                    extraction_method="native_text",
+                ),
+            ],
+        ),
+        ("tables", [ParseTable(id="table-1"), ParseTable(id="table-1")]),
+        (
+            "assets",
+            [
+                ParseAsset(id="asset-1", asset_type="figure"),
+                ParseAsset(id="asset-1", asset_type="figure"),
+            ],
+        ),
+    ],
+)
+def test_parse_document_rejects_duplicate_parse_artifact_ids(
+    field_name: str,
+    items: list[Any],
+) -> None:
+    """ParseDocument should reject duplicate element, table, and asset IDs."""
+    kwargs = {
+        "paper_id": "paper-1",
+        "space_id": "space-1",
+        "backend": "structured-parser",
+        "extraction_method": "native_text",
+        "quality": PdfQualityReport(),
+        field_name: items,
+    }
+
+    with pytest.raises(ValidationError):
+        ParseDocument(**kwargs)
 
 
 @pytest.mark.parametrize(

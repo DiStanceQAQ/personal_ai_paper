@@ -47,6 +47,32 @@ def set_schema_version(conn: sqlite3.Connection, version: int) -> None:
     )
 
 
+def _pending_versions(current_version: int) -> range:
+    return range(current_version + 1, LATEST_SCHEMA_VERSION + 1)
+
+
+def _get_migration(version: int) -> Migration:
+    try:
+        return MIGRATIONS[version]
+    except KeyError as exc:
+        raise RuntimeError(f"No migration registered for version {version}") from exc
+
+
+def _apply_migration(
+    conn: sqlite3.Connection, version: int, migration: Migration
+) -> None:
+    savepoint = f"schema_migration_{version}"
+    conn.execute(f"SAVEPOINT {savepoint}")
+    try:
+        migration(conn)
+        set_schema_version(conn, version)
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+    except Exception:
+        conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        raise
+
+
 def apply_migrations(conn: sqlite3.Connection) -> None:
     """Apply pending schema migrations and persist the current version."""
     current_version = get_schema_version(conn)
@@ -56,12 +82,14 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
             f"{current_version} is newer than supported version {LATEST_SCHEMA_VERSION}"
         )
 
+    migrations: dict[int, Migration] = {}
+    for version in _pending_versions(current_version):
+        migrations[version] = _get_migration(version)
+
     if not _schema_version_row_exists(conn):
         set_schema_version(conn, current_version)
+        conn.commit()
 
-    for version in range(current_version + 1, LATEST_SCHEMA_VERSION + 1):
-        migration = MIGRATIONS[version]
-        migration(conn)
-        set_schema_version(conn, version)
-
-    conn.commit()
+    for version, migration in migrations.items():
+        _apply_migration(conn, version, migration)
+        conn.commit()

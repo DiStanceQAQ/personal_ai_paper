@@ -5,6 +5,7 @@ Configure in agent's MCP settings with stdio transport.
 """
 
 import uuid
+import json
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -21,6 +22,214 @@ CARD_TYPES = {
     "Object", "Variable", "Metric", "Result",
     "Failure Mode", "Interpretation", "Limitation", "Practical Tip",
 }
+
+
+def _json_string_list(value: Any) -> list[str]:
+    """Decode a JSON array into strings, tolerating legacy empty/null values."""
+    if value in (None, ""):
+        return []
+    try:
+        decoded = json.loads(str(value))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(decoded, list):
+        return []
+    return [item for item in decoded if isinstance(item, str) and item]
+
+
+def _passage_id_from_result(result: dict[str, Any]) -> str | None:
+    raw_id = result.get("passage_id", result.get("id"))
+    if raw_id is None:
+        return None
+    passage_id = str(raw_id)
+    return passage_id or None
+
+
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
+
+
+def _load_passage_source_metadata(
+    passage_ids: list[str],
+    space_id: str,
+) -> dict[str, dict[str, Any]]:
+    """Load source metadata for passages, scoped to the active MCP space."""
+    unique_ids = _dedupe_preserving_order(passage_ids)
+    if not unique_ids:
+        return {}
+
+    placeholders = ",".join("?" * len(unique_ids))
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT id, paper_id, parse_run_id, heading_path_json,
+                   parser_backend, quality_flags_json
+            FROM passages
+            WHERE space_id = ?
+              AND id IN ({placeholders})
+            """,
+            [space_id, *unique_ids],
+        ).fetchall()
+    finally:
+        conn.close()
+
+    metadata: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        passage_id = str(row["id"])
+        metadata[passage_id] = {
+            "passage_id": passage_id,
+            "paper_id": str(row["paper_id"]),
+            "parse_run_id": row["parse_run_id"],
+            "heading_path": _json_string_list(row["heading_path_json"]),
+            "parser_backend": str(row["parser_backend"] or ""),
+            "quality_flags": _json_string_list(row["quality_flags_json"]),
+        }
+    return metadata
+
+
+def _public_passage_source_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "passage_id": metadata["passage_id"],
+        "parse_run_id": metadata["parse_run_id"],
+        "heading_path": metadata["heading_path"],
+        "parser_backend": metadata["parser_backend"],
+        "quality_flags": metadata["quality_flags"],
+    }
+
+
+def _enrich_passage_results(
+    results: list[dict[str, Any]],
+    space_id: str,
+) -> list[dict[str, Any]]:
+    """Add source provenance fields to MCP passage-shaped results."""
+    passage_ids = [
+        passage_id
+        for result in results
+        if (passage_id := _passage_id_from_result(result)) is not None
+    ]
+    metadata_by_id = _load_passage_source_metadata(passage_ids, space_id)
+    for result in results:
+        passage_id = _passage_id_from_result(result)
+        if passage_id is None:
+            continue
+        metadata = metadata_by_id.get(passage_id)
+        if metadata is None:
+            continue
+        result["parse_run_id"] = metadata["parse_run_id"]
+        result["heading_path"] = metadata["heading_path"]
+        result["parser_backend"] = metadata["parser_backend"]
+        result["quality_flags"] = metadata["quality_flags"]
+        result["source_passage_ids"] = [passage_id]
+    return results
+
+
+def _source_ids_from_evidence_json(value: Any) -> list[str]:
+    if value in (None, ""):
+        return []
+    try:
+        decoded = json.loads(str(value))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(decoded, dict):
+        return []
+    return _json_string_list(json.dumps(decoded.get("source_passage_ids", [])))
+
+
+def _load_card_source_ids(
+    card_ids: list[str],
+    space_id: str,
+) -> dict[str, list[str]]:
+    unique_card_ids = _dedupe_preserving_order(card_ids)
+    if not unique_card_ids:
+        return {}
+
+    placeholders = ",".join("?" * len(unique_card_ids))
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT card_id, passage_id
+            FROM knowledge_card_sources
+            WHERE space_id = ?
+              AND card_id IN ({placeholders})
+            ORDER BY created_at, id
+            """,
+            [space_id, *unique_card_ids],
+        ).fetchall()
+    finally:
+        conn.close()
+
+    source_ids: dict[str, list[str]] = {card_id: [] for card_id in unique_card_ids}
+    for row in rows:
+        card_id = str(row["card_id"])
+        passage_id = str(row["passage_id"])
+        source_ids.setdefault(card_id, []).append(passage_id)
+    return {
+        card_id: _dedupe_preserving_order(ids)
+        for card_id, ids in source_ids.items()
+    }
+
+
+def _candidate_card_source_ids(
+    card: dict[str, Any],
+    source_ids_by_card: dict[str, list[str]],
+) -> list[str]:
+    card_id = str(card.get("id", ""))
+    candidates = list(source_ids_by_card.get(card_id, []))
+    candidates.extend(_source_ids_from_evidence_json(card.get("evidence_json")))
+    source_passage_id = card.get("source_passage_id")
+    if source_passage_id:
+        candidates.append(str(source_passage_id))
+    return _dedupe_preserving_order(candidates)
+
+
+def _enrich_cards(
+    cards: list[dict[str, Any]],
+    space_id: str,
+) -> list[dict[str, Any]]:
+    """Add validated source passage IDs and provenance to MCP card results."""
+    if not cards:
+        return cards
+
+    card_ids = [
+        str(card["id"])
+        for card in cards
+        if card.get("id") is not None
+    ]
+    source_ids_by_card = _load_card_source_ids(card_ids, space_id)
+    candidates_by_card = {
+        str(card.get("id", "")): _candidate_card_source_ids(card, source_ids_by_card)
+        for card in cards
+    }
+    all_source_ids = [
+        source_id
+        for source_ids in candidates_by_card.values()
+        for source_id in source_ids
+    ]
+    metadata_by_id = _load_passage_source_metadata(all_source_ids, space_id)
+
+    for card in cards:
+        card["quality_flags"] = _json_string_list(card.get("quality_flags_json"))
+        card_paper_id = str(card.get("paper_id", ""))
+        validated_sources: list[dict[str, Any]] = []
+        for source_id in candidates_by_card.get(str(card.get("id", "")), []):
+            metadata = metadata_by_id.get(source_id)
+            if metadata is None or metadata["paper_id"] != card_paper_id:
+                continue
+            validated_sources.append(_public_passage_source_metadata(metadata))
+        card["source_passage_ids"] = [
+            str(source["passage_id"]) for source in validated_sources
+        ]
+        card["source_passages"] = validated_sources
+    return cards
 
 
 def _get_active_space_id() -> str:
@@ -145,7 +354,7 @@ def search_literature(query: str, space_id: str = "", limit: int = 20) -> list[d
     for r in results:
         if "snippet" in r:
             r["snippet"] = str(r["snippet"])
-    return results
+    return _enrich_passage_results(results, sid)
 
 
 @mcp.tool()
@@ -179,7 +388,7 @@ def get_paper_summary(paper_id: str) -> dict[str, Any]:
             "paper": dict(paper),
             "passage_count": len(passages),
             "card_count": len(cards),
-            "cards": [dict(c) for c in cards],
+            "cards": _enrich_cards([dict(c) for c in cards], sid),
         }
     finally:
         conn.close()
@@ -233,7 +442,7 @@ def _get_cards_by_type(card_type: str, space_id: str = "") -> list[dict[str, Any
                ORDER BY c.created_at DESC""",
             (sid, card_type),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return _enrich_cards([dict(r) for r in rows], sid)
     finally:
         conn.close()
 
@@ -287,7 +496,7 @@ def find_similar_results(query: str, space_id: str = "", limit: int = 10) -> lis
     for r in results:
         if "snippet" in r:
             r["snippet"] = str(r["snippet"])
-    return results
+    return _enrich_passage_results(results, sid)
 
 
 @mcp.tool()
@@ -315,13 +524,14 @@ def compare_with_literature(
                     WHERE space_id = ? AND paper_id IN ({placeholders})""",
                 [sid, *paper_ids],
             ).fetchall()
-            card_results = [dict(r) for r in card_rows]
+            card_results = _enrich_cards([dict(r) for r in card_rows], sid)
     finally:
         conn.close()
 
     for p in passages:
         if "snippet" in p:
             p["snippet"] = str(p["snippet"])
+    _enrich_passage_results(passages, sid)
 
     return {"passages": passages, "related_cards": card_results}
 
@@ -352,8 +562,14 @@ def get_evidence_for_claim(
     for p in passages:
         if "snippet" in p:
             p["snippet"] = str(p["snippet"])
+    _enrich_passage_results(passages, sid)
 
-    return [{"passages": passages, "evidence_cards": [dict(c) for c in ev_cards]}]
+    return [
+        {
+            "passages": passages,
+            "evidence_cards": _enrich_cards([dict(c) for c in ev_cards], sid),
+        }
+    ]
 
 
 @mcp.tool()
@@ -371,7 +587,7 @@ def get_full_paper_text(paper_id: str) -> list[dict[str, Any]]:
             "SELECT id, section, page_number, original_text FROM passages WHERE paper_id = ? AND space_id = ? ORDER BY page_number, paragraph_index",
             (paper_id, sid),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return _enrich_passage_results([dict(r) for r in rows], sid)
     finally:
         conn.close()
 

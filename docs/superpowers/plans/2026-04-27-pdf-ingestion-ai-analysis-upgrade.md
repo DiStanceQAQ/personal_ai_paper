@@ -816,11 +816,11 @@ git commit -m "feat: add hybrid passage search"
 - Modify: `mcp_server.py`
 - Test: `tests/test_mcp.py`
 
-- [ ] Include `parse_run_id`, `heading_path`, `parser_backend`, `quality_flags`, and `source_passage_ids` where applicable.
-- [ ] Keep current MCP space isolation rules.
-- [ ] Run: `pytest tests/test_mcp.py -q`
-- [ ] Expected: PASS; MCP search and card tools include richer source metadata.
-- [ ] Commit:
+- [x] Include `parse_run_id`, `heading_path`, `parser_backend`, `quality_flags`, and `source_passage_ids` where applicable.
+- [x] Keep current MCP space isolation rules.
+- [x] Run: `pytest tests/test_mcp.py -q`
+- [x] Expected: PASS; MCP search and card tools include richer source metadata.
+- [x] Commit:
 
 ```bash
 git add mcp_server.py tests/test_mcp.py

@@ -1,5 +1,6 @@
 """Tests for MCP server tools."""
 
+import json
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
@@ -26,8 +27,42 @@ def _setup_data(db_path_str: str) -> str:
     conn = get_connection(Path(db_path_str))
     conn.execute("INSERT INTO spaces (id, name) VALUES ('space-1', 'Test')")
     conn.execute("INSERT INTO papers (id, space_id, title, parse_status) VALUES ('paper-1', 'space-1', 'Test Paper', 'parsed')")
-    conn.execute("INSERT INTO passages (id, paper_id, space_id, section, original_text) VALUES ('p1', 'paper-1', 'space-1', 'method', 'transformer model')")
-    conn.execute("INSERT INTO knowledge_cards (id, space_id, paper_id, card_type, summary) VALUES ('c1', 'space-1', 'paper-1', 'Method', 'Test method card')")
+    conn.execute(
+        """INSERT INTO parse_runs (
+               id, paper_id, space_id, backend, extraction_method, status
+           ) VALUES (
+               'run-1', 'paper-1', 'space-1', 'pymupdf4llm',
+               'native_text', 'completed'
+           )"""
+    )
+    conn.execute(
+        """INSERT INTO passages (
+               id, paper_id, space_id, section, original_text, parse_run_id,
+               heading_path_json, parser_backend, quality_flags_json
+           ) VALUES (
+               'p1', 'paper-1', 'space-1', 'method', 'transformer model',
+               'run-1', '["Methods", "Architecture"]', 'pymupdf4llm',
+               '["low_confidence"]'
+           )"""
+    )
+    conn.execute(
+        """INSERT INTO knowledge_cards (
+               id, space_id, paper_id, source_passage_id, card_type, summary,
+               evidence_json, quality_flags_json
+           ) VALUES (
+               'c1', 'space-1', 'paper-1', 'p1', 'Method',
+               'Test method card', ?, '["needs_review"]'
+           )""",
+        (json.dumps({"source_passage_ids": ["p1"]}),),
+    )
+    conn.execute(
+        """INSERT INTO knowledge_card_sources (
+               id, card_id, passage_id, paper_id, space_id, evidence_quote
+           ) VALUES (
+               'source-1', 'c1', 'p1', 'paper-1', 'space-1',
+               'transformer model'
+           )"""
+    )
     conn.execute("INSERT INTO app_state (key, value) VALUES ('active_space', 'space-1')")
     conn.execute("INSERT INTO app_state (key, value) VALUES ('agent_access', 'enabled')")
     conn.commit()
@@ -68,6 +103,20 @@ def test_search_literature(db_path: str) -> None:
     assert len(result) >= 1
 
 
+def test_search_literature_includes_source_metadata(db_path: str) -> None:
+    _setup_data(db_path)
+    from mcp_server import search_literature
+
+    result = search_literature("transformer")
+
+    assert result[0]["passage_id"] == "p1"
+    assert result[0]["parse_run_id"] == "run-1"
+    assert result[0]["heading_path"] == ["Methods", "Architecture"]
+    assert result[0]["parser_backend"] == "pymupdf4llm"
+    assert result[0]["quality_flags"] == ["low_confidence"]
+    assert result[0]["source_passage_ids"] == ["p1"]
+
+
 def test_get_paper_summary(db_path: str) -> None:
     _setup_data(db_path)
     from mcp_server import get_paper_summary
@@ -90,6 +139,25 @@ def test_get_methods(db_path: str) -> None:
     result = get_methods()
     assert len(result) >= 1
     assert result[0]["card_type"] == "Method"
+
+
+def test_card_tools_include_source_passage_metadata(db_path: str) -> None:
+    _setup_data(db_path)
+    from mcp_server import get_methods
+
+    result = get_methods()
+
+    assert result[0]["source_passage_ids"] == ["p1"]
+    assert result[0]["quality_flags"] == ["needs_review"]
+    assert result[0]["source_passages"] == [
+        {
+            "passage_id": "p1",
+            "parse_run_id": "run-1",
+            "heading_path": ["Methods", "Architecture"],
+            "parser_backend": "pymupdf4llm",
+            "quality_flags": ["low_confidence"],
+        }
+    ]
 
 
 def test_get_evidence_for_claim(db_path: str) -> None:

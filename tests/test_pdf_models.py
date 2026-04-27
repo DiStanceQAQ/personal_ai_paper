@@ -29,6 +29,13 @@ def test_pdf_models_is_in_packaged_runtime_modules() -> None:
     assert "pdf_models" in pyproject["tool"]["setuptools"]["py-modules"]
 
 
+def test_pdf_models_declares_direct_pydantic_v2_runtime_dependency() -> None:
+    """Packaged parser models should declare their Pydantic runtime dependency."""
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text())
+
+    assert "pydantic>=2,<3" in pyproject["project"]["dependencies"]
+
+
 def test_allowed_vocabularies_are_exported_for_parser_callers() -> None:
     """Parser callers should be able to reuse the controlled vocabularies."""
     assert ELEMENT_TYPES == (

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sqlite3
 import tomllib
 from pathlib import Path
@@ -43,6 +44,144 @@ def test_backend_unavailable_without_api_key(tmp_path: Path) -> None:
         backend.parse(fake_pdf, "paper-1", "space-1", _quality())
 
 
+def test_backend_uses_official_upload_create_poll_flow(tmp_path: Path) -> None:
+    """Default parsing should upload, create a parse job, then poll API v2 results."""
+    backend_module = _backend_module()
+    fake_pdf = tmp_path / "paper.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.7\nofficial-flow")
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.headers.get("authorization") == "Bearer llama-secret"
+
+        if request.method == "POST" and request.url.path == "/api/v1/beta/files":
+            assert b'name="purpose"' in request.content
+            assert b"parse" in request.content
+            assert b"%PDF-1.7" in request.content
+            return httpx.Response(200, json={"id": "file-123"})
+
+        if request.method == "POST" and request.url.path == "/api/v2/parse":
+            body = json.loads(request.content)
+            assert body["file_id"] == "file-123"
+            assert body["tier"] == "balanced"
+            assert body["version"] == "v2"
+            return httpx.Response(200, json={"id": "job-123"})
+
+        if request.method == "GET" and request.url.path == "/api/v2/parse/job-123":
+            assert request.url.params.get_list("expand") == ["markdown", "items"]
+            if len([req for req in requests if req.method == "GET"]) == 1:
+                return httpx.Response(200, json={"job": {"id": "job-123", "status": "PENDING"}})
+            return httpx.Response(
+                200,
+                json={
+                    "job": {"id": "job-123", "status": "COMPLETED"},
+                    "markdown": "# Parsed Title\n\nParsed paragraph.",
+                    "items": {
+                        "pages": [
+                            {
+                                "page": 1,
+                                "items": [
+                                    {"type": "heading", "value": "Parsed Title", "md": "# Parsed Title"},
+                                    {"type": "paragraph", "value": "Parsed paragraph."},
+                                    {
+                                        "type": "table",
+                                        "rows": [["Metric", "Value"], ["Score", "1.0"]],
+                                    },
+                                ],
+                            }
+                        ]
+                    },
+                },
+            )
+
+        return httpx.Response(404, json={"error": str(request.url)})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    backend = backend_module.LlamaParseBackend(
+        api_key="llama-secret",
+        http_client=client,
+        max_poll_attempts=3,
+        poll_interval_seconds=0,
+    )
+
+    document = backend.parse(fake_pdf, "paper-api-v2", "space-1", _quality())
+
+    assert [request.method for request in requests] == ["POST", "POST", "GET", "GET"]
+    assert [request.url.path for request in requests] == [
+        "/api/v1/beta/files",
+        "/api/v2/parse",
+        "/api/v2/parse/job-123",
+        "/api/v2/parse/job-123",
+    ]
+    assert document.metadata["job_id"] == "job-123"
+    assert [element.element_type for element in document.elements] == [
+        "heading",
+        "paragraph",
+        "table",
+    ]
+    assert document.tables[0].cells == [["Metric", "Value"], ["Score", "1.0"]]
+
+
+def test_backend_converts_api_v2_items_pages_shape(tmp_path: Path) -> None:
+    """API v2 items pages should normalize without relying on top-level markdown."""
+    backend_module = _backend_module()
+    fake_pdf = tmp_path / "paper.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.7\nitems-shape")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/beta/files":
+            return httpx.Response(200, json={"id": "file-items"})
+        if request.url.path == "/api/v2/parse":
+            return httpx.Response(200, json={"id": "job-items"})
+        if request.url.path == "/api/v2/parse/job-items":
+            return httpx.Response(
+                200,
+                json={
+                    "job": {"id": "job-items", "status": "COMPLETED"},
+                    "items": {
+                        "pages": [
+                            {
+                                "page": 2,
+                                "items": [
+                                    {"type": "heading", "value": "Methods"},
+                                    {"type": "text", "value": "We trained a model."},
+                                    {
+                                        "type": "image",
+                                        "url": "https://assets.example/fig1.png",
+                                        "caption": "Architecture",
+                                    },
+                                    {
+                                        "type": "table",
+                                        "rows": [["Name", "Score"], ["A", "0.9"]],
+                                    },
+                                ],
+                            }
+                        ]
+                    },
+                },
+            )
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    backend = backend_module.LlamaParseBackend(
+        api_key="key",
+        http_client=client,
+        max_poll_attempts=1,
+        poll_interval_seconds=0,
+    )
+
+    document = backend.parse(fake_pdf, "paper-items", "space-1", _quality())
+
+    assert [(element.element_type, element.text, element.page_number) for element in document.elements] == [
+        ("heading", "Methods", 2),
+        ("paragraph", "We trained a model.", 2),
+        ("table", "Name | Score\nA | 0.9", 2),
+    ]
+    assert document.tables[0].cells == [["Name", "Score"], ["A", "0.9"]]
+    assert document.assets[0].uri == "https://assets.example/fig1.png"
+
+
 def test_backend_posts_pdf_with_auth_header_and_converts_json_pages(tmp_path: Path) -> None:
     """Configured parsing should post the PDF and normalize JSON pages."""
     backend_module = _backend_module()
@@ -55,6 +194,12 @@ def test_backend_posts_pdf_with_auth_header_and_converts_json_pages(tmp_path: Pa
         seen["authorization"] = request.headers.get("authorization")
         seen["content_type"] = request.headers.get("content-type", "")
         seen["body"] = request.content
+        if request.url.path == "/api/v1/beta/files":
+            return httpx.Response(200, json={"id": "file-123"})
+        if request.url.path == "/api/v2/parse":
+            return httpx.Response(200, json={"id": "job-123"})
+        if request.url.path != "/api/v2/parse/job-123":
+            return httpx.Response(404)
         return httpx.Response(
             200,
             json={
@@ -85,16 +230,16 @@ def test_backend_posts_pdf_with_auth_header_and_converts_json_pages(tmp_path: Pa
     client = httpx.Client(transport=httpx.MockTransport(handler))
     backend = backend_module.LlamaParseBackend(
         api_key="llama-secret",
-        base_url="https://llamaparse.test/api",
+        base_url="https://llamaparse.test",
         http_client=client,
+        max_poll_attempts=1,
+        poll_interval_seconds=0,
     )
 
     document = backend.parse(fake_pdf, "paper-1", "space-1", _quality())
 
-    assert seen["url"] == "https://llamaparse.test/api/parse"
+    assert seen["url"] == "https://llamaparse.test/api/v2/parse/job-123?expand=markdown&expand=items"
     assert seen["authorization"] == "Bearer llama-secret"
-    assert "multipart/form-data" in seen["content_type"]
-    assert b"%PDF-1.7" in seen["body"]
 
     assert document.backend == "llamaparse"
     assert document.extraction_method == "llm_parser"
@@ -127,11 +272,16 @@ def test_backend_converts_markdown_only_response(tmp_path: Path) -> None:
     fake_pdf = tmp_path / "paper.pdf"
     fake_pdf.write_bytes(b"%PDF-1.7\n")
 
-    client = httpx.Client(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/beta/files":
+            return httpx.Response(200, json={"id": "file-md"})
+        if request.url.path == "/api/v2/parse":
+            return httpx.Response(200, json={"id": "job-md"})
+        if request.url.path == "/api/v2/parse/job-md":
+            return httpx.Response(
                 200,
                 json={
+                    "job": {"id": "job-md", "status": "COMPLETED"},
                     "markdown": (
                         "# Title\n\n"
                         "Paragraph one.\n\n"
@@ -139,12 +289,20 @@ def test_backend_converts_markdown_only_response(tmp_path: Path) -> None:
                         "| Name | Score |\n"
                         "| --- | --- |\n"
                         "| A | 1 |"
-                    )
+                    ),
                 },
             )
-        )
+        return httpx.Response(404)
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler)
     )
-    backend = backend_module.LlamaParseBackend(api_key="key", http_client=client)
+    backend = backend_module.LlamaParseBackend(
+        api_key="key",
+        http_client=client,
+        max_poll_attempts=1,
+        poll_interval_seconds=0,
+    )
 
     document = backend.parse(fake_pdf, "paper-md", "space-1", _quality())
 

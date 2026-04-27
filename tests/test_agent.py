@@ -166,6 +166,40 @@ async def test_agent_config_empty_llamaparse_key_does_not_overwrite(
     assert row["value"] == "keep-me"
 
 
+@pytest.mark.asyncio
+async def test_agent_config_llamaparse_only_update_preserves_llm_settings(
+    client: AsyncClient,
+) -> None:
+    """Partial LlamaParse config updates must not reset existing LLM settings."""
+    resp = await client.put(
+        "/api/agent/config",
+        json={
+            "llm_provider": "anthropic",
+            "llm_base_url": "https://llm.example/v1",
+            "llm_model": "claude-custom",
+        },
+    )
+    assert resp.status_code == 200
+
+    resp = await client.put(
+        "/api/agent/config",
+        json={
+            "llamaparse_base_url": "https://llamaparse.example",
+            "llamaparse_api_key": "llama-key",
+        },
+    )
+    assert resp.status_code == 200
+
+    resp = await client.get("/api/agent/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["llm_provider"] == "anthropic"
+    assert data["llm_base_url"] == "https://llm.example/v1"
+    assert data["llm_model"] == "claude-custom"
+    assert data["llamaparse_base_url"] == "https://llamaparse.example"
+    assert data["has_llamaparse_api_key"] is True
+
+
 # ── MCP Tool Access Control ──────────────────────────────────────────
 
 

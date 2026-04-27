@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -22,8 +23,10 @@ from pdf_models import (
 
 
 BACKEND_NAME = "llamaparse"
-DEFAULT_BASE_URL = "https://api.cloud.llamaindex.ai/api/parsing"
+DEFAULT_BASE_URL = "https://api.cloud.llamaindex.ai"
 DEFAULT_TIMEOUT = 120.0
+DEFAULT_MAX_POLL_ATTEMPTS = 30
+DEFAULT_POLL_INTERVAL_SECONDS = 2.0
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _TABLE_SEPARATOR_RE = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$")
@@ -41,9 +44,17 @@ class LlamaParseBackend:
         base_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         http_client: httpx.Client | None = None,
+        tier: str = "balanced",
+        version: str = "v2",
+        max_poll_attempts: int = DEFAULT_MAX_POLL_ATTEMPTS,
+        poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
     ) -> None:
         self.api_key = (api_key or "").strip()
         self.base_url = (base_url or DEFAULT_BASE_URL).strip().rstrip("/")
+        self.tier = tier
+        self.version = version
+        self.max_poll_attempts = max_poll_attempts
+        self.poll_interval_seconds = poll_interval_seconds
         self._owns_client = http_client is None
         self._client = http_client or httpx.Client(timeout=timeout)
 
@@ -68,16 +79,13 @@ class LlamaParseBackend:
             raise ParserBackendUnavailable(self.name, "llamaparse_api_key is not configured")
 
         try:
-            response = self._post_pdf(Path(file_path))
-            payload = response.json()
+            payload = self._parse_via_api_v2(Path(file_path))
         except ParserBackendUnavailable:
             raise
-        except httpx.HTTPStatusError as exc:
-            raise ParserBackendError(self.name, "LlamaParse request failed", cause=exc) from exc
         except (OSError, httpx.HTTPError) as exc:
             raise ParserBackendError(self.name, "LlamaParse request failed", cause=exc) from exc
         except ValueError as exc:
-            raise ParserBackendError(self.name, "LlamaParse returned invalid JSON", cause=exc) from exc
+            raise ParserBackendError(self.name, str(exc), cause=exc) from exc
 
         try:
             return _payload_to_document(
@@ -93,15 +101,59 @@ class LlamaParseBackend:
                 cause=exc,
             ) from exc
 
-    def _post_pdf(self, file_path: Path) -> httpx.Response:
+    def _parse_via_api_v2(self, file_path: Path) -> Mapping[str, Any]:
+        upload_payload = self._upload_file(file_path)
+        file_id = _id_from_payload(upload_payload, "file")
+
+        create_payload = self._create_parse_job(file_id)
+        if _looks_like_final_payload(create_payload):
+            return create_payload
+
+        job_id = _id_from_payload(create_payload, "parse job")
+        for attempt in range(self.max_poll_attempts):
+            result = self._get_parse_result(job_id)
+            if _job_status(result) == "COMPLETED" or _looks_like_final_payload(result):
+                return result
+            if attempt < self.max_poll_attempts - 1 and self.poll_interval_seconds > 0:
+                time.sleep(self.poll_interval_seconds)
+
+        raise ValueError(f"LlamaParse job {job_id} did not complete")
+
+    def _upload_file(self, file_path: Path) -> Mapping[str, Any]:
         with file_path.open("rb") as pdf_file:
-            response = self._client.post(
-                f"{self.base_url}/parse",
-                headers={"Authorization": f"Bearer {self.api_key}"},
+            return self._request_json(
+                "POST",
+                "/api/v1/beta/files",
+                data={"purpose": "parse"},
                 files={"file": (file_path.name, pdf_file, "application/pdf")},
             )
+
+    def _create_parse_job(self, file_id: str) -> Mapping[str, Any]:
+        return self._request_json(
+            "POST",
+            "/api/v2/parse",
+            json={"file_id": file_id, "tier": self.tier, "version": self.version},
+        )
+
+    def _get_parse_result(self, job_id: str) -> Mapping[str, Any]:
+        return self._request_json(
+            "GET",
+            f"/api/v2/parse/{job_id}",
+            params=[("expand", "markdown"), ("expand", "items")],
+        )
+
+    def _request_json(self, method: str, path: str, **kwargs: Any) -> Mapping[str, Any]:
+        response = self._client.request(
+            method,
+            f"{self.base_url}{path}",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            **kwargs,
+        )
         response.raise_for_status()
-        return response
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise ValueError("LlamaParse returned a non-object JSON payload")
+        return payload
 
 
 def get_llamaparse_config() -> dict[str, str]:
@@ -154,11 +206,14 @@ class _DocumentBuilder:
         pages = _pages_from_payload(self.payload)
         for page_index, page in enumerate(pages):
             page_number = _page_number(page, page_index)
-            markdown = _page_markdown(page)
-            page_table_start = len(self.tables)
-            self._add_markdown(page_number, markdown)
-            if len(self.tables) == page_table_start:
-                self._add_page_tables(page_number, _as_list(page.get("tables")))
+            if isinstance(page.get("items"), list):
+                self._add_page_items(page_number, _as_list(page.get("items")))
+            else:
+                markdown = _page_markdown(page)
+                page_table_start = len(self.tables)
+                self._add_markdown(page_number, markdown)
+                if len(self.tables) == page_table_start:
+                    self._add_page_tables(page_number, _as_list(page.get("tables")))
             self._add_page_assets(page_number, _as_list(page.get("images")), "image")
             self._add_page_assets(page_number, _as_list(page.get("figures")), "figure")
 
@@ -166,11 +221,9 @@ class _DocumentBuilder:
             "page_count": len(pages),
             "parser": BACKEND_NAME,
         }
-        for key in ("job_id", "id"):
-            value = self.payload.get(key)
-            if value:
-                metadata["job_id"] = str(value)
-                break
+        job_id = _job_id_from_payload(self.payload)
+        if job_id:
+            metadata["job_id"] = job_id
 
         return ParseDocument(
             paper_id=self.paper_id,
@@ -221,6 +274,59 @@ class _DocumentBuilder:
                     text=text,
                     page_number=page_number,
                     metadata={"source": "markdown"},
+                )
+
+    def _add_page_items(self, page_number: int, raw_items: list[Any]) -> None:
+        for raw_item in raw_items:
+            if not isinstance(raw_item, Mapping):
+                continue
+            item_type = str(raw_item.get("type") or raw_item.get("item_type") or "").lower()
+            if item_type in {"heading", "title", "section_header", "section-heading"}:
+                text = _item_text(raw_item)
+                if text:
+                    self._heading_path = [text]
+                    self._add_element(
+                        element_type="heading",
+                        text=text,
+                        page_number=page_number,
+                        bbox=_bbox(raw_item.get("bbox")),
+                        metadata={"source": "api_v2_item", "item_type": item_type},
+                    )
+                continue
+
+            if item_type == "table":
+                cells = _table_cells(raw_item)
+                if not cells:
+                    cells = _markdown_table_cells(str(raw_item.get("md") or raw_item.get("markdown") or ""))
+                element = self._add_element(
+                    element_type="table",
+                    text=_cells_to_text(cells) or _item_text(raw_item),
+                    page_number=page_number,
+                    bbox=_bbox(raw_item.get("bbox")),
+                    metadata={"source": "api_v2_item", "item_type": item_type},
+                )
+                self._add_table(
+                    page_number=page_number,
+                    element_id=element.id,
+                    cells=cells,
+                    caption=str(raw_item.get("caption") or ""),
+                    bbox=_bbox(raw_item.get("bbox")),
+                    metadata={"source": "api_v2_item"},
+                )
+                continue
+
+            if item_type in {"image", "figure"}:
+                self._add_page_assets(page_number, [raw_item], item_type)
+                continue
+
+            text = _item_text(raw_item)
+            if text:
+                self._add_element(
+                    element_type="paragraph",
+                    text=text,
+                    page_number=page_number,
+                    bbox=_bbox(raw_item.get("bbox")),
+                    metadata={"source": "api_v2_item", "item_type": item_type},
                 )
 
     def _add_page_tables(self, page_number: int, raw_tables: list[Any]) -> None:
@@ -337,6 +443,12 @@ def _pages_from_payload(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     if isinstance(pages, list):
         return [page for page in pages if isinstance(page, Mapping)]
 
+    items = payload.get("items")
+    if isinstance(items, Mapping):
+        item_pages = items.get("pages")
+        if isinstance(item_pages, list):
+            return [page for page in item_pages if isinstance(page, Mapping)]
+
     data = payload.get("data")
     if isinstance(data, list):
         return [page for page in data if isinstance(page, Mapping)]
@@ -360,6 +472,54 @@ def _page_number(page: Mapping[str, Any], page_index: int) -> int:
 def _page_markdown(page: Mapping[str, Any]) -> str:
     value = page.get("markdown") or page.get("md") or page.get("text") or ""
     return str(value)
+
+
+def _item_text(item: Mapping[str, Any]) -> str:
+    value = item.get("value") or item.get("text") or item.get("md") or item.get("markdown") or ""
+    text = str(value)
+    heading_match = _HEADING_RE.match(text)
+    if heading_match:
+        return heading_match.group(2).strip()
+    return _clean_markdown_text(text)
+
+
+def _id_from_payload(payload: Mapping[str, Any], label: str) -> str:
+    value = payload.get("id") or payload.get("file_id") or payload.get("job_id")
+    if value:
+        return str(value)
+
+    nested_key = "file" if label == "file" else "job"
+    nested = payload.get(nested_key)
+    if isinstance(nested, Mapping):
+        nested_value = nested.get("id")
+        if nested_value:
+            return str(nested_value)
+
+    raise ValueError(f"LlamaParse {label} response did not include an id")
+
+
+def _job_id_from_payload(payload: Mapping[str, Any]) -> str | None:
+    value = payload.get("job_id") or payload.get("id")
+    if value:
+        return str(value)
+    job = payload.get("job")
+    if isinstance(job, Mapping):
+        job_id = job.get("id")
+        if job_id:
+            return str(job_id)
+    return None
+
+
+def _job_status(payload: Mapping[str, Any]) -> str:
+    status = payload.get("status")
+    job = payload.get("job")
+    if status is None and isinstance(job, Mapping):
+        status = job.get("status")
+    return str(status or "").upper()
+
+
+def _looks_like_final_payload(payload: Mapping[str, Any]) -> bool:
+    return any(key in payload for key in ("pages", "data", "markdown", "text", "items"))
 
 
 def _markdown_blocks(markdown: str) -> list[str]:

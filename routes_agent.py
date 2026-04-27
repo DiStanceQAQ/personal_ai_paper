@@ -13,7 +13,7 @@ AGENT_ACCESS_KEY = "agent_access"
 LEGACY_AGENT_ACCESS_KEY = "agent_enabled"
 MCP_SERVER_NAME = "paper-knowledge-engine"
 MCP_TRANSPORT = "stdio"
-DEFAULT_LLAMAPARSE_BASE_URL = "https://api.cloud.llamaindex.ai/api/parsing"
+DEFAULT_LLAMAPARSE_BASE_URL = "https://api.cloud.llamaindex.ai"
 
 
 class LLMConfig(BaseModel):
@@ -99,8 +99,7 @@ async def update_agent_config(config: LLMConfig) -> dict[str, str]:
     """Update the LLM configuration."""
     conn = get_connection()
     try:
-        # data = config.dict(exclude_unset=True) # Compatibility for older pydantic
-        data = config.model_dump()
+        data = config.model_dump(exclude_unset=True)
         
         # Logic: If api_key is empty string or None, don't overwrite the existing one in DB
         if not data.get("llm_api_key"):

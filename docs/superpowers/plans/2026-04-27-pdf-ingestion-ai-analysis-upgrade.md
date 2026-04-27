@@ -871,11 +871,11 @@ git commit -m "test: add AI analysis quality evaluation"
 **Files:**
 - Create: `tests/test_pdf_pipeline_performance.py`
 
-- [ ] Add a generated 20-page PDF performance test marked with `@pytest.mark.performance`.
-- [ ] Assert local PyMuPDF4LLM route completes under a documented local budget when dependencies are installed; skip with clear reason in constrained CI.
-- [ ] Run: `pytest tests/test_pdf_pipeline_performance.py -q`
-- [ ] Expected: PASS or SKIP with explicit environment reason.
-- [ ] Commit:
+- [x] Add a generated 20-page PDF performance test marked with `@pytest.mark.performance`.
+- [x] Assert local PyMuPDF4LLM route completes under a documented local budget when dependencies are installed; skip with clear reason in constrained CI.
+- [x] Run: `pytest tests/test_pdf_pipeline_performance.py -q`
+- [x] Expected: PASS or SKIP with explicit environment reason.
+- [x] Commit:
 
 ```bash
 git add tests/test_pdf_pipeline_performance.py

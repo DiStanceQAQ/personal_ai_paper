@@ -68,6 +68,9 @@ py-modules = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "performance: performance budget tests that may skip in constrained CI",
+]
 
 [tool.mypy]
 python_version = "3.11"

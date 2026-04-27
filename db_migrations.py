@@ -303,6 +303,42 @@ def _create_analysis_run_and_card_provenance_schema(conn: sqlite3.Connection) ->
         WHERE user_edited != 1 OR user_edited IS NULL
         """,
         """
+        CREATE TRIGGER IF NOT EXISTS trg_knowledge_cards_analysis_scope_insert
+        BEFORE INSERT ON knowledge_cards
+        WHEN NEW.analysis_run_id IS NOT NULL
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM analysis_runs
+                 WHERE id = NEW.analysis_run_id
+                   AND paper_id = NEW.paper_id
+                   AND space_id = NEW.space_id
+             )
+        BEGIN
+            SELECT RAISE(
+                ABORT,
+                'analysis_run_id must match card paper and space'
+            );
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_knowledge_cards_analysis_scope_update
+        BEFORE UPDATE OF analysis_run_id, paper_id, space_id ON knowledge_cards
+        WHEN NEW.analysis_run_id IS NOT NULL
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM analysis_runs
+                 WHERE id = NEW.analysis_run_id
+                   AND paper_id = NEW.paper_id
+                   AND space_id = NEW.space_id
+             )
+        BEGIN
+            SELECT RAISE(
+                ABORT,
+                'analysis_run_id must match card paper and space'
+            );
+        END
+        """,
+        """
         CREATE TABLE IF NOT EXISTS knowledge_card_sources (
             id TEXT PRIMARY KEY,
             card_id TEXT NOT NULL,

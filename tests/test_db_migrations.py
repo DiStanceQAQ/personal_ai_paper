@@ -129,15 +129,21 @@ def insert_passage(
 
 
 def insert_card(
-    conn: sqlite3.Connection, card_id: str, paper_id: str, space_id: str
+    conn: sqlite3.Connection,
+    card_id: str,
+    paper_id: str,
+    space_id: str,
+    analysis_run_id: str | None = None,
 ) -> None:
     """Insert a minimal knowledge card row."""
     conn.execute(
         """
-        INSERT INTO knowledge_cards (id, paper_id, space_id, card_type, summary)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO knowledge_cards (
+            id, paper_id, space_id, card_type, summary, analysis_run_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (card_id, paper_id, space_id, "Evidence", card_id),
+        (card_id, paper_id, space_id, "Evidence", card_id, analysis_run_id),
     )
 
 
@@ -1096,6 +1102,66 @@ def test_analysis_run_and_card_sources_enforce_scope_and_uniqueness() -> None:
                 "analysis-run-2",
             )
 
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                UPDATE knowledge_card_sources
+                SET analysis_run_id = ?
+                WHERE id = ?
+                """,
+                ("analysis-run-2", "source-1"),
+            )
+
+        conn.close()
+
+
+def test_knowledge_cards_enforce_analysis_run_scope() -> None:
+    """Cards cannot reference analysis runs from a different paper scope."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+        insert_provenance_scope_fixture(conn)
+
+        insert_card(conn, "card-valid-run", "paper-1", "space-1", "analysis-run-1")
+
+        with pytest.raises(sqlite3.IntegrityError):
+            insert_card(
+                conn,
+                "card-run-mismatch",
+                "paper-1",
+                "space-1",
+                "analysis-run-2",
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                UPDATE knowledge_cards
+                SET analysis_run_id = ?
+                WHERE id = ?
+                """,
+                ("analysis-run-2", "card-1"),
+            )
+
+        conn.execute(
+            """
+            UPDATE knowledge_cards
+            SET analysis_run_id = ?
+            WHERE id = ?
+            """,
+            ("analysis-run-1", "card-1"),
+        )
+        conn.execute("DELETE FROM analysis_runs WHERE id = ?", ("analysis-run-1",))
+        run_deleted_card = conn.execute(
+            """
+            SELECT analysis_run_id
+            FROM knowledge_cards
+            WHERE id = ?
+            """,
+            ("card-1",),
+        ).fetchone()
+        assert run_deleted_card["analysis_run_id"] is None
+
         conn.close()
 
 
@@ -1177,9 +1243,10 @@ def test_knowledge_card_sources_apply_expected_delete_actions() -> None:
             "analysis-run-3",
         )
         conn.commit()
-        conn.execute("PRAGMA defer_foreign_keys = ON")
-        conn.execute("BEGIN")
+        conn.execute("DELETE FROM knowledge_cards WHERE paper_id = ?", ("paper-1",))
+        conn.execute("DELETE FROM passages WHERE paper_id = ?", ("paper-1",))
         conn.execute("DELETE FROM papers WHERE id = ?", ("paper-1",))
+        conn.commit()
         assert (
             conn.execute(
                 "SELECT COUNT(*) FROM knowledge_card_sources WHERE id = ?",
@@ -1187,6 +1254,12 @@ def test_knowledge_card_sources_apply_expected_delete_actions() -> None:
             ).fetchone()[0]
             == 0
         )
-        conn.rollback()
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM papers WHERE id = ?",
+                ("paper-1",),
+            ).fetchone()[0]
+            == 0
+        )
 
         conn.close()

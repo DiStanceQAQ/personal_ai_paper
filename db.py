@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from config import APP_DATA_DIR, DATABASE_PATH
+from db_migrations import apply_migrations
 
 __all__ = [
     "SCHEMA_SQL",
@@ -143,6 +144,7 @@ def init_db(database_path: Path | None = None) -> sqlite3.Connection:
         )
     """)
     conn.commit()
+    apply_migrations(conn)
 
     return conn
 

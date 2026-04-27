@@ -75,9 +75,16 @@ def extraction_method_for(name: str, preferred: str) -> Any:
 
 
 class FakeGrobidClient:
-    def __init__(self, *, alive: bool = True, fail: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        alive: bool = True,
+        fail: bool = False,
+        failure_message: str = "grobid exploded",
+    ) -> None:
         self.alive = alive
         self.fail = fail
+        self.failure_message = failure_message
         self.closed = False
         self.processed: list[Path] = []
 
@@ -87,7 +94,7 @@ class FakeGrobidClient:
     def process_fulltext(self, file_path: Path) -> GrobidParseResult:
         self.processed.append(file_path)
         if self.fail:
-            raise RuntimeError("grobid exploded")
+            raise RuntimeError(self.failure_message)
         return GrobidParseResult(
             metadata=GrobidMetadata(
                 title="GROBID Title",
@@ -163,6 +170,62 @@ def test_clean_digital_pdf_selects_pymupdf_before_legacy(tmp_path: Path) -> None
         "router_selected:pymupdf4llm",
     ]
     assert quality.warnings == []
+
+
+def test_default_digital_parse_does_not_resolve_llamaparse_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router_module = _router_module()
+    pymupdf = FakeBackend("pymupdf4llm")
+    monkeypatch.setattr(
+        router_module,
+        "get_configured_llamaparse_backend",
+        lambda: pytest.fail("LlamaParse provider should not be called"),
+    )
+
+    router = router_module.PdfBackendRouter(
+        pymupdf4llm=pymupdf,
+        docling=None,
+        legacy=FakeBackend("legacy-pymupdf", extraction_method="legacy"),
+        grobid_client=None,
+    )
+    document = router.parse_pdf(tmp_path / "clean.pdf", "paper-1", "space-1", _quality())
+
+    assert document.backend == "pymupdf4llm"
+
+
+def test_layout_fallback_resolves_lazy_llamaparse_only_when_reached(
+    tmp_path: Path,
+) -> None:
+    router_module = _router_module()
+    docling = FakeBackend("docling", available=False, extraction_method="layout_model")
+    llamaparse = FakeBackend("llamaparse", extraction_method="llm_parser")
+    provider_calls = 0
+
+    def llamaparse_provider() -> FakeBackend:
+        nonlocal provider_calls
+        provider_calls += 1
+        return llamaparse
+
+    router = router_module.PdfBackendRouter(
+        pymupdf4llm=FakeBackend("pymupdf4llm"),
+        docling=docling,
+        llamaparse=llamaparse_provider,
+        legacy=FakeBackend("legacy-pymupdf", extraction_method="legacy"),
+        grobid_client=None,
+    )
+    assert provider_calls == 0
+
+    document = router.parse_pdf(
+        tmp_path / "layout.pdf",
+        "paper-1",
+        "space-1",
+        _quality(needs_layout_model=True),
+    )
+
+    assert document.backend == "llamaparse"
+    assert provider_calls == 1
 
 
 def test_scanned_layout_pdf_selects_docling_when_available(tmp_path: Path) -> None:
@@ -332,8 +395,8 @@ def test_grobid_healthy_client_merges_metadata_and_references(tmp_path: Path) ->
                 "raw_text": "Reference raw text",
             }
         ],
-        "sections": [{"heading": "Intro", "text": "Section text"}],
     }
+    assert "sections" not in document.metadata["grobid"]
     assert "router_grobid_merged" in document.quality.warnings
     assert grobid.closed is False
 
@@ -361,6 +424,61 @@ def test_grobid_absent_unhealthy_or_failing_does_not_fail_primary_parse(
         assert not any(warning.startswith("router_grobid") for warning in document.quality.warnings)
     else:
         assert expected_warning in document.quality.warnings
+
+
+def test_llamaparse_provider_error_does_not_break_local_fallback(tmp_path: Path) -> None:
+    router_module = _router_module()
+
+    def broken_llamaparse_provider() -> None:
+        raise RuntimeError("sqlite unavailable")
+
+    router = router_module.PdfBackendRouter(
+        pymupdf4llm=FakeBackend("pymupdf4llm"),
+        docling=FakeBackend("docling", available=False, extraction_method="layout_model"),
+        llamaparse=broken_llamaparse_provider,
+        legacy=FakeBackend("legacy-pymupdf", extraction_method="legacy"),
+        grobid_client=None,
+    )
+    document = router.parse_pdf(
+        tmp_path / "layout.pdf",
+        "paper-1",
+        "space-1",
+        _quality(needs_layout_model=True),
+    )
+
+    assert document.backend == "legacy-pymupdf"
+    assert "router_llamaparse_config_failed:sqlite unavailable" in document.quality.warnings
+
+
+def test_grobid_provider_error_does_not_break_primary_parse(tmp_path: Path) -> None:
+    router_module = _router_module()
+
+    def broken_grobid_provider() -> None:
+        raise RuntimeError("db locked")
+
+    router = router_module.PdfBackendRouter(
+        **_backends(),
+        grobid_client=broken_grobid_provider,
+    )
+    document = router.parse_pdf(tmp_path / "paper.pdf", "paper-1", "space-1", _quality())
+
+    assert document.backend == "pymupdf4llm"
+    assert "router_grobid_config_failed:db locked" in document.quality.warnings
+
+
+def test_grobid_failure_warning_is_bounded(tmp_path: Path) -> None:
+    router_module = _router_module()
+    grobid = FakeGrobidClient(fail=True, failure_message="x" * 500)
+    router = router_module.PdfBackendRouter(**_backends(), grobid_client=grobid)
+
+    document = router.parse_pdf(tmp_path / "paper.pdf", "paper-1", "space-1", _quality())
+    warning = next(
+        warning
+        for warning in document.quality.warnings
+        if warning.startswith("router_grobid_failed:")
+    )
+
+    assert len(warning) <= 160
 
 
 def test_router_closes_configured_grobid_client_it_owns(

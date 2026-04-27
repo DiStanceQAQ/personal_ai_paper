@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
 from pathlib import Path
-from typing import Any, Final, cast
+from collections.abc import Iterator
+from typing import Any, Callable, Final, cast
 
 from db import get_connection
 from pdf_backend_base import (
@@ -21,7 +22,10 @@ from pdf_models import ParseDocument, PdfQualityReport
 
 
 FORCED_BACKEND_KEY: Final = "pdf_forced_backend"
+WARNING_DETAIL_LIMIT: Final = 120
 _UNSET: Final = object()
+BackendProvider = Callable[[], PdfParserBackend | None]
+GrobidProvider = Callable[[], GrobidClient | None]
 
 
 class PdfBackendRouter:
@@ -32,20 +36,16 @@ class PdfBackendRouter:
         *,
         pymupdf4llm: PdfParserBackend | None | object = _UNSET,
         docling: PdfParserBackend | None | object = _UNSET,
-        llamaparse: PdfParserBackend | None | object = _UNSET,
+        llamaparse: PdfParserBackend | BackendProvider | None | object = _UNSET,
         legacy: PdfParserBackend | None | object = _UNSET,
         forced_backend: str | None | object = _UNSET,
-        grobid_client: GrobidClient | None | object = _UNSET,
+        grobid_client: GrobidClient | GrobidProvider | None | object = _UNSET,
     ) -> None:
         self._pymupdf4llm = (
             PyMuPDF4LLMBackend() if pymupdf4llm is _UNSET else _as_backend(pymupdf4llm)
         )
         self._docling = DoclingBackend() if docling is _UNSET else _as_backend(docling)
-        self._llamaparse = (
-            get_configured_llamaparse_backend()
-            if llamaparse is _UNSET
-            else _as_backend(llamaparse)
-        )
+        self._llamaparse = llamaparse
         self._legacy = LegacyPyMuPDFBackend() if legacy is _UNSET else _as_backend(legacy)
         self._forced_backend = (
             get_forced_backend_setting()
@@ -79,6 +79,8 @@ class PdfBackendRouter:
         errors: list[str] = []
 
         for backend in self._candidate_backends(quality):
+            if backend is None:
+                continue
             name = backend.name
             quality.warnings.append(f"router_attempt:{name}")
 
@@ -92,12 +94,12 @@ class PdfBackendRouter:
                     continue
                 document = backend.parse(file_path, paper_id, space_id, quality)
             except ParserBackendUnavailable as exc:
-                warning = f"router_unavailable:{name}:{exc}"
+                warning = f"router_unavailable:{name}:{_warning_detail(exc)}"
                 quality.warnings.append(warning)
                 errors.append(warning)
                 continue
             except ParserBackendError as exc:
-                warning = f"router_failed:{name}:{exc}"
+                warning = f"router_failed:{name}:{_warning_detail(exc)}"
                 quality.warnings.append(warning)
                 errors.append(warning)
                 continue
@@ -108,36 +110,87 @@ class PdfBackendRouter:
         detail = "; ".join(errors) if errors else "no parser backends configured"
         raise ParserBackendUnavailable("router", detail)
 
-    def _candidate_backends(self, quality: PdfQualityReport) -> list[PdfParserBackend]:
-        candidates: list[PdfParserBackend] = []
-        forced = self._backend_for_key(self._forced_backend)
+    def _candidate_backends(
+        self,
+        quality: PdfQualityReport,
+    ) -> Iterator[PdfParserBackend | None]:
+        seen: set[str] = set()
+        forced = self._backend_for_key(self._forced_backend, quality)
         if forced is not None:
-            candidates.append(forced)
+            seen.add(forced.name)
+            yield forced
 
         if quality.needs_ocr or quality.needs_layout_model:
-            _append_backend(candidates, self._docling)
-            _append_backend(candidates, self._llamaparse)
-            _append_backend(candidates, self._legacy)
+            yield from self._unique_backends(
+                (self._docling, self._resolve_llamaparse_backend, self._legacy),
+                quality,
+                seen,
+            )
         else:
-            _append_backend(candidates, self._pymupdf4llm)
-            _append_backend(candidates, self._llamaparse)
-            _append_backend(candidates, self._legacy)
+            yield from self._unique_backends(
+                (self._pymupdf4llm, self._resolve_llamaparse_backend, self._legacy),
+                quality,
+                seen,
+            )
 
-        return candidates
-
-    def _backend_for_key(self, key: str) -> PdfParserBackend | None:
+    def _backend_for_key(
+        self,
+        key: str,
+        quality: PdfQualityReport | None,
+    ) -> PdfParserBackend | None:
         if key == "pymupdf4llm":
             return self._pymupdf4llm
         if key == "docling":
             return self._docling
         if key == "llamaparse":
-            return self._llamaparse
+            return self._resolve_llamaparse_backend(quality)
         if key in {"legacy", "legacy-pymupdf"}:
             return self._legacy
         return None
 
+    def _unique_backends(
+        self,
+        backends: tuple[
+            PdfParserBackend | None | Callable[[PdfQualityReport], PdfParserBackend | None],
+            ...,
+        ],
+        quality: PdfQualityReport,
+        seen: set[str],
+    ) -> Iterator[PdfParserBackend | None]:
+        for candidate in backends:
+            backend = candidate(quality) if callable(candidate) else candidate
+            if backend is None:
+                continue
+            if backend.name in seen:
+                continue
+            seen.add(backend.name)
+            yield backend
+
+    def _resolve_llamaparse_backend(
+        self,
+        quality: PdfQualityReport | None,
+    ) -> PdfParserBackend | None:
+        try:
+            if self._llamaparse is _UNSET:
+                return get_configured_llamaparse_backend()
+            if callable(self._llamaparse):
+                return self._llamaparse()
+            return _as_backend(self._llamaparse)
+        except Exception as exc:
+            if quality is not None:
+                quality.warnings.append(
+                    f"router_llamaparse_config_failed:{_warning_detail(exc)}"
+                )
+            return None
+
     def _merge_grobid(self, file_path: Path, document: ParseDocument) -> ParseDocument:
-        grobid_client, owns_client = self._resolve_grobid_client()
+        try:
+            grobid_client, owns_client = self._resolve_grobid_client()
+        except Exception as exc:
+            document.quality.warnings.append(
+                f"router_grobid_config_failed:{_warning_detail(exc)}"
+            )
+            return document
         if grobid_client is None:
             return document
 
@@ -153,12 +206,13 @@ class PdfBackendRouter:
             metadata["grobid"] = {
                 "metadata": _json_safe_dataclass(result.metadata),
                 "references": [_json_safe_dataclass(ref) for ref in result.references],
-                "sections": [_json_safe_dataclass(section) for section in result.sections],
             }
             document.quality.warnings.append("router_grobid_merged")
             return document.model_copy(update={"metadata": metadata})
         except Exception as exc:
-            document.quality.warnings.append(f"router_grobid_failed:{exc}")
+            document.quality.warnings.append(
+                f"router_grobid_failed:{_warning_detail(exc)}"
+            )
             return document
         finally:
             if owns_client and hasattr(grobid_client, "close"):
@@ -167,6 +221,8 @@ class PdfBackendRouter:
     def _resolve_grobid_client(self) -> tuple[GrobidClient | None, bool]:
         if self._grobid_client is _UNSET:
             return get_configured_grobid_client(), True
+        if callable(self._grobid_client):
+            return self._grobid_client(), True
         return cast(GrobidClient | None, self._grobid_client), False
 
 
@@ -227,15 +283,11 @@ def _normalize_backend_key(value: str) -> str:
     return aliases.get(normalized, normalized)
 
 
-def _append_backend(
-    candidates: list[PdfParserBackend],
-    backend: PdfParserBackend | None,
-) -> None:
-    if backend is None:
-        return
-    if any(candidate.name == backend.name for candidate in candidates):
-        return
-    candidates.append(backend)
+def _warning_detail(exc: BaseException) -> str:
+    detail = " ".join(str(exc).split())
+    if len(detail) <= WARNING_DETAIL_LIMIT:
+        return detail
+    return f"{detail[: WARNING_DETAIL_LIMIT - 3]}..."
 
 
 def _json_safe_dataclass(value: Any) -> Any:

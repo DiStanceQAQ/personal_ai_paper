@@ -64,8 +64,8 @@ def test_backend_uses_official_upload_create_poll_flow(tmp_path: Path) -> None:
         if request.method == "POST" and request.url.path == "/api/v2/parse":
             body = json.loads(request.content)
             assert body["file_id"] == "file-123"
-            assert body["tier"] == "balanced"
-            assert body["version"] == "v2"
+            assert body["tier"] == "cost_effective"
+            assert body["version"] == "latest"
             return httpx.Response(200, json={"id": "job-123"})
 
         if request.method == "GET" and request.url.path == "/api/v2/parse/job-123":
@@ -121,6 +121,92 @@ def test_backend_uses_official_upload_create_poll_flow(tmp_path: Path) -> None:
         "table",
     ]
     assert document.tables[0].cells == [["Metric", "Value"], ["Score", "1.0"]]
+
+
+def test_backend_keeps_polling_pending_expanded_payload(tmp_path: Path) -> None:
+    """Pending jobs with expanded partial content should not be treated as final."""
+    backend_module = _backend_module()
+    fake_pdf = tmp_path / "paper.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.7\npending-expanded")
+    poll_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal poll_count
+        if request.url.path == "/api/v1/beta/files":
+            return httpx.Response(200, json={"id": "file-pending"})
+        if request.url.path == "/api/v2/parse":
+            return httpx.Response(200, json={"id": "job-pending"})
+        if request.url.path == "/api/v2/parse/job-pending":
+            poll_count += 1
+            if poll_count == 1:
+                return httpx.Response(
+                    200,
+                    json={
+                        "job": {"id": "job-pending", "status": "PENDING"},
+                        "markdown": "# partial",
+                        "items": {"pages": []},
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "job": {"id": "job-pending", "status": "COMPLETED"},
+                    "markdown": "# Complete\n\nFinal content.",
+                },
+            )
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    backend = backend_module.LlamaParseBackend(
+        api_key="key",
+        http_client=client,
+        max_poll_attempts=2,
+        poll_interval_seconds=0,
+    )
+
+    document = backend.parse(fake_pdf, "paper-pending", "space-1", _quality())
+
+    assert poll_count == 2
+    assert [element.text for element in document.elements] == ["Complete", "Final content."]
+
+
+def test_backend_failed_job_status_raises_parser_error(tmp_path: Path) -> None:
+    """Terminal failed parse job statuses should raise a useful parser error."""
+    backend_module = _backend_module()
+    fake_pdf = tmp_path / "paper.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.7\nfailed-status")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/beta/files":
+            return httpx.Response(200, json={"id": "file-failed"})
+        if request.url.path == "/api/v2/parse":
+            return httpx.Response(200, json={"id": "job-failed"})
+        if request.url.path == "/api/v2/parse/job-failed":
+            return httpx.Response(
+                200,
+                json={
+                    "job": {
+                        "id": "job-failed",
+                        "status": "FAILED",
+                        "error": "unsupported document",
+                    }
+                },
+            )
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    backend = backend_module.LlamaParseBackend(
+        api_key="key",
+        http_client=client,
+        max_poll_attempts=1,
+        poll_interval_seconds=0,
+    )
+
+    with pytest.raises(ParserBackendError) as exc_info:
+        backend.parse(fake_pdf, "paper-failed", "space-1", _quality())
+
+    assert "job-failed" in str(exc_info.value)
+    assert "FAILED" in str(exc_info.value)
 
 
 def test_backend_converts_api_v2_items_pages_shape(tmp_path: Path) -> None:

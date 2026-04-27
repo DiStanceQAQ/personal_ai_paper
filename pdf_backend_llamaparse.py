@@ -27,6 +27,8 @@ DEFAULT_BASE_URL = "https://api.cloud.llamaindex.ai"
 DEFAULT_TIMEOUT = 120.0
 DEFAULT_MAX_POLL_ATTEMPTS = 30
 DEFAULT_POLL_INTERVAL_SECONDS = 2.0
+_COMPLETED_STATUSES = {"COMPLETED", "SUCCESS", "SUCCEEDED", "DONE"}
+_FAILED_STATUSES = {"FAILED", "ERROR", "CANCELED", "CANCELLED"}
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _TABLE_SEPARATOR_RE = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$")
@@ -44,8 +46,8 @@ class LlamaParseBackend:
         base_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         http_client: httpx.Client | None = None,
-        tier: str = "balanced",
-        version: str = "v2",
+        tier: str = "cost_effective",
+        version: str = "latest",
         max_poll_attempts: int = DEFAULT_MAX_POLL_ATTEMPTS,
         poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
     ) -> None:
@@ -112,7 +114,12 @@ class LlamaParseBackend:
         job_id = _id_from_payload(create_payload, "parse job")
         for attempt in range(self.max_poll_attempts):
             result = self._get_parse_result(job_id)
-            if _job_status(result) == "COMPLETED" or _looks_like_final_payload(result):
+            status = _job_status(result)
+            if status in _COMPLETED_STATUSES:
+                return result
+            if status in _FAILED_STATUSES:
+                raise ValueError(_failed_job_message(job_id, status, result))
+            if not status and _looks_like_final_payload(result):
                 return result
             if attempt < self.max_poll_attempts - 1 and self.poll_interval_seconds > 0:
                 time.sleep(self.poll_interval_seconds)
@@ -516,6 +523,16 @@ def _job_status(payload: Mapping[str, Any]) -> str:
     if status is None and isinstance(job, Mapping):
         status = job.get("status")
     return str(status or "").upper()
+
+
+def _failed_job_message(job_id: str, status: str, payload: Mapping[str, Any]) -> str:
+    detail = payload.get("error") or payload.get("message")
+    job = payload.get("job")
+    if detail is None and isinstance(job, Mapping):
+        detail = job.get("error") or job.get("message")
+    if detail:
+        return f"LlamaParse job {job_id} ended with status {status}: {detail}"
+    return f"LlamaParse job {job_id} ended with status {status}"
 
 
 def _looks_like_final_payload(payload: Mapping[str, Any]) -> bool:

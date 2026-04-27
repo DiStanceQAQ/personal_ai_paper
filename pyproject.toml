@@ -40,6 +40,7 @@ py-modules = [
     "card_extractor",
     "config",
     "db",
+    "db_migrations",
     "embeddings",
     "hybrid_search",
     "llm_client",

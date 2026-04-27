@@ -907,11 +907,11 @@ git commit -m "docs: describe PDF ingestion backends"
 - Modify: `tests/test_build_sidecars.py`
 - Modify: `pyproject.toml`
 
-- [ ] Ensure new top-level modules are included in PyInstaller hidden imports or package collection.
-- [ ] Keep heavy optional dependencies excluded from the default sidecar unless explicitly installed.
-- [ ] Run: `pytest tests/test_build_sidecars.py -q`
-- [ ] Expected: PASS.
-- [ ] Commit:
+- [x] Ensure new top-level modules are included in PyInstaller hidden imports or package collection.
+- [x] Keep heavy optional dependencies excluded from the default sidecar unless explicitly installed.
+- [x] Run: `pytest tests/test_build_sidecars.py -q`
+- [x] Expected: PASS.
+- [x] Commit:
 
 ```bash
 git add scripts/build_sidecars.py tests/test_build_sidecars.py pyproject.toml

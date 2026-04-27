@@ -1,5 +1,8 @@
 """Tests for PDF parser data contract models."""
 
+import json
+import tomllib
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -9,6 +12,7 @@ from pdf_models import (
     ChunkCandidate,
     ELEMENT_TYPES,
     EXTRACTION_METHODS,
+    PASSAGE_TYPES,
     ParseAsset,
     ParseDocument,
     ParseElement,
@@ -16,6 +20,13 @@ from pdf_models import (
     PassageRecord,
     PdfQualityReport,
 )
+
+
+def test_pdf_models_is_in_packaged_runtime_modules() -> None:
+    """The runtime parser models module should be included in packaged builds."""
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text())
+
+    assert "pdf_models" in pyproject["tool"]["setuptools"]["py-modules"]
 
 
 def test_allowed_vocabularies_are_exported_for_parser_callers() -> None:
@@ -41,6 +52,16 @@ def test_allowed_vocabularies_are_exported_for_parser_callers() -> None:
         "layout_model",
         "llm_parser",
         "legacy",
+    )
+    assert PASSAGE_TYPES == (
+        "abstract",
+        "introduction",
+        "method",
+        "result",
+        "discussion",
+        "limitation",
+        "appendix",
+        "body",
     )
 
 
@@ -89,14 +110,86 @@ def test_parse_element_rejects_unknown_extraction_methods(
 
 def test_model_defaults_do_not_share_mutable_state() -> None:
     """List and dict defaults should be independent for each model instance."""
-    first = PdfQualityReport()
-    second = PdfQualityReport()
+    quality_first = PdfQualityReport()
+    quality_second = PdfQualityReport()
+    element_first = ParseElement(
+        id="element-1",
+        element_index=0,
+        element_type="paragraph",
+        extraction_method="native_text",
+    )
+    element_second = ParseElement(
+        id="element-2",
+        element_index=1,
+        element_type="paragraph",
+        extraction_method="native_text",
+    )
+    table_first = ParseTable(id="table-1")
+    table_second = ParseTable(id="table-2")
+    document_first = ParseDocument(
+        paper_id="paper-1",
+        space_id="space-1",
+        backend="parser",
+        extraction_method="native_text",
+        quality=PdfQualityReport(),
+    )
+    document_second = ParseDocument(
+        paper_id="paper-2",
+        space_id="space-1",
+        backend="parser",
+        extraction_method="native_text",
+        quality=PdfQualityReport(),
+    )
+    chunk_first = ChunkCandidate(id="chunk-1", element_ids=["element-1"], text="text")
+    chunk_second = ChunkCandidate(id="chunk-2", element_ids=["element-2"], text="text")
+    passage_first = PassageRecord(
+        id="passage-1",
+        paper_id="paper-1",
+        space_id="space-1",
+        original_text="text",
+    )
+    passage_second = PassageRecord(
+        id="passage-2",
+        paper_id="paper-2",
+        space_id="space-1",
+        original_text="text",
+    )
 
-    first.warnings.append("low text coverage")
-    first.metadata["backend"] = "fitz"
+    quality_first.warnings.append("low text coverage")
+    quality_first.metadata["backend"] = "fitz"
+    element_first.heading_path.append("Method")
+    element_first.metadata["role"] = "body"
+    table_first.cells.append(["metric", "value"])
+    table_first.metadata["source"] = "native"
+    document_first.elements.append(element_first)
+    document_first.tables.append(table_first)
+    document_first.assets.append(ParseAsset(id="asset-1", asset_type="figure"))
+    document_first.metadata["run"] = "run-1"
+    chunk_first.heading_path.append("Results")
+    chunk_first.quality_flags.append("short")
+    chunk_first.metadata["source"] = "chunker"
+    passage_first.element_ids.append("element-1")
+    passage_first.heading_path.append("Discussion")
+    passage_first.quality_flags.append("review")
+    passage_first.metadata["source"] = "chunker"
 
-    assert second.warnings == []
-    assert second.metadata == {}
+    assert quality_second.warnings == []
+    assert quality_second.metadata == {}
+    assert element_second.heading_path == []
+    assert element_second.metadata == {}
+    assert table_second.cells == []
+    assert table_second.metadata == {}
+    assert document_second.elements == []
+    assert document_second.tables == []
+    assert document_second.assets == []
+    assert document_second.metadata == {}
+    assert chunk_second.heading_path == []
+    assert chunk_second.quality_flags == []
+    assert chunk_second.metadata == {}
+    assert passage_second.element_ids == []
+    assert passage_second.heading_path == []
+    assert passage_second.quality_flags == []
+    assert passage_second.metadata == {}
 
 
 @pytest.mark.parametrize(
@@ -182,6 +275,19 @@ def test_parse_document_nests_quality_elements_tables_and_assets() -> None:
     assert document.assets[0].uri == "assets/figure-1.png"
 
 
+@pytest.mark.parametrize("passage_type", ["conclusion", "reference", "unknown"])
+def test_passage_record_rejects_unknown_passage_type(passage_type: str) -> None:
+    """PassageRecord should enforce the same passage_type vocabulary as SQLite."""
+    with pytest.raises(ValidationError):
+        PassageRecord(
+            id="passage-1",
+            paper_id="paper-1",
+            space_id="space-1",
+            original_text="text",
+            passage_type=passage_type,
+        )
+
+
 def test_passage_record_matches_passages_table_and_provenance_fields() -> None:
     """PassageRecord should expose legacy passage columns plus parse provenance."""
     passage = PassageRecord(
@@ -212,3 +318,123 @@ def test_passage_record_matches_passages_table_and_provenance_fields() -> None:
     assert passage.heading_path == ["Method", "Training"]
     assert passage.extraction_method == "llm_parser"
     assert passage.metadata == {"source": "chunker"}
+
+
+def test_passage_record_to_passage_row_maps_provenance_to_json_columns() -> None:
+    """PassageRecord should serialize provenance into DB-ready passage columns."""
+    passage = PassageRecord(
+        id="passage-1",
+        paper_id="paper-1",
+        space_id="space-1",
+        section="方法",
+        page_number=5,
+        paragraph_index=2,
+        original_text="我们使用对比学习。",
+        parse_confidence=0.92,
+        passage_type="method",
+        parse_run_id="run-1",
+        element_ids=["element-1", "element-2"],
+        heading_path=["方法", "训练"],
+        bbox=[12.0, 24.0, 300.0, 420.0],
+        token_count=42,
+        char_count=128,
+        content_hash="hash-1",
+        parser_backend="structured-parser",
+        extraction_method="llm_parser",
+        quality_flags=["需要复核"],
+        metadata={"source": "chunker"},
+    )
+
+    row = passage.to_passage_row()
+
+    assert row == {
+        "id": "passage-1",
+        "paper_id": "paper-1",
+        "space_id": "space-1",
+        "section": "方法",
+        "page_number": 5,
+        "paragraph_index": 2,
+        "original_text": "我们使用对比学习。",
+        "parse_confidence": 0.92,
+        "passage_type": "method",
+        "parse_run_id": "run-1",
+        "element_ids_json": json.dumps(["element-1", "element-2"], ensure_ascii=False),
+        "heading_path_json": json.dumps(["方法", "训练"], ensure_ascii=False),
+        "bbox_json": json.dumps([12.0, 24.0, 300.0, 420.0], ensure_ascii=False),
+        "token_count": 42,
+        "char_count": 128,
+        "content_hash": "hash-1",
+        "parser_backend": "structured-parser",
+        "extraction_method": "llm_parser",
+        "quality_flags_json": json.dumps(["需要复核"], ensure_ascii=False),
+    }
+    assert "metadata" not in row
+
+
+def test_passage_record_to_passage_row_uses_nullable_bbox_and_empty_method() -> None:
+    """Absent optional provenance should map to the migrated passages defaults."""
+    passage = PassageRecord(
+        id="passage-1",
+        paper_id="paper-1",
+        space_id="space-1",
+        original_text="text",
+    )
+
+    row = passage.to_passage_row()
+
+    assert row["element_ids_json"] == "[]"
+    assert row["heading_path_json"] == "[]"
+    assert row["bbox_json"] is None
+    assert row["extraction_method"] == ""
+    assert row["quality_flags_json"] == "[]"
+
+
+@pytest.mark.parametrize(
+    ("model_cls", "kwargs"),
+    [
+        (
+            ParseElement,
+            {
+                "id": "element-1",
+                "element_index": 0,
+                "element_type": "paragraph",
+                "extraction_method": "native_text",
+                "bbox": [1.0, 2.0, 3.0],
+            },
+        ),
+        (ParseTable, {"id": "table-1", "bbox": [1.0, 2.0, 3.0, 4.0, 5.0]}),
+        (
+            ParseAsset,
+            {"id": "asset-1", "asset_type": "figure", "bbox": [1.0, 2.0]},
+        ),
+        (
+            PassageRecord,
+            {
+                "id": "passage-1",
+                "paper_id": "paper-1",
+                "space_id": "space-1",
+                "original_text": "text",
+                "bbox": [1.0, 2.0, 3.0],
+            },
+        ),
+    ],
+)
+def test_models_reject_bbox_without_four_coordinates(
+    model_cls: type[Any],
+    kwargs: dict[str, Any],
+) -> None:
+    """Bounding boxes should use four coordinates when present."""
+    with pytest.raises(ValidationError):
+        model_cls(**kwargs)
+
+
+def test_chunk_candidate_rejects_page_end_before_page_start() -> None:
+    """ChunkCandidate should keep page ranges internally consistent."""
+    with pytest.raises(ValidationError):
+        ChunkCandidate(
+            id="chunk-1",
+            element_ids=["element-1"],
+            text="text",
+            page_start=5,
+            page_end=4,
+        )

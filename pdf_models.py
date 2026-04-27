@@ -1,8 +1,9 @@
 """Pydantic data contracts for structured PDF parsing."""
 
-from typing import Any, Final, Literal, TypeAlias
+import json
+from typing import Annotated, Any, Final, Literal, Self, TypeAlias
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 ElementType: TypeAlias = Literal[
     "title",
@@ -28,6 +29,19 @@ ExtractionMethod: TypeAlias = Literal[
     "legacy",
 ]
 
+PassageType: TypeAlias = Literal[
+    "abstract",
+    "introduction",
+    "method",
+    "result",
+    "discussion",
+    "limitation",
+    "appendix",
+    "body",
+]
+
+BBox: TypeAlias = Annotated[list[float], Field(min_length=4, max_length=4)]
+
 ELEMENT_TYPES: Final[tuple[ElementType, ...]] = (
     "title",
     "heading",
@@ -50,6 +64,17 @@ EXTRACTION_METHODS: Final[tuple[ExtractionMethod, ...]] = (
     "layout_model",
     "llm_parser",
     "legacy",
+)
+
+PASSAGE_TYPES: Final[tuple[PassageType, ...]] = (
+    "abstract",
+    "introduction",
+    "method",
+    "result",
+    "discussion",
+    "limitation",
+    "appendix",
+    "body",
 )
 
 
@@ -76,7 +101,7 @@ class ParseElement(BaseModel):
     element_type: ElementType
     text: str = ""
     page_number: int = Field(default=0, ge=0)
-    bbox: list[float] | None = None
+    bbox: BBox | None = None
     heading_path: list[str] = Field(default_factory=list)
     extraction_method: ExtractionMethod
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -91,7 +116,7 @@ class ParseTable(BaseModel):
     page_number: int = Field(default=0, ge=0)
     caption: str = ""
     cells: list[list[str]] = Field(default_factory=list)
-    bbox: list[float] | None = None
+    bbox: BBox | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -103,7 +128,7 @@ class ParseAsset(BaseModel):
     asset_type: str
     page_number: int = Field(default=0, ge=0)
     uri: str = ""
-    bbox: list[float] | None = None
+    bbox: BBox | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -136,6 +161,13 @@ class ChunkCandidate(BaseModel):
     quality_flags: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_page_range(self) -> Self:
+        """Validate that the candidate page range is ordered."""
+        if self.page_end < self.page_start:
+            raise ValueError("page_end must be greater than or equal to page_start")
+        return self
+
 
 class PassageRecord(BaseModel):
     """Storage-ready passage row with structured parse provenance."""
@@ -148,11 +180,11 @@ class PassageRecord(BaseModel):
     paragraph_index: int = Field(default=0, ge=0)
     original_text: str = ""
     parse_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-    passage_type: str = "body"
+    passage_type: PassageType = "body"
     parse_run_id: str | None = None
     element_ids: list[str] = Field(default_factory=list)
     heading_path: list[str] = Field(default_factory=list)
-    bbox: list[float] | None = None
+    bbox: BBox | None = None
     token_count: int | None = Field(default=None, ge=0)
     char_count: int | None = Field(default=None, ge=0)
     content_hash: str | None = None
@@ -161,10 +193,50 @@ class PassageRecord(BaseModel):
     quality_flags: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    def to_passage_row(self) -> dict[str, Any]:
+        """Return a dict aligned with the migrated passages table columns."""
+        return {
+            "id": self.id,
+            "paper_id": self.paper_id,
+            "space_id": self.space_id,
+            "section": self.section,
+            "page_number": self.page_number,
+            "paragraph_index": self.paragraph_index,
+            "original_text": self.original_text,
+            "parse_confidence": self.parse_confidence,
+            "passage_type": self.passage_type,
+            "parse_run_id": self.parse_run_id,
+            "element_ids_json": json.dumps(
+                self.element_ids,
+                ensure_ascii=False,
+            ),
+            "heading_path_json": json.dumps(
+                self.heading_path,
+                ensure_ascii=False,
+            ),
+            "bbox_json": (
+                json.dumps(self.bbox, ensure_ascii=False)
+                if self.bbox is not None
+                else None
+            ),
+            "token_count": self.token_count,
+            "char_count": self.char_count,
+            "content_hash": self.content_hash,
+            "parser_backend": self.parser_backend,
+            "extraction_method": self.extraction_method or "",
+            "quality_flags_json": json.dumps(
+                self.quality_flags,
+                ensure_ascii=False,
+            ),
+        }
+
 
 __all__ = [
+    "BBox",
     "ELEMENT_TYPES",
     "EXTRACTION_METHODS",
+    "PASSAGE_TYPES",
+    "PassageType",
     "ChunkCandidate",
     "ElementType",
     "ExtractionMethod",

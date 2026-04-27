@@ -35,6 +35,7 @@ py-modules = [
     "main",
     "mcp_server",
     "parser",
+    "pdf_models",
     "routes_agent",
     "routes_cards",
     "routes_papers",

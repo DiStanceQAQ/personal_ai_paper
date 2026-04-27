@@ -603,13 +603,14 @@ git commit -m "feat: build source-grounded analysis prompts"
 
 **Files:**
 - Create: `analysis_pipeline.py`
+- Modify: `pyproject.toml`
 - Test: `tests/test_analysis_pipeline_metadata.py`
 
-- [ ] Implement `extract_metadata_stage(paper_id, passages, elements, grobid_metadata)` using first-page/title elements, DOI/arXiv regexes, GROBID metadata, and LLM schema fallback.
-- [ ] Prefer GROBID DOI/authors/year when available; prefer first-page title element over LLM guesses.
-- [ ] Run: `pytest tests/test_analysis_pipeline_metadata.py -q`
-- [ ] Expected: PASS for GROBID-present, GROBID-absent, and DOI-regex cases.
-- [ ] Commit:
+- [x] Implement `extract_metadata_stage(paper_id, passages, elements, grobid_metadata)` using first-page/title elements, DOI/arXiv regexes, GROBID metadata, and LLM schema fallback.
+- [x] Prefer GROBID DOI/authors/year when available; prefer first-page title element over LLM guesses.
+- [x] Run: `pytest tests/test_analysis_pipeline_metadata.py -q`
+- [x] Expected: PASS for GROBID-present, GROBID-absent, and DOI-regex cases.
+- [x] Commit:
 
 ```bash
 git add analysis_pipeline.py tests/test_analysis_pipeline_metadata.py

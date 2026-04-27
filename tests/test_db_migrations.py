@@ -47,6 +47,14 @@ def index_columns(conn: sqlite3.Connection, index_name: str) -> tuple[str, ...]:
     return tuple(row["name"] for row in rows)
 
 
+def assert_index_columns(
+    conn: sqlite3.Connection, expected_columns: dict[str, tuple[str, ...]]
+) -> None:
+    """Assert indexed column names in index order for each index."""
+    for index_name, columns in expected_columns.items():
+        assert index_columns(conn, index_name) == columns
+
+
 def insert_space(conn: sqlite3.Connection, space_id: str) -> None:
     """Insert a minimal space row."""
     conn.execute(
@@ -237,12 +245,14 @@ def test_migration_one_creates_parse_storage_indexes() -> None:
         assert {
             "idx_parse_runs_paper_id",
             "idx_parse_runs_space_id",
+            "idx_parse_runs_id_paper_space_unique",
         }.issubset(index_names(conn, "parse_runs"))
         assert {
             "idx_document_elements_paper_id",
             "idx_document_elements_space_id",
             "idx_document_elements_parse_run_id",
             "idx_document_elements_paper_element_index",
+            "idx_document_elements_id_parse_scope_unique",
         }.issubset(index_names(conn, "document_elements"))
         assert {
             "idx_document_tables_paper_id",
@@ -257,12 +267,39 @@ def test_migration_one_creates_parse_storage_indexes() -> None:
             "idx_document_assets_element_id",
         }.issubset(index_names(conn, "document_assets"))
 
-        assert index_columns(
-            conn, "idx_document_elements_paper_element_index"
-        ) == ("paper_id", "element_index")
-        assert index_columns(
-            conn, "idx_document_elements_parse_run_id"
-        ) == ("parse_run_id",)
+        assert_index_columns(
+            conn,
+            {
+                "idx_parse_runs_paper_id": ("paper_id",),
+                "idx_parse_runs_space_id": ("space_id",),
+                "idx_parse_runs_id_paper_space_unique": (
+                    "id",
+                    "paper_id",
+                    "space_id",
+                ),
+                "idx_document_elements_paper_id": ("paper_id",),
+                "idx_document_elements_space_id": ("space_id",),
+                "idx_document_elements_parse_run_id": ("parse_run_id",),
+                "idx_document_elements_paper_element_index": (
+                    "paper_id",
+                    "element_index",
+                ),
+                "idx_document_elements_id_parse_scope_unique": (
+                    "id",
+                    "parse_run_id",
+                    "paper_id",
+                    "space_id",
+                ),
+                "idx_document_tables_paper_id": ("paper_id",),
+                "idx_document_tables_space_id": ("space_id",),
+                "idx_document_tables_parse_run_id": ("parse_run_id",),
+                "idx_document_tables_element_id": ("element_id",),
+                "idx_document_assets_paper_id": ("paper_id",),
+                "idx_document_assets_space_id": ("space_id",),
+                "idx_document_assets_parse_run_id": ("parse_run_id",),
+                "idx_document_assets_element_id": ("element_id",),
+            },
+        )
 
         conn.close()
 
@@ -348,6 +385,63 @@ def test_document_rows_reject_parse_scope_mismatch() -> None:
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 ("asset-1", "parse-run-1", "paper-2", "space-2", "element-2"),
+            )
+
+        conn.close()
+
+
+def test_tables_and_assets_reject_element_from_other_parse_run() -> None:
+    """Element FKs must match the row's parse run, paper, and space scope."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+        insert_space(conn, "space-1")
+        insert_paper(conn, "paper-1", "space-1")
+        conn.execute(
+            """
+            INSERT INTO parse_runs (id, paper_id, space_id)
+            VALUES (?, ?, ?)
+            """,
+            ("parse-run-1", "paper-1", "space-1"),
+        )
+        conn.execute(
+            """
+            INSERT INTO parse_runs (id, paper_id, space_id)
+            VALUES (?, ?, ?)
+            """,
+            ("parse-run-2", "paper-1", "space-1"),
+        )
+        conn.execute(
+            """
+            INSERT INTO document_elements (
+                id, parse_run_id, paper_id, space_id, element_index, element_type
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("element-1", "parse-run-1", "paper-1", "space-1", 0, "table"),
+        )
+        conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO document_tables (
+                    id, parse_run_id, paper_id, space_id, element_id
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("table-1", "parse-run-2", "paper-1", "space-1", "element-1"),
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO document_assets (
+                    id, parse_run_id, paper_id, space_id, element_id
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("asset-1", "parse-run-2", "paper-1", "space-1", "element-1"),
             )
 
         conn.close()

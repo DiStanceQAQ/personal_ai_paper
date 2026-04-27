@@ -36,6 +36,7 @@ py-modules = [
     "main",
     "mcp_server",
     "parser",
+    "pdf_backend_base",
     "pdf_models",
     "pdf_profile",
     "routes_agent",

@@ -86,3 +86,21 @@ def test_paper_hook_clears_detail_state_when_active_space_changes() -> None:
   }, [activeSpaceId]);"""
 
     assert expected_effect in source
+
+
+def test_react_card_ui_surfaces_source_grounding() -> None:
+    """Knowledge cards should expose provenance without expanding every card by default."""
+    card_source = Path("frontend/src/components/ui/KnowledgeCardFancy.tsx").read_text(encoding="utf-8")
+    inspector_source = Path("frontend/src/components/layout/Inspector.tsx").read_text(encoding="utf-8")
+
+    required_card_markers = [
+        "card-source-summary",
+        "card-evidence-details",
+        "created_by",
+        "evidence_json",
+        "source_passage_ids",
+    ]
+    for marker in required_card_markers:
+        assert marker in card_source
+
+    assert "api.listPassages" in inspector_source

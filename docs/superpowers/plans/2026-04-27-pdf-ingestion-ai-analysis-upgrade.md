@@ -737,11 +737,11 @@ git commit -m "feat: use multi-stage AI paper analysis"
 - Modify: `frontend/src/components/layout/Inspector.tsx`
 - Modify: `frontend/src/styles.css`
 
-- [ ] Show source passage count, primary page number, confidence, and card origin (`AI`, `Heuristic`, `Manual`).
-- [ ] Add expandable evidence text from `evidence_json` without crowding the card list.
-- [ ] Run: `npm run frontend:typecheck && npm run frontend:build`
-- [ ] Expected: PASS.
-- [ ] Commit:
+- [x] Show source passage count, primary page number, confidence, and card origin (`AI`, `Heuristic`, `Manual`).
+- [x] Add expandable evidence text from `evidence_json` without crowding the card list.
+- [x] Run: `npm run frontend:typecheck && npm run frontend:build`
+- [x] Expected: PASS.
+- [x] Commit:
 
 ```bash
 git add frontend/src/types.ts frontend/src/api.ts frontend/src/components/ui/KnowledgeCardFancy.tsx frontend/src/components/layout/Inspector.tsx frontend/src/styles.css

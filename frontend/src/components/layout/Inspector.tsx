@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Clock3, Cpu, Database, Edit2, FileText, Gauge, Plus, Server, Table2 } from 'lucide-react';
 import type { Paper, KnowledgeCard, AgentStatus, Space } from '../../types';
+import { api } from '../../api';
 import { KnowledgeCardFancy } from '../ui/KnowledgeCardFancy';
 
 export interface InspectorProps {
@@ -78,7 +79,35 @@ export const Inspector: React.FC<InspectorProps> = ({
 }) => {
   const [newCardText, setNewCardText] = useState('');
   const [isAdding, setIsAdding] = useState(false);
+  const [sourcePageById, setSourcePageById] = useState<Record<string, number>>({});
   const parseDiagnostics = selectedPaper?.parse_diagnostics;
+  const selectedPaperId = selectedPaper?.id;
+
+  useEffect(() => {
+    if (!selectedPaperId) {
+      setSourcePageById({});
+      return;
+    }
+
+    let isCurrent = true;
+    api.listPassages(selectedPaperId)
+      .then((paperPassages) => {
+        if (!isCurrent) return;
+        setSourcePageById(
+          Object.fromEntries(
+            paperPassages.map((passage) => [passage.id, passage.page_number]),
+          ),
+        );
+      })
+      .catch((error) => {
+        console.error('Failed to load passage page numbers:', error);
+        if (isCurrent) setSourcePageById({});
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [selectedPaperId]);
 
   const handleAddManual = () => {
     if (!newCardText.trim()) return;
@@ -213,6 +242,7 @@ export const Inspector: React.FC<InspectorProps> = ({
                       cardLabel={cardLabel} 
                       onDelete={onDeleteCard}
                       onUpdate={onUpdateCard}
+                      sourcePageById={sourcePageById}
                     />
                   ))}
                   {visibleCards.length === 0 && !isAdding && (

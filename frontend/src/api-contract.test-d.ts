@@ -3,10 +3,14 @@ import type {
   DocumentElement,
   DocumentElementType,
   DocumentTable,
+  KnowledgeCard,
+  KnowledgeCardEvidence,
+  KnowledgeCardOrigin,
   Paper,
   PaperParseDiagnostics,
   ParsePaperResponse,
   ParseRun,
+  RunDeepAnalysisResponse,
 } from './types';
 
 type Assert<T extends true> = T;
@@ -29,9 +33,29 @@ type _ListElementsReturnsElements = Assert<
 type _ListTablesReturnsTables = Assert<
   IsEqual<AsyncReturn<typeof api.listDocumentTables>, DocumentTable[]>
 >;
+type _ListCardsReturnsCardsWithProvenance = Assert<
+  IsEqual<AsyncReturn<typeof api.listCards>, KnowledgeCard[]>
+>;
+type _RunDeepAnalysisReturnsAnalysisSummary = Assert<
+  IsEqual<AsyncReturn<typeof api.runDeepAnalysis>, RunDeepAnalysisResponse>
+>;
 type _PaperCarriesOptionalParseDiagnostics = Assert<
   IsEqual<Paper['parse_diagnostics'], PaperParseDiagnostics | undefined>
 >;
+type _KnowledgeCardCarriesOrigin = Assert<
+  IsEqual<KnowledgeCard['created_by'], KnowledgeCardOrigin>
+>;
+type _KnowledgeCardCarriesEvidenceJson = Assert<
+  IsEqual<KnowledgeCard['evidence_json'], string>
+>;
 
 const elementType: DocumentElementType = 'paragraph';
+const origin: KnowledgeCardOrigin = 'ai';
+const evidence: KnowledgeCardEvidence = {
+  source_passage_ids: ['passage-1'],
+  evidence_quote: 'quoted evidence',
+  reasoning_summary: 'why this card is grounded',
+};
 void elementType;
+void origin;
+void evidence;

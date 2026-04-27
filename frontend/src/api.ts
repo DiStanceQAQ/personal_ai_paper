@@ -9,6 +9,7 @@ import type {
   ParsePaperResponse,
   ParseRun,
   Passage,
+  RunDeepAnalysisResponse,
   SearchResult,
   Space,
 } from './types';
@@ -114,5 +115,5 @@ export const api = {
   updateAgentConfig: (config: { llm_provider: string; llm_base_url: string; llm_model: string; llm_api_key: string }) =>
     request<{ status: string }>('/api/agent/config', { method: 'PUT', body: JSON.stringify(config) }),
   runDeepAnalysis: (paperId: string) =>
-    request<{ status: string; card_count: number }>(`/api/agent/analyze/${paperId}`, { method: 'POST' }),
+    request<RunDeepAnalysisResponse>(`/api/agent/analyze/${paperId}`, { method: 'POST' }),
 };

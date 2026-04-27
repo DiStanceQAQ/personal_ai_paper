@@ -1,6 +1,7 @@
 export type SpaceStatus = 'active' | 'archived' | 'deleted';
 export type ParseStatus = 'pending' | 'parsing' | 'parsed' | 'error';
 export type ParsePaperStatus = Extract<ParseStatus, 'parsed' | 'error'>;
+export type KnowledgeCardOrigin = 'user' | 'heuristic' | 'ai';
 export type DocumentElementType =
   | 'title'
   | 'heading'
@@ -139,6 +140,14 @@ export interface DocumentTable {
   metadata_json: string;
 }
 
+export interface KnowledgeCardEvidence {
+  source_passage_ids: string[];
+  evidence_quote?: string;
+  reasoning_summary?: string;
+  metadata?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 export interface KnowledgeCard {
   id: string;
   space_id: string;
@@ -148,8 +157,22 @@ export interface KnowledgeCard {
   summary: string;
   confidence: number;
   user_edited: number;
+  created_by: KnowledgeCardOrigin;
+  extractor_version: string;
+  analysis_run_id: string | null;
+  evidence_json: string;
+  quality_flags_json: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface RunDeepAnalysisResponse {
+  status: 'success';
+  card_count: number;
+  analysis_run_id: string;
+  accepted_card_count: number;
+  rejected_card_count: number;
+  metadata_confidence: number;
 }
 
 export interface AgentStatus {

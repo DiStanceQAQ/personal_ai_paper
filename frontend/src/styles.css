@@ -437,6 +437,87 @@ button {
 .card-summary-text { cursor: pointer; font-size: 14px; line-height: 1.6; color: var(--text-primary); transition: background 0.2s; padding: 4px 0; border-radius: 4px; }
 .card-summary-text:hover { background: rgba(37, 99, 235, 0.03); }
 
+.card-source-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.card-source-summary > span {
+  min-width: 0;
+  max-width: 100%;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  line-height: 1;
+}
+
+.card-origin-badge.ai {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.card-origin-badge.heuristic {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #92400e;
+}
+
+.card-origin-badge.user {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #047857;
+}
+
+.card-evidence-details {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.card-evidence-details summary {
+  width: max-content;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  list-style-position: inside;
+}
+
+.card-evidence-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+}
+
+.card-evidence-entry span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.card-evidence-entry p {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 /* 编辑状态 */
 .knowledge-card-fancy.editing { border-left-width: 6px; box-shadow: var(--shadow-md); background: #fdfdfd; }
 .card-edit-container { display: flex; flex-direction: column; gap: 12px; }

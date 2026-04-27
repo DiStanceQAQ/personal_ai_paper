@@ -279,6 +279,87 @@ def test_process_fulltext_extracts_sections_references_and_raw_tei(tmp_path: Pat
     assert result.raw_tei == FULLTEXT_TEI
 
 
+def test_fulltext_reference_falls_back_to_monograph_fields() -> None:
+    from pdf_backend_grobid import parse_grobid_fulltext
+
+    tei = """<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc>
+      <titleStmt><title level="a">Paper With Book Reference</title></titleStmt>
+    </fileDesc>
+  </teiHeader>
+  <text>
+    <back>
+      <listBibl>
+        <biblStruct xml:id="book-1">
+          <monogr>
+            <author>
+              <persName><forename>Donald</forename><surname>Knuth</surname></persName>
+            </author>
+            <title level="m">The Art of Computer Programming</title>
+            <imprint>
+              <publisher>Addison-Wesley</publisher>
+              <date when="1968"/>
+            </imprint>
+          </monogr>
+          <note type="raw_reference">Knuth, D. The Art of Computer Programming. Addison-Wesley. 1968.</note>
+        </biblStruct>
+      </listBibl>
+    </back>
+  </text>
+</TEI>
+"""
+
+    result = parse_grobid_fulltext(tei)
+
+    assert len(result.references) == 1
+    assert result.references[0].id == "book-1"
+    assert result.references[0].title == "The Art of Computer Programming"
+    assert result.references[0].authors == ["Donald Knuth"]
+    assert result.references[0].year == 1968
+    assert result.references[0].venue == "Addison-Wesley"
+    assert result.references[0].raw_text == (
+        "Knuth, D. The Art of Computer Programming. Addison-Wesley. 1968."
+    )
+
+
+def test_fulltext_nested_sections_do_not_duplicate_child_paragraphs() -> None:
+    from pdf_backend_grobid import parse_grobid_fulltext
+
+    tei = """<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc>
+      <titleStmt><title level="a">Nested Section Paper</title></titleStmt>
+    </fileDesc>
+  </teiHeader>
+  <text>
+    <body>
+      <div>
+        <head>Results</head>
+        <p>Parent result paragraph.</p>
+        <div>
+          <head>Ablation</head>
+          <p>Child ablation paragraph.</p>
+        </div>
+      </div>
+    </body>
+  </text>
+</TEI>
+"""
+
+    result = parse_grobid_fulltext(tei)
+
+    assert [(section.heading, section.text) for section in result.sections] == [
+        ("Results", "Parent result paragraph."),
+        ("Ablation", "Child ablation paragraph."),
+    ]
+    all_section_text = "\n".join(section.text for section in result.sections)
+    assert all_section_text.count("Parent result paragraph.") == 1
+    assert all_section_text.count("Child ablation paragraph.") == 1
+
+
 def test_process_header_wraps_http_failures(tmp_path: Path) -> None:
     from pdf_backend_grobid import GrobidClient, GrobidClientError
 

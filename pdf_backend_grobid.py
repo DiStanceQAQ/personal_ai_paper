@@ -213,7 +213,7 @@ def _extract_sections(root: ET.Element) -> list[GrobidSection]:
     sections: list[GrobidSection] = []
     for div in _descendants(body, "div"):
         heading = _text_content(_first_child(div, "head"))
-        paragraphs = [_text_content(paragraph) for paragraph in _descendants(div, "p")]
+        paragraphs = [_text_content(paragraph) for paragraph in _children(div, "p")]
         text = "\n\n".join(paragraph for paragraph in paragraphs if paragraph)
         if heading or text:
             sections.append(GrobidSection(heading=heading, text=text))
@@ -227,18 +227,43 @@ def _extract_references(root: ET.Element) -> list[GrobidReference]:
             continue
         analytic = _first_child(bibl, "analytic")
         monogr = _first_child(bibl, "monogr")
+        analytic_title = _first_title(analytic, preferred_level="a")
+        title = analytic_title or _first_title(monogr, preferred_level="m")
         references.append(
             GrobidReference(
                 id=_attribute(bibl, "id"),
-                title=_first_title(analytic, preferred_level="a"),
-                authors=_authors_from_parent(analytic),
+                title=title,
+                authors=_reference_authors(analytic, monogr),
                 year=_first_year(bibl),
-                venue=_first_title(monogr, preferred_level="j"),
+                venue=_reference_venue(
+                    monogr,
+                    has_analytic_title=bool(analytic_title),
+                ),
                 doi=_first_doi(bibl),
                 raw_text=_raw_reference_text(bibl),
             )
         )
     return references
+
+
+def _reference_authors(
+    analytic: ET.Element | None,
+    monogr: ET.Element | None,
+) -> list[str]:
+    authors = _authors_from_parent(analytic)
+    if authors:
+        return authors
+    return _authors_from_parent(monogr)
+
+
+def _reference_venue(
+    monogr: ET.Element | None,
+    *,
+    has_analytic_title: bool,
+) -> str:
+    if has_analytic_title:
+        return _first_title(monogr, preferred_level="j")
+    return _text_content(_first_descendant(monogr, "publisher"))
 
 
 def _is_header_bibl(root: ET.Element, bibl: ET.Element) -> bool:

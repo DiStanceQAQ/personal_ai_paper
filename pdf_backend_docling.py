@@ -131,6 +131,8 @@ class _DocumentBuilder:
             "label": label,
             "raw": _json_safe(item),
         }
+        if element_type in {"page_header", "page_footer"}:
+            metadata["filtered"] = True
 
         if element_type == "heading":
             previous_path = list(self._heading_path)
@@ -333,7 +335,13 @@ def _label(item: Any) -> str:
 
 
 def _element_type(label: str) -> str:
-    if any(token in label for token in ("heading", "header", "section", "title")):
+    if "page_header" in label:
+        return "page_header"
+    if "page_footer" in label:
+        return "page_footer"
+    if "title" in label:
+        return "title"
+    if any(token in label for token in ("heading", "header", "section")):
         return "heading"
     if "table" in label:
         return "table"
@@ -515,6 +523,16 @@ def _prov_bbox(item: Any) -> list[float] | None:
 
 
 def _bbox(value: Any) -> list[float] | None:
+    if value is None:
+        return None
+
+    as_tuple = _get(value, "as_tuple")
+    if callable(as_tuple):
+        try:
+            value = as_tuple()
+        except Exception:
+            return None
+
     if isinstance(value, Mapping):
         value = [
             value.get("l", value.get("x0", value.get("left"))),
@@ -523,7 +541,9 @@ def _bbox(value: Any) -> list[float] | None:
             value.get("b", value.get("y1", value.get("bottom"))),
         ]
     elif not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
-        return None
+        value = _object_bbox_values(value)
+        if value is None:
+            return None
     if len(value) != 4:
         return None
     try:
@@ -533,6 +553,16 @@ def _bbox(value: Any) -> list[float] | None:
     if bbox[0] > bbox[2] or bbox[1] > bbox[3]:
         return None
     return bbox
+
+
+def _object_bbox_values(value: Any) -> list[Any] | None:
+    bbox = [
+        _get_any(value, ("l", "x0", "left")),
+        _get_any(value, ("t", "y0", "top")),
+        _get_any(value, ("r", "x1", "right")),
+        _get_any(value, ("b", "y1", "bottom")),
+    ]
+    return None if any(coordinate is None for coordinate in bbox) else bbox
 
 
 def _asset_type(label: str) -> str:

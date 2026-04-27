@@ -307,6 +307,116 @@ def test_parse_resolves_caption_ref_lists_without_caption_text_method(
     assert "namespace(" not in document.elements[0].text
 
 
+def test_parse_maps_docling_page_margins_without_corrupting_heading_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pdf_backend_docling
+    from pdf_backend_docling import DoclingBackend
+
+    page_header = SimpleNamespace(
+        label="page_header",
+        text="Conference 2026",
+        page_no=1,
+    )
+    title = SimpleNamespace(label="title", text="Paper Title", page_no=1)
+    section = SimpleNamespace(
+        label="section_header",
+        text="Methods",
+        level=1,
+        page_no=1,
+    )
+    paragraph = SimpleNamespace(
+        label="text",
+        text="The method preserves reading order.",
+        page_no=1,
+    )
+    page_footer = SimpleNamespace(label="page_footer", text="1", page_no=1)
+
+    fake_document = SimpleNamespace(
+        metadata={},
+        items=[page_header, title, section, paragraph, page_footer],
+    )
+
+    class FakeResult:
+        document = fake_document
+
+    class FakeConverter:
+        def convert(self, file_path: str) -> FakeResult:
+            return FakeResult()
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(pdf_backend_docling, "_load_docling_converter", lambda: FakeConverter)
+
+    document = DoclingBackend().parse(
+        Path("page-margins.pdf"),
+        paper_id="paper-1",
+        space_id="space-1",
+        quality_report=PdfQualityReport(),
+    )
+
+    assert [element.element_type for element in document.elements] == [
+        "page_header",
+        "title",
+        "heading",
+        "paragraph",
+        "page_footer",
+    ]
+    assert document.elements[0].metadata["filtered"] is True
+    assert document.elements[4].metadata["filtered"] is True
+    assert document.elements[1].heading_path == []
+    assert document.elements[2].heading_path == []
+    assert document.elements[3].heading_path == ["Methods"]
+
+
+def test_parse_preserves_docling_provenance_bbox_objects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pdf_backend_docling
+    from pdf_backend_docling import DoclingBackend
+
+    class TupleBBox:
+        def as_tuple(self) -> tuple[float, float, float, float]:
+            return (1.0, 2.0, 30.0, 40.0)
+
+    class AttrBBox:
+        l = 5.0
+        t = 6.0
+        r = 70.0
+        b = 80.0
+
+    first = SimpleNamespace(
+        label="text",
+        text="Tuple bbox paragraph.",
+        prov=[SimpleNamespace(page_no=2, bbox=TupleBBox())],
+    )
+    second = SimpleNamespace(
+        label="text",
+        text="Attribute bbox paragraph.",
+        prov=[SimpleNamespace(page_no=3, bbox=AttrBBox())],
+    )
+    fake_document = SimpleNamespace(metadata={}, items=[first, second])
+
+    class FakeResult:
+        document = fake_document
+
+    class FakeConverter:
+        def convert(self, file_path: str) -> FakeResult:
+            return FakeResult()
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(pdf_backend_docling, "_load_docling_converter", lambda: FakeConverter)
+
+    document = DoclingBackend().parse(
+        Path("bbox.pdf"),
+        paper_id="paper-1",
+        space_id="space-1",
+        quality_report=PdfQualityReport(),
+    )
+
+    assert document.elements[0].bbox == [1.0, 2.0, 30.0, 40.0]
+    assert document.elements[1].bbox == [5.0, 6.0, 70.0, 80.0]
+
+
 @pytest.mark.skipif(
     importlib.util.find_spec("docling") is None,
     reason="docling is not installed",

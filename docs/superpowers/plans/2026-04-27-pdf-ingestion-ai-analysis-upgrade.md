@@ -551,12 +551,12 @@ git commit -m "feat: show PDF parse quality diagnostics"
 - Create: `analysis_models.py`
 - Test: `tests/test_analysis_models.py`
 
-- [ ] Define Pydantic models: `PaperMetadataExtraction`, `CardExtraction`, `CardExtractionBatch`, `MergedAnalysisResult`, `AnalysisQualityReport`.
-- [ ] Enforce card types using the DB card type vocabulary.
-- [ ] Require every AI card to include `source_passage_ids: list[str]`, `evidence_quote`, `confidence`, and `reasoning_summary`.
-- [ ] Run: `pytest tests/test_analysis_models.py -q && mypy analysis_models.py`
-- [ ] Expected: PASS.
-- [ ] Commit:
+- [x] Define Pydantic models: `PaperMetadataExtraction`, `CardExtraction`, `CardExtractionBatch`, `MergedAnalysisResult`, `AnalysisQualityReport`.
+- [x] Enforce card types using the DB card type vocabulary.
+- [x] Require every AI card to include `source_passage_ids: list[str]`, `evidence_quote`, `confidence`, and `reasoning_summary`.
+- [x] Run: `pytest tests/test_analysis_models.py -q && mypy analysis_models.py`
+- [x] Expected: PASS.
+- [x] Commit:
 
 ```bash
 git add analysis_models.py tests/test_analysis_models.py

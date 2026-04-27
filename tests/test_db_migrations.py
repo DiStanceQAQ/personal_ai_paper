@@ -12,7 +12,7 @@ from db_migrations import apply_migrations, get_schema_version, set_schema_versi
 
 
 SCHEMA_VERSION_KEY = "schema_version"
-EXPECTED_SCHEMA_VERSION = 2
+EXPECTED_SCHEMA_VERSION = 3
 
 
 def schema_version_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -54,6 +54,12 @@ def index_columns(conn: sqlite3.Connection, index_name: str) -> tuple[str, ...]:
     """Return indexed column names in index order."""
     rows = conn.execute(f"PRAGMA index_info({index_name})").fetchall()
     return tuple(row["name"] for row in rows)
+
+
+def foreign_key_targets(conn: sqlite3.Connection, table_name: str) -> set[tuple[str, str]]:
+    """Return child column to parent table mappings for foreign keys."""
+    rows = conn.execute(f"PRAGMA foreign_key_list({table_name})").fetchall()
+    return {(row["from"], row["table"]) for row in rows}
 
 
 def assert_index_columns(
@@ -659,5 +665,307 @@ def test_deleting_paper_cascades_parse_storage_rows() -> None:
         ):
             row_count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
             assert row_count[0] == 0
+
+        conn.close()
+
+
+def test_migration_three_creates_analysis_run_and_card_source_schema() -> None:
+    """Migration 3 creates analysis run tables and lookup indexes."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+
+        tables = set(get_table_names(conn))
+        assert {"analysis_runs", "knowledge_card_sources"}.issubset(tables)
+        assert get_schema_version(conn) == EXPECTED_SCHEMA_VERSION
+
+        analysis_columns = table_column_info(conn, "analysis_runs")
+        expected_analysis_columns = {
+            "id": ("TEXT", 0, None),
+            "paper_id": ("TEXT", 1, None),
+            "space_id": ("TEXT", 1, None),
+            "status": ("TEXT", 1, "'completed'"),
+            "model": ("TEXT", 1, "''"),
+            "provider": ("TEXT", 1, "''"),
+            "extractor_version": ("TEXT", 1, "''"),
+            "accepted_card_count": ("INTEGER", 1, "0"),
+            "rejected_card_count": ("INTEGER", 1, "0"),
+            "metadata_json": ("TEXT", 1, "'{}'"),
+            "warnings_json": ("TEXT", 1, "'[]'"),
+            "diagnostics_json": ("TEXT", 1, "'{}'"),
+            "started_at": ("TEXT", 1, "datetime('now')"),
+            "completed_at": ("TEXT", 0, None),
+        }
+        assert expected_analysis_columns.keys() <= analysis_columns.keys()
+        for column_name, (expected_type, expected_notnull, expected_default) in (
+            expected_analysis_columns.items()
+        ):
+            assert analysis_columns[column_name]["type"] == expected_type
+            assert analysis_columns[column_name]["notnull"] == expected_notnull
+            assert analysis_columns[column_name]["dflt_value"] == expected_default
+
+        source_columns = table_column_info(conn, "knowledge_card_sources")
+        expected_source_columns = {
+            "id": ("TEXT", 0, None),
+            "card_id": ("TEXT", 1, None),
+            "passage_id": ("TEXT", 1, None),
+            "paper_id": ("TEXT", 1, None),
+            "space_id": ("TEXT", 1, None),
+            "analysis_run_id": ("TEXT", 0, None),
+            "evidence_quote": ("TEXT", 1, "''"),
+            "confidence": ("REAL", 0, None),
+            "metadata_json": ("TEXT", 1, "'{}'"),
+            "created_at": ("TEXT", 1, "datetime('now')"),
+        }
+        assert expected_source_columns.keys() <= source_columns.keys()
+        for column_name, (expected_type, expected_notnull, expected_default) in (
+            expected_source_columns.items()
+        ):
+            assert source_columns[column_name]["type"] == expected_type
+            assert source_columns[column_name]["notnull"] == expected_notnull
+            assert source_columns[column_name]["dflt_value"] == expected_default
+
+        assert {
+            "idx_analysis_runs_paper_id",
+            "idx_analysis_runs_space_id",
+            "idx_analysis_runs_paper_started_at",
+        }.issubset(index_names(conn, "analysis_runs"))
+        assert {
+            "idx_knowledge_card_sources_card_passage_unique",
+            "idx_knowledge_card_sources_card_id",
+            "idx_knowledge_card_sources_passage_id",
+            "idx_knowledge_card_sources_paper_id",
+            "idx_knowledge_card_sources_space_id",
+            "idx_knowledge_card_sources_analysis_run_id",
+        }.issubset(index_names(conn, "knowledge_card_sources"))
+
+        assert_index_columns(
+            conn,
+            {
+                "idx_analysis_runs_paper_id": ("paper_id",),
+                "idx_analysis_runs_space_id": ("space_id",),
+                "idx_analysis_runs_paper_started_at": ("paper_id", "started_at"),
+                "idx_knowledge_card_sources_card_passage_unique": (
+                    "card_id",
+                    "passage_id",
+                ),
+                "idx_knowledge_card_sources_card_id": ("card_id",),
+                "idx_knowledge_card_sources_passage_id": ("passage_id",),
+                "idx_knowledge_card_sources_paper_id": ("paper_id",),
+                "idx_knowledge_card_sources_space_id": ("space_id",),
+                "idx_knowledge_card_sources_analysis_run_id": ("analysis_run_id",),
+            },
+        )
+
+        assert {
+            ("paper_id", "papers"),
+            ("space_id", "papers"),
+        }.issubset(foreign_key_targets(conn, "analysis_runs"))
+        assert {
+            ("card_id", "knowledge_cards"),
+            ("passage_id", "passages"),
+            ("paper_id", "papers"),
+            ("space_id", "papers"),
+            ("analysis_run_id", "analysis_runs"),
+        }.issubset(foreign_key_targets(conn, "knowledge_card_sources"))
+
+        conn.close()
+
+
+def test_migration_three_extends_existing_cards_with_provenance_defaults() -> None:
+    """Existing cards receive provenance defaults based on user edits."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = create_schema_connection(db_path)
+        insert_space(conn, "space-1")
+        insert_paper(conn, "paper-1", "space-1")
+        conn.execute(
+            """
+            INSERT INTO passages (id, paper_id, space_id, original_text)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("passage-1", "paper-1", "space-1", "source text"),
+        )
+        conn.execute(
+            """
+            INSERT INTO knowledge_cards (
+                id, space_id, paper_id, source_passage_id, card_type, summary,
+                confidence, user_edited
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "card-user",
+                "space-1",
+                "paper-1",
+                "passage-1",
+                "Method",
+                "user card",
+                0.9,
+                1,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO knowledge_cards (
+                id, space_id, paper_id, card_type, summary, confidence, user_edited
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("card-heuristic", "space-1", "paper-1", "Result", "auto card", 0.5, 0),
+        )
+        conn.commit()
+
+        apply_migrations(conn)
+
+        column_info = table_column_info(conn, "knowledge_cards")
+        expected_columns = {
+            "created_by": ("TEXT", 1, "'heuristic'"),
+            "extractor_version": ("TEXT", 1, "''"),
+            "analysis_run_id": ("TEXT", 0, None),
+            "evidence_json": ("TEXT", 1, "'{}'"),
+            "quality_flags_json": ("TEXT", 1, "'[]'"),
+        }
+        assert expected_columns.keys() <= column_info.keys()
+        for column_name, (expected_type, expected_notnull, expected_default) in (
+            expected_columns.items()
+        ):
+            assert column_info[column_name]["type"] == expected_type
+            assert column_info[column_name]["notnull"] == expected_notnull
+            assert column_info[column_name]["dflt_value"] == expected_default
+
+        migrated_rows = conn.execute(
+            """
+            SELECT id, created_by, extractor_version, analysis_run_id,
+                   evidence_json, quality_flags_json
+            FROM knowledge_cards
+            ORDER BY id
+            """
+        ).fetchall()
+        assert [dict(row) for row in migrated_rows] == [
+            {
+                "id": "card-heuristic",
+                "created_by": "heuristic",
+                "extractor_version": "",
+                "analysis_run_id": None,
+                "evidence_json": "{}",
+                "quality_flags_json": "[]",
+            },
+            {
+                "id": "card-user",
+                "created_by": "user",
+                "extractor_version": "",
+                "analysis_run_id": None,
+                "evidence_json": "{}",
+                "quality_flags_json": "[]",
+            },
+        ]
+
+        conn.execute(
+            """
+            INSERT INTO knowledge_cards (id, space_id, paper_id, card_type, summary)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("card-new", "space-1", "paper-1", "Claim", "new card"),
+        )
+        inserted_row = conn.execute(
+            """
+            SELECT created_by, extractor_version, analysis_run_id,
+                   evidence_json, quality_flags_json
+            FROM knowledge_cards
+            WHERE id = ?
+            """,
+            ("card-new",),
+        ).fetchone()
+        assert dict(inserted_row) == {
+            "created_by": "heuristic",
+            "extractor_version": "",
+            "analysis_run_id": None,
+            "evidence_json": "{}",
+            "quality_flags_json": "[]",
+        }
+
+        conn.close()
+
+
+def test_analysis_run_and_card_sources_enforce_scope_and_uniqueness() -> None:
+    """Analysis provenance rows keep paper/card/source relationships consistent."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+        insert_space(conn, "space-1")
+        insert_space(conn, "space-2")
+        insert_paper(conn, "paper-1", "space-1")
+        insert_paper(conn, "paper-2", "space-2")
+        conn.execute(
+            """
+            INSERT INTO passages (id, paper_id, space_id, original_text)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("passage-1", "paper-1", "space-1", "source text"),
+        )
+        conn.execute(
+            """
+            INSERT INTO knowledge_cards (id, space_id, paper_id, card_type, summary)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("card-1", "space-1", "paper-1", "Evidence", "evidence card"),
+        )
+        conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO analysis_runs (id, paper_id, space_id)
+                VALUES (?, ?, ?)
+                """,
+                ("analysis-run-bad", "paper-1", "space-2"),
+            )
+
+        conn.execute(
+            """
+            INSERT INTO analysis_runs (id, paper_id, space_id)
+            VALUES (?, ?, ?)
+            """,
+            ("analysis-run-1", "paper-1", "space-1"),
+        )
+        conn.execute(
+            """
+            INSERT INTO knowledge_card_sources (
+                id, card_id, passage_id, paper_id, space_id, analysis_run_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "source-1",
+                "card-1",
+                "passage-1",
+                "paper-1",
+                "space-1",
+                "analysis-run-1",
+            ),
+        )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO knowledge_card_sources (
+                    id, card_id, passage_id, paper_id, space_id
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("source-duplicate", "card-1", "passage-1", "paper-1", "space-1"),
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO knowledge_card_sources (
+                    id, card_id, passage_id, paper_id, space_id
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("source-bad-space", "card-1", "passage-1", "paper-1", "space-2"),
+            )
 
         conn.close()

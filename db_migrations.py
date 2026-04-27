@@ -12,7 +12,7 @@ __all__ = [
 ]
 
 SCHEMA_VERSION_KEY = "schema_version"
-LATEST_SCHEMA_VERSION = 2
+LATEST_SCHEMA_VERSION = 3
 
 Migration = Callable[[sqlite3.Connection], None]
 
@@ -225,9 +225,138 @@ def _extend_passages_with_provenance_columns(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _create_analysis_run_and_card_provenance_schema(conn: sqlite3.Connection) -> None:
+    """Create analysis run tracking and card provenance storage."""
+    statements = (
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_id_space_id_unique
+            ON papers(id, space_id)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS analysis_runs (
+            id TEXT PRIMARY KEY,
+            paper_id TEXT NOT NULL,
+            space_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'completed',
+            model TEXT NOT NULL DEFAULT '',
+            provider TEXT NOT NULL DEFAULT '',
+            extractor_version TEXT NOT NULL DEFAULT '',
+            accepted_card_count INTEGER NOT NULL DEFAULT 0,
+            rejected_card_count INTEGER NOT NULL DEFAULT 0,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            warnings_json TEXT NOT NULL DEFAULT '[]',
+            diagnostics_json TEXT NOT NULL DEFAULT '{}',
+            started_at TEXT NOT NULL DEFAULT (datetime('now')),
+            completed_at TEXT,
+            FOREIGN KEY (paper_id, space_id)
+                REFERENCES papers(id, space_id)
+                ON DELETE CASCADE
+        )
+        """,
+        """
+        ALTER TABLE knowledge_cards
+        ADD COLUMN created_by TEXT NOT NULL DEFAULT 'heuristic'
+            CHECK(created_by IN ('user', 'heuristic', 'ai'))
+        """,
+        """
+        ALTER TABLE knowledge_cards
+        ADD COLUMN extractor_version TEXT NOT NULL DEFAULT ''
+        """,
+        """
+        ALTER TABLE knowledge_cards
+        ADD COLUMN analysis_run_id TEXT
+            REFERENCES analysis_runs(id)
+            ON DELETE SET NULL
+        """,
+        """
+        ALTER TABLE knowledge_cards
+        ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '{}'
+        """,
+        """
+        ALTER TABLE knowledge_cards
+        ADD COLUMN quality_flags_json TEXT NOT NULL DEFAULT '[]'
+        """,
+        """
+        UPDATE knowledge_cards
+        SET created_by = 'user'
+        WHERE user_edited = 1
+        """,
+        """
+        UPDATE knowledge_cards
+        SET created_by = 'heuristic'
+        WHERE user_edited != 1 OR user_edited IS NULL
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS knowledge_card_sources (
+            id TEXT PRIMARY KEY,
+            card_id TEXT NOT NULL,
+            passage_id TEXT NOT NULL,
+            paper_id TEXT NOT NULL,
+            space_id TEXT NOT NULL,
+            analysis_run_id TEXT,
+            evidence_quote TEXT NOT NULL DEFAULT '',
+            confidence REAL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (card_id)
+                REFERENCES knowledge_cards(id)
+                ON DELETE CASCADE,
+            FOREIGN KEY (passage_id)
+                REFERENCES passages(id)
+                ON DELETE CASCADE,
+            FOREIGN KEY (paper_id, space_id)
+                REFERENCES papers(id, space_id)
+                ON DELETE CASCADE,
+            FOREIGN KEY (analysis_run_id)
+                REFERENCES analysis_runs(id)
+                ON DELETE SET NULL
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_analysis_runs_paper_id
+            ON analysis_runs(paper_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_analysis_runs_space_id
+            ON analysis_runs(space_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_analysis_runs_paper_started_at
+            ON analysis_runs(paper_id, started_at)
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_card_sources_card_passage_unique
+            ON knowledge_card_sources(card_id, passage_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_knowledge_card_sources_card_id
+            ON knowledge_card_sources(card_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_knowledge_card_sources_passage_id
+            ON knowledge_card_sources(passage_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_knowledge_card_sources_paper_id
+            ON knowledge_card_sources(paper_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_knowledge_card_sources_space_id
+            ON knowledge_card_sources(space_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_knowledge_card_sources_analysis_run_id
+            ON knowledge_card_sources(analysis_run_id)
+        """,
+    )
+    for statement in statements:
+        conn.execute(statement)
+
+
 MIGRATIONS: dict[int, Migration] = {
     1: _create_parse_run_document_tables,
     2: _extend_passages_with_provenance_columns,
+    3: _create_analysis_run_and_card_provenance_schema,
 }
 
 

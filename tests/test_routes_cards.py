@@ -11,6 +11,39 @@ from db import DATABASE_PATH, get_connection, init_db
 from main import app
 
 
+PRIOR_CARD_FIELDS = {
+    "id",
+    "space_id",
+    "paper_id",
+    "source_passage_id",
+    "card_type",
+    "summary",
+    "confidence",
+    "user_edited",
+    "created_at",
+    "updated_at",
+}
+
+PROVENANCE_DEFAULTS = {
+    "created_by": "heuristic",
+    "extractor_version": "",
+    "analysis_run_id": None,
+    "evidence_json": "{}",
+    "quality_flags_json": "[]",
+}
+
+
+def assert_prior_card_fields(card: dict[str, object]) -> None:
+    """Card API responses keep the original public fields."""
+    assert PRIOR_CARD_FIELDS <= card.keys()
+
+
+def assert_provenance_defaults(card: dict[str, object]) -> None:
+    """Legacy card inserts use migration-owned provenance defaults."""
+    for key, expected_value in PROVENANCE_DEFAULTS.items():
+        assert card[key] == expected_value
+
+
 @pytest.fixture
 def db_path() -> Generator[str, None, None]:
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -58,11 +91,16 @@ async def test_create_and_get_card(client: AsyncClient, setup_space_and_paper: t
     })
     assert resp.status_code == 200
     card = resp.json()
+    assert_prior_card_fields(card)
+    assert_provenance_defaults(card)
     assert card["card_type"] == "Method"
     assert card["paper_id"] == paper_id
 
     resp = await client.get(f"/api/cards/{card['id']}")
     assert resp.status_code == 200
+    fetched_card = resp.json()
+    assert_prior_card_fields(fetched_card)
+    assert_provenance_defaults(fetched_card)
 
 
 @pytest.mark.asyncio
@@ -73,7 +111,11 @@ async def test_list_cards(client: AsyncClient, setup_space_and_paper: tuple[str,
 
     resp = await client.get("/api/cards")
     assert resp.status_code == 200
-    assert len(resp.json()) == 2
+    cards = resp.json()
+    assert len(cards) == 2
+    for card in cards:
+        assert_prior_card_fields(card)
+        assert_provenance_defaults(card)
 
 
 @pytest.mark.asyncio
@@ -84,8 +126,11 @@ async def test_update_card(client: AsyncClient, setup_space_and_paper: tuple[str
 
     resp = await client.patch(f"/api/cards/{card_id}", json={"summary": "New"})
     assert resp.status_code == 200
-    assert resp.json()["summary"] == "New"
-    assert resp.json()["user_edited"] == 1
+    card = resp.json()
+    assert_prior_card_fields(card)
+    assert_provenance_defaults(card)
+    assert card["summary"] == "New"
+    assert card["user_edited"] == 1
 
 
 @pytest.mark.asyncio
@@ -192,3 +237,12 @@ async def test_extract_cards_returns_heuristic_metadata(
     assert body["status"] == "extracted"
     assert body["mode"] == "heuristic"
     assert body["message"] == "启发式抽取结果需要人工检查和修正。"
+
+    resp = await client.get(f"/api/cards?paper_id={paper_id}")
+    assert resp.status_code == 200
+    cards = resp.json()
+    assert len(cards) == body["card_count"]
+    assert cards
+    for card in cards:
+        assert_prior_card_fields(card)
+        assert_provenance_defaults(card)

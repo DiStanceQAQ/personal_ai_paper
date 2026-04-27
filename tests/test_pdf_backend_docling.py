@@ -193,6 +193,120 @@ def test_parse_normalizes_mixed_docling_items_in_reading_order(
     assert document.metadata["item_count"] == 6
 
 
+def test_parse_prefers_docling_iterated_reading_order_over_top_level_texts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pdf_backend_docling
+    from pdf_backend_docling import DoclingBackend
+
+    heading = SimpleNamespace(label="section_header", text="Methods", level=1, page_no=1)
+    paragraph = SimpleNamespace(label="text", text="We evaluate the parser.", page_no=1)
+    table_caption = SimpleNamespace(label="caption", text="Table 1: Scores", page_no=1)
+    figure_caption = SimpleNamespace(label="caption", text="Figure 1: Flow", page_no=2)
+    formula = SimpleNamespace(label="formula", latex="x^2 + y^2", page_no=2)
+    table = SimpleNamespace(
+        label="table",
+        captions=[{"ref": "#/texts/2"}],
+        page_no=1,
+        data=SimpleNamespace(table_cells=[["Name", "Score"], ["A", "1"]]),
+    )
+    picture = {
+        "type": "picture",
+        "captions": [SimpleNamespace(cref="#/texts/3")],
+        "page_number": 2,
+        "image": {"uri": "figures/flow.png"},
+    }
+
+    class DoclingLikeDocument:
+        metadata = {"shape": "docling-v2-like"}
+        texts = [heading, paragraph, table_caption, figure_caption, formula]
+        tables = [table]
+        pictures = [picture]
+
+        def iterate_items(self) -> list[tuple[object, int]]:
+            return [
+                (heading, 1),
+                (paragraph, 1),
+                (table, 1),
+                (picture, 1),
+                (table_caption, 1),
+                (formula, 1),
+            ]
+
+    class FakeResult:
+        document = DoclingLikeDocument()
+
+    class FakeConverter:
+        def convert(self, file_path: str) -> FakeResult:
+            return FakeResult()
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(pdf_backend_docling, "_load_docling_converter", lambda: FakeConverter)
+
+    document = DoclingBackend().parse(
+        Path("docling-v2.pdf"),
+        paper_id="paper-1",
+        space_id="space-1",
+        quality_report=PdfQualityReport(),
+    )
+
+    assert [element.element_type for element in document.elements] == [
+        "heading",
+        "paragraph",
+        "table",
+        "figure",
+        "caption",
+        "equation",
+    ]
+    assert document.elements[2].text == "Table 1: Scores"
+    assert document.tables[0].caption == "Table 1: Scores"
+    assert document.elements[3].text == "Figure 1: Flow"
+    assert document.assets[0].uri == "figures/flow.png"
+
+
+def test_parse_resolves_caption_ref_lists_without_caption_text_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pdf_backend_docling
+    from pdf_backend_docling import DoclingBackend
+
+    caption = SimpleNamespace(label="caption", text="Table 2: Ablation", page_no=3)
+    table = SimpleNamespace(
+        label="table",
+        captions=[SimpleNamespace(cref="#/texts/0")],
+        page_no=3,
+        data=SimpleNamespace(table_cells=[["Variant", "Delta"], ["base", "0"]]),
+    )
+    fake_document = SimpleNamespace(
+        metadata={},
+        texts=[caption],
+        tables=[table],
+        pictures=[],
+        items=[table],
+    )
+
+    class FakeResult:
+        document = fake_document
+
+    class FakeConverter:
+        def convert(self, file_path: str) -> FakeResult:
+            return FakeResult()
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(pdf_backend_docling, "_load_docling_converter", lambda: FakeConverter)
+
+    document = DoclingBackend().parse(
+        Path("caption-ref.pdf"),
+        paper_id="paper-1",
+        space_id="space-1",
+        quality_report=PdfQualityReport(),
+    )
+
+    assert document.elements[0].text == "Table 2: Ablation"
+    assert document.tables[0].caption == "Table 2: Ablation"
+    assert "namespace(" not in document.elements[0].text
+
+
 @pytest.mark.skipif(
     importlib.util.find_spec("docling") is None,
     reason="docling is not installed",

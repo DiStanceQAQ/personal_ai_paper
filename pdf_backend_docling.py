@@ -294,15 +294,15 @@ def _docling_result_to_document(
 
 
 def _reading_order_items(document: Any) -> list[Any]:
-    for name in ("items", "texts", "body", "children"):
-        value = _get(document, name)
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-            return list(value)
-
     for method_name in ("iterate_items", "iter_items", "iterate_elements", "iter_elements"):
         method = _get(document, method_name)
         if callable(method):
             return list(method())
+
+    for name in ("items", "body", "children"):
+        value = _get(document, name)
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return list(value)
 
     ordered: list[Any] = []
     for name in ("texts", "tables", "pictures"):
@@ -327,7 +327,7 @@ def _item_level(item: Any) -> int | None:
 def _label(item: Any) -> str:
     raw = _get_any(item, ("label", "type", "element_type", "kind", "name", "class"))
     if raw is None:
-        return item.__class__.__name__.lower()
+        return str(item.__class__.__name__).lower()
     label = _get(raw, "value") or _get(raw, "name") or raw
     return str(label).strip().lower()
 
@@ -370,7 +370,67 @@ def _caption_text(item: Any, document: Any | None = None) -> str:
             return _normalize_text(caption_method(document))
         except TypeError:
             return _normalize_text(caption_method())
-    return _normalize_text(_get_any(item, ("caption", "captions", "description")))
+    return _caption_value_text(
+        _get_any(item, ("caption", "captions", "description")),
+        document,
+    )
+
+
+def _caption_value_text(value: Any, document: Any | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return _normalize_text(value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        parts = [
+            _caption_value_text(part, document)
+            for part in value
+        ]
+        return " ".join(part for part in parts if part).strip()
+
+    resolved = _resolve_ref(value, document)
+    if resolved is not None and resolved is not value:
+        return _caption_value_text(resolved, document)
+
+    direct = _get_any(value, ("text", "content", "title", "name"))
+    if direct is not None:
+        return _normalize_text(direct)
+
+    if isinstance(value, (int, float, bool)):
+        return _normalize_text(value)
+    return ""
+
+
+def _resolve_ref(value: Any, document: Any | None) -> Any:
+    if document is None:
+        return None
+    ref = _get_any(value, ("cref", "ref", "reference", "item_ref", "$ref"))
+    if ref is None and isinstance(value, str):
+        ref = value
+    if ref is None:
+        return None
+
+    ref_text = str(ref)
+    if not ref_text.startswith("#/"):
+        return None
+    parts = [part for part in ref_text[2:].split("/") if part]
+    if len(parts) < 2:
+        return None
+
+    collection_name = parts[0]
+    index = _int_or_none(parts[1])
+    if index is None:
+        return None
+
+    collection = _get(document, collection_name)
+    if not isinstance(collection, Sequence) or isinstance(
+        collection,
+        (str, bytes, bytearray),
+    ):
+        return None
+    if index < 0 or index >= len(collection):
+        return None
+    return collection[index]
 
 
 def _table_cells(item: Any) -> list[list[str]]:

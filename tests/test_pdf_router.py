@@ -271,10 +271,11 @@ def test_lazy_llamaparse_provider_backend_is_closed_after_failure(
         action="error",
         extraction_method="llm_parser",
     )
+    pymupdf = FakeBackend("pymupdf4llm")
     legacy = FakeBackend("legacy-pymupdf", extraction_method="legacy")
 
     router = router_module.PdfBackendRouter(
-        pymupdf4llm=FakeBackend("pymupdf4llm"),
+        pymupdf4llm=pymupdf,
         docling=FakeBackend("docling", available=False, extraction_method="layout_model"),
         llamaparse=lambda: llamaparse,
         legacy=legacy,
@@ -287,8 +288,9 @@ def test_lazy_llamaparse_provider_backend_is_closed_after_failure(
         _quality(needs_layout_model=True),
     )
 
-    assert document.backend == "legacy-pymupdf"
-    assert len(legacy.calls) == 1
+    assert document.backend == "pymupdf4llm"
+    assert len(pymupdf.calls) == 1
+    assert legacy.calls == []
     assert llamaparse.closed is True
 
 
@@ -343,7 +345,12 @@ def test_docling_unavailable_on_scanned_pdf_uses_llamaparse_then_legacy(
     docling = FakeBackend("docling", available=False, extraction_method="layout_model")
     llamaparse = FakeBackend("llamaparse", extraction_method="llm_parser")
     legacy = FakeBackend("legacy-pymupdf", extraction_method="legacy")
-    quality = _quality(needs_layout_model=True)
+    quality = _quality(
+        needs_ocr=True,
+        needs_layout_model=True,
+        native_text_pages=0,
+        image_only_pages=2,
+    )
 
     router = router_module.PdfBackendRouter(
         **_backends(docling=docling, llamaparse=llamaparse, legacy=legacy)
@@ -378,6 +385,40 @@ def test_docling_unavailable_on_scanned_pdf_uses_llamaparse_then_legacy(
         "router_unavailable:docling:is_available returned false",
         "router_attempt:legacy-pymupdf",
         "router_selected:legacy-pymupdf",
+    ]
+
+
+def test_table_heavy_digital_pdf_falls_back_to_pymupdf4llm_before_legacy(
+    tmp_path: Path,
+) -> None:
+    router_module = _router_module()
+    docling = FakeBackend("docling", available=False, extraction_method="layout_model")
+    pymupdf = FakeBackend("pymupdf4llm", extraction_method="layout_model")
+    legacy = FakeBackend("legacy-pymupdf", extraction_method="legacy")
+    quality = _quality(needs_ocr=False, needs_layout_model=True)
+
+    router = router_module.PdfBackendRouter(
+        **_backends(
+            pymupdf=pymupdf,
+            docling=docling,
+            llamaparse=None,
+            legacy=legacy,
+        )
+    )
+    document = router.parse_pdf(
+        tmp_path / "table-heavy.pdf",
+        "paper-1",
+        "space-1",
+        quality,
+    )
+
+    assert document.backend == "pymupdf4llm"
+    assert legacy.calls == []
+    assert document.quality.warnings == [
+        "router_attempt:docling",
+        "router_unavailable:docling:is_available returned false",
+        "router_attempt:pymupdf4llm",
+        "router_selected:pymupdf4llm",
     ]
 
 
@@ -518,11 +559,13 @@ def test_llamaparse_provider_error_does_not_break_local_fallback(tmp_path: Path)
     def broken_llamaparse_provider() -> None:
         raise RuntimeError("sqlite unavailable")
 
+    pymupdf = FakeBackend("pymupdf4llm")
+    legacy = FakeBackend("legacy-pymupdf", extraction_method="legacy")
     router = router_module.PdfBackendRouter(
-        pymupdf4llm=FakeBackend("pymupdf4llm"),
+        pymupdf4llm=pymupdf,
         docling=FakeBackend("docling", available=False, extraction_method="layout_model"),
         llamaparse=broken_llamaparse_provider,
-        legacy=FakeBackend("legacy-pymupdf", extraction_method="legacy"),
+        legacy=legacy,
         grobid_client=None,
     )
     document = router.parse_pdf(
@@ -532,7 +575,9 @@ def test_llamaparse_provider_error_does_not_break_local_fallback(tmp_path: Path)
         _quality(needs_layout_model=True),
     )
 
-    assert document.backend == "legacy-pymupdf"
+    assert document.backend == "pymupdf4llm"
+    assert len(pymupdf.calls) == 1
+    assert legacy.calls == []
     assert "router_llamaparse_config_failed:sqlite unavailable" in document.quality.warnings
 
 

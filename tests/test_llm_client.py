@@ -134,6 +134,28 @@ async def test_call_llm_schema_uses_json_mode_when_provider_lacks_schema_support
 
 
 @pytest.mark.asyncio
+async def test_call_llm_schema_omits_authorization_header_without_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = install_fake_llm(
+        monkeypatch,
+        [make_chat_response('{"answer": "local"}')],
+        base_url="http://127.0.0.1:8766/v1",
+        api_key="",
+    )
+
+    result = await llm_client.call_llm_schema(
+        "system",
+        "user",
+        "answer_schema",
+        SIMPLE_SCHEMA,
+    )
+
+    assert result == {"answer": "local"}
+    assert "Authorization" not in calls[0]["headers"]
+
+
+@pytest.mark.asyncio
 async def test_call_llm_schema_falls_back_to_json_mode_when_local_schema_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

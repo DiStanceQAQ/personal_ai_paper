@@ -958,9 +958,9 @@ git commit -m "test: satisfy backend regression gate"
 **Files:**
 - Modify only files needed to fix failures found by the gate.
 
-- [ ] Run: `npm run frontend:typecheck`
-- [ ] Run: `npm run frontend:build`
-- [ ] Expected: both PASS.
+- [x] Run: `npm run frontend:typecheck`
+- [x] Run: `npm run frontend:build`
+- [x] Expected: both PASS.
 - [ ] Commit only if fixes are required:
 
 ```bash
@@ -973,15 +973,15 @@ git commit -m "test: satisfy frontend regression gate"
 **Files:**
 - Modify only files needed to fix failures found by the smoke test.
 
-- [ ] Start the API and frontend using the project’s normal dev commands.
-- [ ] Create a space.
-- [ ] Upload a generated or real academic PDF.
-- [ ] Run parse.
-- [ ] Confirm parse diagnostics show backend, warnings, elements, tables, and passage count.
-- [ ] Run AI analysis with a mocked or real configured LLM.
-- [ ] Confirm metadata, cards, source evidence, and existing manual cards are correct.
-- [ ] Search for a method/result phrase and confirm source page/passage opens in the UI.
-- [ ] Run final gate:
+- [x] Start the API and frontend using the project’s normal dev commands.
+- [x] Create a space.
+- [x] Upload a generated or real academic PDF.
+- [x] Run parse.
+- [x] Confirm parse diagnostics show backend, warnings, elements, tables, and passage count.
+- [x] Run AI analysis with a mocked or real configured LLM.
+- [x] Confirm metadata, cards, source evidence, and existing manual cards are correct.
+- [x] Search for a method/result phrase and confirm source page/passage opens in the UI.
+- [x] Run final gate:
 
 ```bash
 pytest -q
@@ -990,7 +990,7 @@ npm run frontend:typecheck
 npm run frontend:build
 ```
 
-- [ ] Expected: all automated gates PASS and manual smoke behavior matches the checklist.
+- [x] Expected: all automated gates PASS and manual smoke behavior matches the checklist.
 - [ ] Commit only if smoke fixes are required:
 
 ```bash

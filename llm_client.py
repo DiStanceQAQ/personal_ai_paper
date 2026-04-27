@@ -145,9 +145,11 @@ async def _post_chat_completion(
     config: Mapping[str, str], payload: dict[str, Any]
 ) -> dict[str, Any]:
     headers = {
-        "Authorization": f"Bearer {config['api_key']}",
         "Content-Type": "application/json",
     }
+    api_key = config["api_key"].strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(

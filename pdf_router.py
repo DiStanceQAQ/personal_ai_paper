@@ -123,9 +123,20 @@ class PdfBackendRouter:
             seen.add(forced_backend.name)
             yield forced_backend, forced_owned
 
-        if quality.needs_ocr or quality.needs_layout_model:
+        if quality.needs_ocr:
             yield from self._unique_backends(
                 (self._docling, self._resolve_llamaparse_backend, self._legacy),
+                quality,
+                seen,
+            )
+        elif quality.needs_layout_model:
+            yield from self._unique_backends(
+                (
+                    self._docling,
+                    self._resolve_llamaparse_backend,
+                    self._pymupdf4llm,
+                    self._legacy,
+                ),
                 quality,
                 seen,
             )

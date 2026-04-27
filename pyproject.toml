@@ -32,6 +32,7 @@ pdf-advanced = ["docling>=2.0.0"]
 py-modules = [
     "agent_executor",
     "analysis_models",
+    "analysis_prompts",
     "api_sidecar",
     "card_extractor",
     "config",

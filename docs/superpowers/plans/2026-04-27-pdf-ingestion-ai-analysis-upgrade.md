@@ -587,12 +587,12 @@ git commit -m "feat: support strict LLM structured outputs"
 - Create: `analysis_prompts.py`
 - Test: `tests/test_analysis_prompts.py`
 
-- [ ] Implement prompt builders for metadata extraction, section summary extraction, card batch extraction, and merge/dedup.
-- [ ] Include source passage IDs and page numbers in every prompt input.
-- [ ] Explicitly instruct the model to return only facts supported by source passage IDs.
-- [ ] Run: `pytest tests/test_analysis_prompts.py -q`
-- [ ] Expected: PASS; prompts contain source IDs and do not contain raw database internals.
-- [ ] Commit:
+- [x] Implement prompt builders for metadata extraction, section summary extraction, card batch extraction, and merge/dedup.
+- [x] Include source passage IDs and page numbers in every prompt input.
+- [x] Explicitly instruct the model to return only facts supported by source passage IDs.
+- [x] Run: `pytest tests/test_analysis_prompts.py -q`
+- [x] Expected: PASS; prompts contain source IDs and do not contain raw database internals.
+- [x] Commit:
 
 ```bash
 git add analysis_prompts.py tests/test_analysis_prompts.py

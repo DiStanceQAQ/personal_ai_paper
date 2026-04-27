@@ -183,6 +183,57 @@ def test_process_header_posts_pdf_and_extracts_metadata(tmp_path: Path) -> None:
     assert metadata.abstract == "We parse TEI metadata from a mocked GROBID response."
 
 
+def test_process_header_falls_back_to_analytic_authors(tmp_path: Path) -> None:
+    from pdf_backend_grobid import GrobidClient
+
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\n")
+    tei = """<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc>
+      <titleStmt>
+        <title level="a" type="main">Analytic Author Metadata</title>
+      </titleStmt>
+      <sourceDesc>
+        <biblStruct>
+          <analytic>
+            <title level="a">Analytic Author Metadata</title>
+            <author>
+              <persName><forename>Katherine</forename><surname>Johnson</surname></persName>
+            </author>
+            <author>
+              <persName><forename>Dorothy</forename><surname>Vaughan</surname></persName>
+            </author>
+            <idno type="DOI">10.5555/analytic</idno>
+          </analytic>
+          <monogr>
+            <title level="j">TEI Journal</title>
+            <imprint><date when="2023"/></imprint>
+          </monogr>
+        </biblStruct>
+      </sourceDesc>
+    </fileDesc>
+  </teiHeader>
+</TEI>
+"""
+
+    client = GrobidClient(
+        "http://grobid.test",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, text=tei))
+        ),
+    )
+
+    metadata = client.process_header(pdf_path)
+
+    assert metadata.title == "Analytic Author Metadata"
+    assert metadata.authors == ["Katherine Johnson", "Dorothy Vaughan"]
+    assert metadata.year == 2023
+    assert metadata.venue == "TEI Journal"
+    assert metadata.doi == "10.5555/analytic"
+
+
 def test_process_fulltext_extracts_sections_references_and_raw_tei(tmp_path: Path) -> None:
     from pdf_backend_grobid import GrobidClient
 

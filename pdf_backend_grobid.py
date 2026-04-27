@@ -158,10 +158,12 @@ def _extract_metadata(root: ET.Element) -> GrobidMetadata:
     source_desc = _first_descendant(scope, "sourceDesc")
     publication_stmt = _first_descendant(scope, "publicationStmt")
     profile_desc = _first_descendant(scope, "profileDesc")
+    bibl = _first_descendant(source_desc, "biblStruct")
+    analytic = _first_child(bibl, "analytic")
 
     return GrobidMetadata(
         title=_metadata_title(title_stmt, source_desc),
-        authors=_authors_from_parent(title_stmt),
+        authors=_metadata_authors(title_stmt, analytic),
         year=_first_year(scope),
         venue=_metadata_venue(source_desc, publication_stmt),
         doi=_first_doi(scope),
@@ -191,6 +193,16 @@ def _metadata_venue(
     if venue:
         return venue
     return _text_content(_first_descendant(publication_stmt, "publisher"))
+
+
+def _metadata_authors(
+    title_stmt: ET.Element | None,
+    analytic: ET.Element | None,
+) -> list[str]:
+    authors = _authors_from_parent(title_stmt)
+    if authors:
+        return authors
+    return _authors_from_parent(analytic)
 
 
 def _extract_sections(root: ET.Element) -> list[GrobidSection]:

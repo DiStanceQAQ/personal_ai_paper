@@ -3,6 +3,7 @@
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -193,6 +194,69 @@ async def test_search_api_returns_results(client: AsyncClient) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) >= 1
+
+
+@pytest.mark.asyncio
+async def test_search_api_passes_mode_to_search(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Search API forwards the optional FTS/hybrid mode parameter."""
+    space_resp = await client.post("/api/spaces", json={"name": "Mode Test"})
+    space_id = space_resp.json()["id"]
+    await client.put(f"/api/spaces/active/{space_id}")
+
+    captured: dict[str, Any] = {}
+
+    def fake_search_passages(
+        query: str,
+        space_id: str,
+        limit: int = 50,
+        database_path: Path | None = None,
+        mode: str | None = None,
+    ) -> list[dict[str, Any]]:
+        captured.update(
+            {
+                "query": query,
+                "space_id": space_id,
+                "limit": limit,
+                "database_path": database_path,
+                "mode": mode,
+            }
+        )
+        return [{"passage_id": "passage-1"}]
+
+    monkeypatch.setattr("routes_search.search_passages", fake_search_passages)
+
+    resp = await client.get(
+        "/api/search",
+        params={"q": "transformer", "mode": "fts", "limit": 7},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == [{"passage_id": "passage-1"}]
+    assert captured == {
+        "query": "transformer",
+        "space_id": space_id,
+        "limit": 7,
+        "database_path": None,
+        "mode": "fts",
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_api_rejects_invalid_mode(client: AsyncClient) -> None:
+    """Search API accepts only the supported FTS and hybrid modes."""
+    space_resp = await client.post("/api/spaces", json={"name": "Mode Test"})
+    space_id = space_resp.json()["id"]
+    await client.put(f"/api/spaces/active/{space_id}")
+
+    resp = await client.get(
+        "/api/search",
+        params={"q": "transformer", "mode": "semantic"},
+    )
+
+    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio

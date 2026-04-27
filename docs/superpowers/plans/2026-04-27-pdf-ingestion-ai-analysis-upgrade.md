@@ -721,7 +721,7 @@ git commit -m "feat: preserve user cards during AI analysis"
 - [x] Keep `/api/agent/analyze/{paper_id}` response compatible and add `analysis_run_id`, `accepted_card_count`, `rejected_card_count`, `metadata_confidence`.
 - [x] Run: `pytest tests/test_agent_executor.py tests/test_agent.py -q`
 - [x] Expected: PASS with mocked analysis pipeline.
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add agent_executor.py routes_agent.py tests/test_agent_executor.py tests/test_agent.py
@@ -798,11 +798,11 @@ git commit -m "feat: embed passages after parsing when configured"
 - Test: `tests/test_hybrid_search.py`
 - Test: `tests/test_search.py`
 
-- [ ] Implement reciprocal rank fusion over FTS results and semantic vector results.
-- [ ] Keep default route behavior compatible when embeddings are disabled.
-- [ ] Add query param `mode=fts|hybrid` defaulting to `hybrid` when embeddings exist and `fts` otherwise.
-- [ ] Run: `pytest tests/test_hybrid_search.py tests/test_search.py -q`
-- [ ] Expected: PASS.
+- [x] Implement reciprocal rank fusion over FTS results and semantic vector results.
+- [x] Keep default route behavior compatible when embeddings are disabled.
+- [x] Add query param `mode=fts|hybrid` defaulting to `hybrid` when embeddings exist and `fts` otherwise.
+- [x] Run: `pytest tests/test_hybrid_search.py tests/test_search.py -q`
+- [x] Expected: PASS.
 - [ ] Commit:
 
 ```bash

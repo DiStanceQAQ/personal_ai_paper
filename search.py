@@ -5,6 +5,12 @@ import re
 from typing import Any
 
 from db import get_connection
+from hybrid_search import (
+    SearchMode,
+    has_semantic_embeddings,
+    reciprocal_rank_fusion,
+    semantic_vector_search,
+)
 
 FTS_TABLE = "passages_fts"
 TOKEN_RE = re.compile(r"\w+", re.UNICODE)
@@ -50,7 +56,7 @@ def _to_safe_fts_query(query: str) -> str:
     return " ".join(f'"{term}"' for term in terms)
 
 
-def search_passages(
+def search_passages_fts(
     query: str,
     space_id: str,
     limit: int = 50,
@@ -92,3 +98,43 @@ def search_passages(
         return [dict(r) for r in rows]
     finally:
         conn.close()
+
+
+def search_passages(
+    query: str,
+    space_id: str,
+    limit: int = 50,
+    database_path: Path | None = None,
+    mode: SearchMode | None = None,
+) -> list[dict[str, Any]]:
+    """Search passages in a space with FTS or hybrid FTS/vector retrieval."""
+    if mode not in (None, "fts", "hybrid"):
+        raise ValueError(f"Unsupported search mode: {mode}")
+
+    use_hybrid = mode == "hybrid" or (
+        mode is None and has_semantic_embeddings(space_id, database_path)
+    )
+    fts_limit = limit * 2 if use_hybrid else limit
+    fts_results = search_passages_fts(
+        query,
+        space_id,
+        limit=fts_limit,
+        database_path=database_path,
+    )
+    if not use_hybrid:
+        return fts_results
+
+    semantic_results = semantic_vector_search(
+        query,
+        space_id,
+        limit=fts_limit,
+        database_path=database_path,
+    )
+    if not semantic_results:
+        return fts_results[:limit]
+
+    return reciprocal_rank_fusion(
+        fts_results=fts_results,
+        semantic_results=semantic_results,
+        limit=limit,
+    )

@@ -1,5 +1,8 @@
 """Behavior tests for structure-aware PDF parse chunking."""
 
+import pytest
+
+import pdf_chunker
 from pdf_chunker import chunk_parse_document
 from pdf_models import ParseDocument, ParseElement, ParseTable, PdfQualityReport
 
@@ -49,6 +52,10 @@ def _passage_containing(passages, text: str):
     matches = [passage for passage in passages if text in passage.original_text]
     assert len(matches) == 1
     return matches[0]
+
+
+def _payload_after_header(passage_text: str, header_line: str) -> str:
+    return passage_text.split(header_line, 1)[1].lstrip()
 
 
 def test_preserves_section_boundaries_and_heading_metadata() -> None:
@@ -215,7 +222,7 @@ def test_filters_references_and_page_chrome_from_searchable_body_passages() -> N
     assert passages[0].original_text == "The body passage is useful searchable evidence."
     assert passages[0].element_ids == ["body-1"]
     assert passages[0].heading_path == ["Discussion"]
-    combined_text = "\n".join(passage.original_text for passage in passages)
+    combined_text = "".join(passage.original_text for passage in passages)
     assert "Journal of Local Paper Knowledge" not in combined_text
     assert "Page 7" not in combined_text
     assert "Smith, A." not in combined_text
@@ -287,6 +294,300 @@ def test_isolates_tables_with_table_metadata_and_provenance() -> None:
     ]
     assert _passage_containing(passages, "after the table").element_ids == [
         "after-table"
+    ]
+
+
+def test_splits_large_tables_by_rows_while_preserving_headers() -> None:
+    """Large table passages should split by data rows and repeat header rows."""
+    table = ParseTable(
+        id="table-large",
+        element_id="large-table-element",
+        table_index=1,
+        page_number=3,
+        caption="Table 2: Detailed retrieval runs",
+        cells=[
+            ["System", "Recall", "Precision"],
+            ["Run A", "signal calibration baseline", "ranking trace alpha"],
+            ["Run B", "layout evidence expansion", "ranking trace beta"],
+            ["Run C", "heading continuity filter", "ranking trace gamma"],
+        ],
+        metadata={"header_rows": 1},
+    )
+    doc = _document(
+        [
+            _element(
+                "large-table-element",
+                0,
+                "table",
+                "",
+                page_number=3,
+                heading_path=["Evaluation"],
+            )
+        ],
+        tables=[table],
+    )
+
+    passages = chunk_parse_document(doc, max_tokens=24, soft_tokens=18, overlap_tokens=0)
+
+    assert len(passages) > 1
+    assert all("System | Recall | Precision" in passage.original_text for passage in passages)
+    assert all(passage.metadata["table_id"] == "table-large" for passage in passages)
+    assert all(passage.metadata["header_rows"] == 1 for passage in passages)
+    combined_text = "".join(passage.original_text for passage in passages)
+    assert "Run A" in combined_text
+    assert "Run B" in combined_text
+    assert "Run C" in combined_text
+
+
+def test_splits_oversized_table_rows_without_dropping_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Oversized table row groups should stay within budget and preserve row text."""
+    monkeypatch.setattr(
+        pdf_chunker.importlib,
+        "import_module",
+        lambda _: (_ for _ in ()).throw(ImportError("force fallback estimator")),
+    )
+    table = ParseTable(
+        id="table-oversized-row",
+        element_id="oversized-table-element",
+        table_index=2,
+        page_number=3,
+        caption="Table 3: Extremely detailed retrieval trace",
+        cells=[
+            ["System", "Recall", "Precision"],
+            ["Run A", "x" * 80, "alpha"],
+            ["Run B", "y" * 80, "beta"],
+        ],
+        metadata={"header_rows": 1},
+    )
+    doc = _document(
+        [
+            _element(
+                "oversized-table-element",
+                0,
+                "table",
+                "",
+                page_number=3,
+                heading_path=["Evaluation"],
+            )
+        ],
+        tables=[table],
+    )
+
+    passages = chunk_parse_document(doc, max_tokens=12, soft_tokens=10, overlap_tokens=0)
+
+    assert passages
+    assert all(passage.token_count <= 12 for passage in passages)
+    assert all(passage.metadata["table_id"] == "table-oversized-row" for passage in passages)
+    assert any("row_start" in passage.metadata for passage in passages)
+    row_a_text = "".join(
+        _payload_after_header(passage.original_text, "System | Recall | Precision")
+        for passage in passages
+        if passage.metadata.get("row_start") == 0
+    )
+    row_b_text = "".join(
+        _payload_after_header(passage.original_text, "System | Recall | Precision")
+        for passage in passages
+        if passage.metadata.get("row_start") == 1
+    )
+    assert "Run A" in row_a_text
+    assert "Run B" in row_b_text
+    assert "x" * 80 in row_a_text.replace(" ", "")
+    assert "y" * 80 in row_b_text.replace(" ", "")
+
+
+def test_oversized_single_table_row_fragments_preserve_header_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each split fragment of one large data row should repeat the table header."""
+    monkeypatch.setattr(
+        pdf_chunker.importlib,
+        "import_module",
+        lambda _: (_ for _ in ()).throw(ImportError("force fallback estimator")),
+    )
+    long_value = "abcdefghij" * 12
+    table = ParseTable(
+        id="table-split-row-header",
+        element_id="split-row-table-element",
+        table_index=4,
+        page_number=3,
+        caption="Table 5: split row",
+        cells=[
+            ["ID", "Value"],
+            ["RunA", long_value],
+        ],
+        metadata={"header_rows": 1},
+    )
+    doc = _document(
+        [
+            _element(
+                "split-row-table-element",
+                0,
+                "table",
+                "",
+                page_number=3,
+                heading_path=["Evaluation"],
+            )
+        ],
+        tables=[table],
+    )
+
+    passages = chunk_parse_document(doc, max_tokens=14, soft_tokens=10, overlap_tokens=0)
+
+    row_passages = [
+        passage
+        for passage in passages
+        if passage.metadata.get("table_id") == "table-split-row-header"
+        and passage.metadata.get("row_start") == 0
+    ]
+    assert len(row_passages) > 1
+    assert all("ID | Value" in passage.original_text for passage in row_passages)
+    assert all(passage.token_count <= 14 for passage in row_passages)
+    assert {passage.metadata["row_end"] for passage in row_passages} == {1}
+    assert [passage.metadata["split_index"] for passage in row_passages] == list(
+        range(len(row_passages))
+    )
+    assert all(
+        passage.metadata["split_count"] == len(row_passages)
+        for passage in row_passages
+    )
+    row_fragments = [
+        _payload_after_header(passage.original_text, "ID | Value")
+        for passage in row_passages
+    ]
+    assert "RunA" in "".join(row_fragments)
+    assert long_value in "".join(row_fragments).replace(" ", "")
+
+
+def test_splits_header_only_oversized_table_without_dropping_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-empty table with no data rows should still produce budgeted passages."""
+    monkeypatch.setattr(
+        pdf_chunker.importlib,
+        "import_module",
+        lambda _: (_ for _ in ()).throw(ImportError("force fallback estimator")),
+    )
+    table = ParseTable(
+        id="table-header-only",
+        element_id="header-only-table-element",
+        table_index=3,
+        page_number=3,
+        caption="Table 4: " + ("longcaption" * 10),
+        cells=[["VeryLongHeader" * 8, "Metric"]],
+        metadata={"header_rows": 1},
+    )
+    doc = _document(
+        [
+            _element(
+                "header-only-table-element",
+                0,
+                "table",
+                "",
+                page_number=3,
+                heading_path=["Evaluation"],
+            )
+        ],
+        tables=[table],
+    )
+
+    passages = chunk_parse_document(doc, max_tokens=10, soft_tokens=8, overlap_tokens=0)
+
+    assert passages
+    assert all(passage.token_count <= 10 for passage in passages)
+    combined_text = "".join(passage.original_text for passage in passages)
+    assert "longcaption" in combined_text
+    assert "VeryLongHeader" in combined_text
+
+
+def test_splits_long_unsegmented_text_with_fallback_estimator(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A single long token should be split by deterministic fallback budgeting."""
+    monkeypatch.setattr(
+        pdf_chunker.importlib,
+        "import_module",
+        lambda _: (_ for _ in ()).throw(ImportError("force fallback estimator")),
+    )
+    long_token = "https://example.test/" + ("abcdef0123456789" * 20)
+    doc = _document(
+        [
+            _element(
+                "long-token",
+                0,
+                "paragraph",
+                long_token,
+                heading_path=["Methods"],
+            )
+        ]
+    )
+
+    passages = chunk_parse_document(doc, max_tokens=12, soft_tokens=10, overlap_tokens=0)
+
+    assert len(passages) > 1
+    assert all(passage.token_count <= 12 for passage in passages)
+    assert "".join(passage.original_text for passage in passages) == long_token
+
+
+def test_repeated_identical_splits_have_unique_deterministic_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Identical split text from the same source should not duplicate passage IDs."""
+    monkeypatch.setattr(
+        pdf_chunker.importlib,
+        "import_module",
+        lambda _: (_ for _ in ()).throw(ImportError("force fallback estimator")),
+    )
+    repeated_token = "z" * 80
+    doc = _document(
+        [
+            _element(
+                "repeated-split-source",
+                0,
+                "paragraph",
+                repeated_token * 2,
+                heading_path=["Methods"],
+            )
+        ]
+    )
+
+    passages = chunk_parse_document(doc, max_tokens=10, soft_tokens=8, overlap_tokens=0)
+    second_passages = chunk_parse_document(doc, max_tokens=10, soft_tokens=8, overlap_tokens=0)
+
+    assert len(passages) > 1
+    assert len({passage.id for passage in passages}) == len(passages)
+    assert [passage.id for passage in passages] == [passage.id for passage in second_passages]
+
+
+def test_skips_empty_unmatched_table_placeholders_without_crashing() -> None:
+    """Empty table placeholders without ParseTable detail should be ignored."""
+    doc = _document(
+        [
+            _element(
+                "before-empty-table",
+                0,
+                "paragraph",
+                "Body text before an empty table placeholder.",
+                heading_path=["Results"],
+            ),
+            _element(
+                "empty-table-placeholder",
+                1,
+                "table",
+                "",
+                heading_path=["Results"],
+            ),
+            _element(
+                "after-empty-table",
+                2,
+                "paragraph",
+                "Body text after an empty table placeholder.",
+                heading_path=["Results"],
+            ),
+        ]
+    )
+
+    passages = chunk_parse_document(doc, max_tokens=100, soft_tokens=80, overlap_tokens=0)
+
+    assert len(passages) == 2
+    assert [passage.element_ids for passage in passages] == [
+        ["before-empty-table"],
+        ["after-empty-table"],
     ]
 
 

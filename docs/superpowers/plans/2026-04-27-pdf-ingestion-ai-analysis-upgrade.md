@@ -534,7 +534,7 @@ git commit -m "feat: add frontend parse diagnostics API"
 - [x] Keep the UI compact and work-focused; do not add a marketing-style explanation panel.
 - [x] Run: `npm run frontend:typecheck && npm run frontend:build`
 - [x] Expected: PASS.
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add frontend/src/hooks/usePapers.ts frontend/src/components/ui/PaperCard.tsx frontend/src/components/layout/Inspector.tsx frontend/src/styles.css
@@ -641,11 +641,11 @@ git commit -m "feat: batch full-paper passages for AI analysis"
 - Create: `analysis_verifier.py`
 - Test: `tests/test_analysis_verifier.py`
 
-- [ ] Verify every returned `source_passage_id` exists for the paper.
-- [ ] Verify `evidence_quote` appears as a normalized substring or high-overlap token subset of at least one source passage.
-- [ ] Reject cards with unsupported card type, empty summary, missing source, or evidence mismatch.
-- [ ] Run: `pytest tests/test_analysis_verifier.py -q`
-- [ ] Expected: PASS; hallucinated sources and unsupported evidence are rejected.
+- [x] Verify every returned `source_passage_id` exists for the paper.
+- [x] Verify `evidence_quote` appears as a normalized substring or high-overlap token subset of at least one source passage.
+- [x] Reject cards with unsupported card type, empty summary, missing source, or evidence mismatch.
+- [x] Run: `pytest tests/test_analysis_verifier.py -q`
+- [x] Expected: PASS; hallucinated sources and unsupported evidence are rejected.
 - [ ] Commit:
 
 ```bash

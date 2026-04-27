@@ -34,6 +34,7 @@ py-modules = [
     "analysis_models",
     "analysis_pipeline",
     "analysis_prompts",
+    "analysis_verifier",
     "api_sidecar",
     "card_extractor",
     "config",

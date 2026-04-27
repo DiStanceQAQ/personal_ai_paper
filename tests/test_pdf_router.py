@@ -62,6 +62,15 @@ class FakeBackend:
         )
 
 
+class ClosableFakeBackend(FakeBackend):
+    def __init__(self, name: str, **kwargs: Any) -> None:
+        super().__init__(name, **kwargs)
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def extraction_method_for(name: str, preferred: str) -> Any:
     if preferred in {"native_text", "ocr", "layout_model", "llm_parser", "legacy"}:
         return preferred
@@ -226,6 +235,83 @@ def test_layout_fallback_resolves_lazy_llamaparse_only_when_reached(
 
     assert document.backend == "llamaparse"
     assert provider_calls == 1
+
+
+def test_lazy_llamaparse_provider_backend_is_closed_after_success(
+    tmp_path: Path,
+) -> None:
+    router_module = _router_module()
+    docling = FakeBackend("docling", available=False, extraction_method="layout_model")
+    llamaparse = ClosableFakeBackend("llamaparse", extraction_method="llm_parser")
+
+    router = router_module.PdfBackendRouter(
+        pymupdf4llm=FakeBackend("pymupdf4llm"),
+        docling=docling,
+        llamaparse=lambda: llamaparse,
+        legacy=FakeBackend("legacy-pymupdf", extraction_method="legacy"),
+        grobid_client=None,
+    )
+    document = router.parse_pdf(
+        tmp_path / "layout.pdf",
+        "paper-1",
+        "space-1",
+        _quality(needs_layout_model=True),
+    )
+
+    assert document.backend == "llamaparse"
+    assert llamaparse.closed is True
+
+
+def test_lazy_llamaparse_provider_backend_is_closed_after_failure(
+    tmp_path: Path,
+) -> None:
+    router_module = _router_module()
+    llamaparse = ClosableFakeBackend(
+        "llamaparse",
+        action="error",
+        extraction_method="llm_parser",
+    )
+    legacy = FakeBackend("legacy-pymupdf", extraction_method="legacy")
+
+    router = router_module.PdfBackendRouter(
+        pymupdf4llm=FakeBackend("pymupdf4llm"),
+        docling=FakeBackend("docling", available=False, extraction_method="layout_model"),
+        llamaparse=lambda: llamaparse,
+        legacy=legacy,
+        grobid_client=None,
+    )
+    document = router.parse_pdf(
+        tmp_path / "layout.pdf",
+        "paper-1",
+        "space-1",
+        _quality(needs_layout_model=True),
+    )
+
+    assert document.backend == "legacy-pymupdf"
+    assert len(legacy.calls) == 1
+    assert llamaparse.closed is True
+
+
+def test_injected_llamaparse_backend_instance_is_not_closed(tmp_path: Path) -> None:
+    router_module = _router_module()
+    llamaparse = ClosableFakeBackend("llamaparse", extraction_method="llm_parser")
+
+    router = router_module.PdfBackendRouter(
+        pymupdf4llm=FakeBackend("pymupdf4llm"),
+        docling=FakeBackend("docling", available=False, extraction_method="layout_model"),
+        llamaparse=llamaparse,
+        legacy=FakeBackend("legacy-pymupdf", extraction_method="legacy"),
+        grobid_client=None,
+    )
+    document = router.parse_pdf(
+        tmp_path / "layout.pdf",
+        "paper-1",
+        "space-1",
+        _quality(needs_layout_model=True),
+    )
+
+    assert document.backend == "llamaparse"
+    assert llamaparse.closed is False
 
 
 def test_scanned_layout_pdf_selects_docling_when_available(tmp_path: Path) -> None:

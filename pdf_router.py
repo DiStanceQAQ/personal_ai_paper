@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import fields, is_dataclass
 from pathlib import Path
-from collections.abc import Iterator
 from typing import Any, Callable, Final, cast
 
 from db import get_connection
@@ -78,9 +78,7 @@ class PdfBackendRouter:
     ) -> ParseDocument:
         errors: list[str] = []
 
-        for backend in self._candidate_backends(quality):
-            if backend is None:
-                continue
+        for backend, owns_backend in self._candidate_backends(quality):
             name = backend.name
             quality.warnings.append(f"router_attempt:{name}")
 
@@ -104,8 +102,12 @@ class PdfBackendRouter:
                 errors.append(warning)
                 continue
 
-            quality.warnings.append(f"router_selected:{name}")
-            return document.model_copy(update={"quality": quality})
+            else:
+                quality.warnings.append(f"router_selected:{name}")
+                return document.model_copy(update={"quality": quality})
+            finally:
+                if owns_backend and hasattr(backend, "close"):
+                    backend.close()
 
         detail = "; ".join(errors) if errors else "no parser backends configured"
         raise ParserBackendUnavailable("router", detail)
@@ -113,12 +115,13 @@ class PdfBackendRouter:
     def _candidate_backends(
         self,
         quality: PdfQualityReport,
-    ) -> Iterator[PdfParserBackend | None]:
+    ) -> Iterator[tuple[PdfParserBackend, bool]]:
         seen: set[str] = set()
         forced = self._backend_for_key(self._forced_backend, quality)
         if forced is not None:
-            seen.add(forced.name)
-            yield forced
+            forced_backend, forced_owned = forced
+            seen.add(forced_backend.name)
+            yield forced_backend, forced_owned
 
         if quality.needs_ocr or quality.needs_layout_model:
             yield from self._unique_backends(
@@ -137,45 +140,54 @@ class PdfBackendRouter:
         self,
         key: str,
         quality: PdfQualityReport | None,
-    ) -> PdfParserBackend | None:
+    ) -> tuple[PdfParserBackend, bool] | None:
         if key == "pymupdf4llm":
-            return self._pymupdf4llm
+            return _owned_backend(self._pymupdf4llm, False)
         if key == "docling":
-            return self._docling
+            return _owned_backend(self._docling, False)
         if key == "llamaparse":
             return self._resolve_llamaparse_backend(quality)
         if key in {"legacy", "legacy-pymupdf"}:
-            return self._legacy
+            return _owned_backend(self._legacy, False)
         return None
 
     def _unique_backends(
         self,
         backends: tuple[
-            PdfParserBackend | None | Callable[[PdfQualityReport], PdfParserBackend | None],
+            PdfParserBackend
+            | None
+            | Callable[[PdfQualityReport], tuple[PdfParserBackend, bool] | None],
             ...,
         ],
         quality: PdfQualityReport,
         seen: set[str],
-    ) -> Iterator[PdfParserBackend | None]:
+    ) -> Iterator[tuple[PdfParserBackend, bool]]:
         for candidate in backends:
-            backend = candidate(quality) if callable(candidate) else candidate
-            if backend is None:
+            resolved = (
+                candidate(quality)
+                if callable(candidate)
+                else _owned_backend(candidate, False)
+            )
+            if resolved is None:
                 continue
+            backend, owns_backend = resolved
             if backend.name in seen:
+                if owns_backend and hasattr(backend, "close"):
+                    backend.close()
                 continue
             seen.add(backend.name)
-            yield backend
+            yield backend, owns_backend
 
     def _resolve_llamaparse_backend(
         self,
         quality: PdfQualityReport | None,
-    ) -> PdfParserBackend | None:
+    ) -> tuple[PdfParserBackend, bool] | None:
         try:
             if self._llamaparse is _UNSET:
-                return get_configured_llamaparse_backend()
+                return _owned_backend(get_configured_llamaparse_backend(), True)
             if callable(self._llamaparse):
-                return self._llamaparse()
-            return _as_backend(self._llamaparse)
+                return _owned_backend(self._llamaparse(), True)
+            return _owned_backend(_as_backend(self._llamaparse), False)
         except Exception as exc:
             if quality is not None:
                 quality.warnings.append(
@@ -266,6 +278,15 @@ def _as_backend(value: PdfParserBackend | None | object) -> PdfParserBackend | N
     if value is None:
         return None
     return value  # type: ignore[return-value]
+
+
+def _owned_backend(
+    backend: PdfParserBackend | None,
+    owns_backend: bool,
+) -> tuple[PdfParserBackend, bool] | None:
+    if backend is None:
+        return None
+    return backend, owns_backend
 
 
 def _normalize_backend_key(value: str) -> str:

@@ -456,3 +456,39 @@ def test_get_configured_backend_reads_app_state(
     }
     assert backend is not None
     assert backend.is_available() is True
+
+
+def test_get_configured_backend_closes_or_avoids_unavailable_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unavailable configured helper paths should not leak owned clients."""
+    backend_module = _backend_module()
+    instances: list[Any] = []
+
+    class FakeUnavailableBackend:
+        def __init__(self, *, api_key: str, base_url: str) -> None:
+            self.api_key = api_key
+            self.base_url = base_url
+            self.closed = False
+            instances.append(self)
+
+        def is_available(self) -> bool:
+            return False
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(
+        backend_module,
+        "get_llamaparse_config",
+        lambda: {
+            "llamaparse_api_key": "",
+            "llamaparse_base_url": "https://configured.example/v1",
+        },
+    )
+    monkeypatch.setattr(backend_module, "LlamaParseBackend", FakeUnavailableBackend)
+
+    backend = backend_module.get_configured_llamaparse_backend()
+
+    assert backend is None
+    assert instances == [] or instances[0].closed is True

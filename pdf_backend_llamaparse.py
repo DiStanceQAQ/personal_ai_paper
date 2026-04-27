@@ -184,11 +184,17 @@ def get_llamaparse_config() -> dict[str, str]:
 def get_configured_llamaparse_backend() -> LlamaParseBackend | None:
     """Return a configured optional backend, or None when disabled."""
     config = get_llamaparse_config()
+    if not config["llamaparse_api_key"]:
+        return None
+
     backend = LlamaParseBackend(
         api_key=config["llamaparse_api_key"],
         base_url=config["llamaparse_base_url"],
     )
-    return backend if backend.is_available() else None
+    if backend.is_available():
+        return backend
+    backend.close()
+    return None
 
 
 class _DocumentBuilder:

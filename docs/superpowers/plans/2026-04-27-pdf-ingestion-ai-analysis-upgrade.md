@@ -569,12 +569,12 @@ git commit -m "feat: define strict AI analysis schemas"
 - Modify: `llm_client.py`
 - Test: `tests/test_llm_client.py`
 
-- [ ] Add `call_llm_schema(system_prompt, user_prompt, schema_name, schema, provider_capabilities=None)` using `response_format={"type":"json_schema","json_schema":{"name": schema_name,"strict": true,"schema": schema}}` for compatible providers.
-- [ ] Keep JSON mode fallback for local OpenAI-compatible providers that reject schema format.
-- [ ] Add retry handling for invalid JSON, schema validation failure, and model refusal fields.
-- [ ] Run: `pytest tests/test_llm_client.py -q`
-- [ ] Expected: PASS with mocked Chat Completions responses.
-- [ ] Commit:
+- [x] Add `call_llm_schema(system_prompt, user_prompt, schema_name, schema, provider_capabilities=None)` using `response_format={"type":"json_schema","json_schema":{"name": schema_name,"strict": true,"schema": schema}}` for compatible providers.
+- [x] Keep JSON mode fallback for local OpenAI-compatible providers that reject schema format.
+- [x] Add retry handling for invalid JSON, schema validation failure, and model refusal fields.
+- [x] Run: `pytest tests/test_llm_client.py -q`
+- [x] Expected: PASS with mocked Chat Completions responses.
+- [x] Commit:
 
 ```bash
 git add llm_client.py tests/test_llm_client.py

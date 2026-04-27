@@ -6,7 +6,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException, UploadFile
+from fastapi import APIRouter, Body, HTTPException, Query, UploadFile
 
 import config
 from db import get_connection
@@ -47,6 +47,15 @@ def _get_active_space_id() -> str:
 
 def _paper_row_to_dict(row: Any) -> dict[str, Any]:
     return dict(row)
+
+
+def _require_paper_in_space(conn: Any, paper_id: str, space_id: str) -> None:
+    row = conn.execute(
+        "SELECT id FROM papers WHERE id = ? AND space_id = ?",
+        (paper_id, space_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Paper not found in active space")
 
 
 def _compute_sha256(file_path: Path) -> str:
@@ -183,6 +192,98 @@ async def get_paper(paper_id: str) -> dict[str, Any]:
         if row is None:
             raise HTTPException(status_code=404, detail="Paper not found")
         return _paper_row_to_dict(row)
+    finally:
+        conn.close()
+
+
+@router.get("/{paper_id}/parse-runs")
+async def list_parse_runs(paper_id: str) -> list[dict[str, Any]]:
+    """List parse runs for a paper in the active space."""
+    space_id = _get_active_space_id()
+    conn = get_connection()
+    try:
+        _require_paper_in_space(conn, paper_id, space_id)
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                paper_id,
+                space_id,
+                backend,
+                extraction_method,
+                status,
+                quality_score,
+                started_at,
+                started_at AS created_at,
+                completed_at,
+                warnings_json,
+                config_json,
+                metadata_json
+            FROM parse_runs
+            WHERE paper_id = ?
+              AND space_id = ?
+            ORDER BY started_at DESC, id DESC
+            """,
+            (paper_id, space_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@router.get("/{paper_id}/elements")
+async def list_document_elements(
+    paper_id: str,
+    element_type: str | None = Query(None, alias="type"),
+    page: int | None = Query(None, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+) -> list[dict[str, Any]]:
+    """List structured document elements for a paper in the active space."""
+    space_id = _get_active_space_id()
+    conn = get_connection()
+    try:
+        _require_paper_in_space(conn, paper_id, space_id)
+
+        query = """
+            SELECT *
+            FROM document_elements
+            WHERE paper_id = ?
+              AND space_id = ?
+        """
+        params: list[Any] = [paper_id, space_id]
+        if element_type is not None:
+            query += " AND element_type = ?"
+            params.append(element_type)
+        if page is not None:
+            query += " AND page_number = ?"
+            params.append(page)
+        query += " ORDER BY element_index LIMIT ?"
+        params.append(limit)
+
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@router.get("/{paper_id}/tables")
+async def list_document_tables(paper_id: str) -> list[dict[str, Any]]:
+    """List structured document tables for a paper in the active space."""
+    space_id = _get_active_space_id()
+    conn = get_connection()
+    try:
+        _require_paper_in_space(conn, paper_id, space_id)
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM document_tables
+            WHERE paper_id = ?
+              AND space_id = ?
+            ORDER BY page_number, table_index
+            """,
+            (paper_id, space_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 

@@ -496,6 +496,192 @@ async def test_reparsing_replaces_existing_passages_and_fts_rows(
     assert len(second_search.json()) == first_search_count
 
 
+def _insert_parse_diagnostic_rows(
+    *,
+    paper_id: str,
+    space_id: str,
+    parse_run_id: str = "run-1",
+) -> None:
+    """Insert structured parse rows for diagnostics route tests."""
+    import db as db_module
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        conn.execute(
+            """
+            INSERT INTO parse_runs (
+                id, paper_id, space_id, backend, extraction_method, status,
+                quality_score, started_at, completed_at, warnings_json,
+                config_json, metadata_json
+            )
+            VALUES (
+                ?, ?, ?, 'pymupdf4llm', 'native_text', 'completed',
+                0.93, '2026-04-27 10:00:00', '2026-04-27 10:00:02',
+                '["minor-layout-warning"]', '{"chunking":"default"}',
+                '{"title":"Diagnostics Paper"}'
+            )
+            """,
+            (parse_run_id, paper_id, space_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO document_elements (
+                id, parse_run_id, paper_id, space_id, element_index,
+                element_type, text, page_number, bbox_json,
+                heading_path_json, metadata_json
+            )
+            VALUES
+                (?, ?, ?, ?, 0, 'heading', 'Methods', 1, '[0,0,10,10]', '["Methods"]', '{}'),
+                (?, ?, ?, ?, 1, 'paragraph', 'Paragraph text', 1, NULL, '["Methods"]', '{}'),
+                (?, ?, ?, ?, 2, 'table', 'Table 1', 2, '[0,20,100,60]', '["Results"]', '{}')
+            """,
+            (
+                f"{parse_run_id}:element-heading",
+                parse_run_id,
+                paper_id,
+                space_id,
+                f"{parse_run_id}:element-paragraph",
+                parse_run_id,
+                paper_id,
+                space_id,
+                f"{parse_run_id}:element-table",
+                parse_run_id,
+                paper_id,
+                space_id,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO document_tables (
+                id, parse_run_id, paper_id, space_id, element_id,
+                table_index, page_number, caption, cells_json,
+                bbox_json, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, 0, 2, 'Results table', '[["Metric","Value"],["F1","0.9"]]', '[0,20,100,60]', '{}')
+            """,
+            (
+                f"{parse_run_id}:table-1",
+                parse_run_id,
+                paper_id,
+                space_id,
+                f"{parse_run_id}:element-table",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_list_parse_runs_ordered_and_scoped_to_active_space(
+    client: AsyncClient,
+) -> None:
+    """Parse run diagnostics should be ordered and active-space scoped."""
+    space_id = await _create_and_activate_space(client)
+    upload = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_text_pdf("diagnostics"), "application/pdf")},
+    )
+    paper_id = upload.json()["id"]
+    _insert_parse_diagnostic_rows(
+        paper_id=paper_id, space_id=space_id, parse_run_id="run-older"
+    )
+
+    import db as db_module
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        conn.execute(
+            """
+            INSERT INTO parse_runs (
+                id, paper_id, space_id, backend, extraction_method, status,
+                quality_score, started_at, completed_at, warnings_json,
+                config_json, metadata_json
+            )
+            VALUES (
+                'run-newer', ?, ?, 'docling', 'layout_model', 'completed',
+                0.98, '2026-04-27 11:00:00', '2026-04-27 11:00:05',
+                '[]', '{}', '{}'
+            )
+            """,
+            (paper_id, space_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    runs = await client.get(f"/api/papers/{paper_id}/parse-runs")
+    assert runs.status_code == 200
+    data = runs.json()
+    assert [run["id"] for run in data] == ["run-newer", "run-older"]
+    assert data[0]["created_at"] == "2026-04-27 11:00:00"
+    assert data[0]["backend"] == "docling"
+
+    other_space_id = await _create_and_activate_space(client, "Other Space")
+    assert other_space_id != space_id
+    scoped_out = await client.get(f"/api/papers/{paper_id}/parse-runs")
+    assert scoped_out.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_document_elements_filters_type_page_and_limit(
+    client: AsyncClient,
+) -> None:
+    """Element diagnostics should honor type, page, and limit filters."""
+    space_id = await _create_and_activate_space(client)
+    upload = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_text_pdf("diagnostics"), "application/pdf")},
+    )
+    paper_id = upload.json()["id"]
+    _insert_parse_diagnostic_rows(paper_id=paper_id, space_id=space_id)
+
+    filtered = await client.get(
+        f"/api/papers/{paper_id}/elements",
+        params={"type": "paragraph", "page": 1, "limit": 1},
+    )
+    assert filtered.status_code == 200
+    data = filtered.json()
+    assert len(data) == 1
+    assert data[0]["element_type"] == "paragraph"
+    assert data[0]["page_number"] == 1
+    assert data[0]["text"] == "Paragraph text"
+
+    first_two = await client.get(
+        f"/api/papers/{paper_id}/elements",
+        params={"limit": 2},
+    )
+    assert first_two.status_code == 200
+    assert [element["element_index"] for element in first_two.json()] == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_list_document_tables_scoped_to_active_space(
+    client: AsyncClient,
+) -> None:
+    """Table diagnostics should only expose tables for the active paper space."""
+    space_id = await _create_and_activate_space(client)
+    upload = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_text_pdf("diagnostics"), "application/pdf")},
+    )
+    paper_id = upload.json()["id"]
+    _insert_parse_diagnostic_rows(paper_id=paper_id, space_id=space_id)
+
+    tables = await client.get(f"/api/papers/{paper_id}/tables")
+    assert tables.status_code == 200
+    data = tables.json()
+    assert len(data) == 1
+    assert data[0]["paper_id"] == paper_id
+    assert data[0]["space_id"] == space_id
+    assert data[0]["caption"] == "Results table"
+    assert data[0]["cells_json"] == '[["Metric","Value"],["F1","0.9"]]'
+
+    await _create_and_activate_space(client, "Other Space")
+    scoped_out = await client.get(f"/api/papers/{paper_id}/tables")
+    assert scoped_out.status_code == 404
+
+
 @pytest.mark.asyncio
 async def test_delete_paper_removes_database_rows_fts_index_and_pdf(
     client: AsyncClient,

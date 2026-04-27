@@ -16,6 +16,8 @@ def client() -> Generator[AsyncClient, None, None]:
     import db as db_module
     import config as config_module
 
+    original_db_path = db_module.DATABASE_PATH
+    original_spaces_dir = config_module.SPACES_DIR
     with tempfile.TemporaryDirectory() as tmpdir:
         db_file = Path(tmpdir) / "test.db"
         init_db(database_path=db_file)
@@ -24,7 +26,11 @@ def client() -> Generator[AsyncClient, None, None]:
 
         transport = ASGITransport(app=app)
         test_client = AsyncClient(transport=transport, base_url="http://test")
-        yield test_client
+        try:
+            yield test_client
+        finally:
+            db_module.DATABASE_PATH = original_db_path
+            config_module.SPACES_DIR = original_spaces_dir
 
 
 @pytest.fixture

@@ -67,6 +67,7 @@ python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+exclude = "^tests/"
 
 [[tool.mypy.overrides]]
 module = "pymupdf"
@@ -81,5 +82,5 @@ module = "pdf_profile"
 disable_error_code = ["no-untyped-call"]
 
 [[tool.mypy.overrides]]
-module = ["parser", "tests.test_parser", "tests.test_search", "tests.test_mcp", "tests.test_routes_cards"]
+module = "parser"
 disable_error_code = ["no-untyped-call", "no-any-return"]

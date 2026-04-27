@@ -62,6 +62,35 @@ def foreign_key_targets(conn: sqlite3.Connection, table_name: str) -> set[tuple[
     return {(row["from"], row["table"]) for row in rows}
 
 
+def foreign_key_groups(
+    conn: sqlite3.Connection, table_name: str
+) -> set[tuple[str, tuple[str, ...], tuple[str, ...]]]:
+    """Return grouped foreign key mappings as parent table, child cols, parent cols."""
+    rows = conn.execute(f"PRAGMA foreign_key_list({table_name})").fetchall()
+    grouped: dict[int, dict[str, object]] = {}
+    for row in rows:
+        key = int(row["id"])
+        group = grouped.setdefault(
+            key,
+            {
+                "table": row["table"],
+                "columns": [],
+                "parent_columns": [],
+            },
+        )
+        group["columns"].append(row["from"])
+        group["parent_columns"].append(row["to"])
+
+    return {
+        (
+            str(group["table"]),
+            tuple(group["columns"]),
+            tuple(group["parent_columns"]),
+        )
+        for group in grouped.values()
+    }
+
+
 def assert_index_columns(
     conn: sqlite3.Connection, expected_columns: dict[str, tuple[str, ...]]
 ) -> None:
@@ -84,6 +113,81 @@ def insert_paper(conn: sqlite3.Connection, paper_id: str, space_id: str) -> None
         "INSERT INTO papers (id, space_id, title) VALUES (?, ?, ?)",
         (paper_id, space_id, paper_id),
     )
+
+
+def insert_passage(
+    conn: sqlite3.Connection, passage_id: str, paper_id: str, space_id: str
+) -> None:
+    """Insert a minimal passage row."""
+    conn.execute(
+        """
+        INSERT INTO passages (id, paper_id, space_id, original_text)
+        VALUES (?, ?, ?, ?)
+        """,
+        (passage_id, paper_id, space_id, passage_id),
+    )
+
+
+def insert_card(
+    conn: sqlite3.Connection, card_id: str, paper_id: str, space_id: str
+) -> None:
+    """Insert a minimal knowledge card row."""
+    conn.execute(
+        """
+        INSERT INTO knowledge_cards (id, paper_id, space_id, card_type, summary)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (card_id, paper_id, space_id, "Evidence", card_id),
+    )
+
+
+def insert_analysis_run(
+    conn: sqlite3.Connection, analysis_run_id: str, paper_id: str, space_id: str
+) -> None:
+    """Insert a minimal analysis run row."""
+    conn.execute(
+        """
+        INSERT INTO analysis_runs (id, paper_id, space_id)
+        VALUES (?, ?, ?)
+        """,
+        (analysis_run_id, paper_id, space_id),
+    )
+
+
+def insert_card_source(
+    conn: sqlite3.Connection,
+    source_id: str,
+    card_id: str,
+    passage_id: str,
+    paper_id: str,
+    space_id: str,
+    analysis_run_id: str | None = None,
+) -> None:
+    """Insert a minimal knowledge card source row."""
+    conn.execute(
+        """
+        INSERT INTO knowledge_card_sources (
+            id, card_id, passage_id, paper_id, space_id, analysis_run_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (source_id, card_id, passage_id, paper_id, space_id, analysis_run_id),
+    )
+
+
+def insert_provenance_scope_fixture(conn: sqlite3.Connection) -> None:
+    """Insert two complete paper scopes for provenance integrity tests."""
+    insert_space(conn, "space-1")
+    insert_space(conn, "space-2")
+    insert_paper(conn, "paper-1", "space-1")
+    insert_paper(conn, "paper-2", "space-2")
+    insert_passage(conn, "passage-1", "paper-1", "space-1")
+    insert_passage(conn, "passage-2", "paper-2", "space-2")
+    insert_card(conn, "card-1", "paper-1", "space-1")
+    insert_card(conn, "card-2", "paper-2", "space-2")
+    insert_analysis_run(conn, "analysis-run-1", "paper-1", "space-1")
+    insert_analysis_run(conn, "analysis-run-2", "paper-2", "space-2")
+    conn.commit()
 
 
 def test_apply_migrations_creates_initial_schema_version_row() -> None:
@@ -729,7 +833,15 @@ def test_migration_three_creates_analysis_run_and_card_source_schema() -> None:
             "idx_analysis_runs_paper_id",
             "idx_analysis_runs_space_id",
             "idx_analysis_runs_paper_started_at",
+            "idx_analysis_runs_id_paper_space_unique",
         }.issubset(index_names(conn, "analysis_runs"))
+        assert {
+            "idx_knowledge_cards_id_paper_space_unique",
+            "idx_knowledge_cards_analysis_run_id",
+        }.issubset(index_names(conn, "knowledge_cards"))
+        assert {
+            "idx_passages_id_paper_space_unique",
+        }.issubset(index_names(conn, "passages"))
         assert {
             "idx_knowledge_card_sources_card_passage_unique",
             "idx_knowledge_card_sources_card_id",
@@ -745,6 +857,22 @@ def test_migration_three_creates_analysis_run_and_card_source_schema() -> None:
                 "idx_analysis_runs_paper_id": ("paper_id",),
                 "idx_analysis_runs_space_id": ("space_id",),
                 "idx_analysis_runs_paper_started_at": ("paper_id", "started_at"),
+                "idx_analysis_runs_id_paper_space_unique": (
+                    "id",
+                    "paper_id",
+                    "space_id",
+                ),
+                "idx_knowledge_cards_id_paper_space_unique": (
+                    "id",
+                    "paper_id",
+                    "space_id",
+                ),
+                "idx_knowledge_cards_analysis_run_id": ("analysis_run_id",),
+                "idx_passages_id_paper_space_unique": (
+                    "id",
+                    "paper_id",
+                    "space_id",
+                ),
                 "idx_knowledge_card_sources_card_passage_unique": (
                     "card_id",
                     "passage_id",
@@ -768,6 +896,18 @@ def test_migration_three_creates_analysis_run_and_card_source_schema() -> None:
             ("space_id", "papers"),
             ("analysis_run_id", "analysis_runs"),
         }.issubset(foreign_key_targets(conn, "knowledge_card_sources"))
+        assert {
+            (
+                "knowledge_cards",
+                ("card_id", "paper_id", "space_id"),
+                ("id", "paper_id", "space_id"),
+            ),
+            (
+                "passages",
+                ("passage_id", "paper_id", "space_id"),
+                ("id", "paper_id", "space_id"),
+            ),
+        }.issubset(foreign_key_groups(conn, "knowledge_card_sources"))
 
         conn.close()
 
@@ -893,79 +1033,160 @@ def test_analysis_run_and_card_sources_enforce_scope_and_uniqueness() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         conn = init_db(database_path=db_path)
-        insert_space(conn, "space-1")
-        insert_space(conn, "space-2")
-        insert_paper(conn, "paper-1", "space-1")
-        insert_paper(conn, "paper-2", "space-2")
-        conn.execute(
-            """
-            INSERT INTO passages (id, paper_id, space_id, original_text)
-            VALUES (?, ?, ?, ?)
-            """,
-            ("passage-1", "paper-1", "space-1", "source text"),
-        )
-        conn.execute(
-            """
-            INSERT INTO knowledge_cards (id, space_id, paper_id, card_type, summary)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            ("card-1", "space-1", "paper-1", "Evidence", "evidence card"),
-        )
-        conn.commit()
+        insert_provenance_scope_fixture(conn)
 
         with pytest.raises(sqlite3.IntegrityError):
-            conn.execute(
-                """
-                INSERT INTO analysis_runs (id, paper_id, space_id)
-                VALUES (?, ?, ?)
-                """,
-                ("analysis-run-bad", "paper-1", "space-2"),
+            insert_analysis_run(
+                conn,
+                "analysis-run-bad",
+                "paper-1",
+                "space-2",
             )
 
-        conn.execute(
-            """
-            INSERT INTO analysis_runs (id, paper_id, space_id)
-            VALUES (?, ?, ?)
-            """,
-            ("analysis-run-1", "paper-1", "space-1"),
+        insert_card_source(
+            conn,
+            "source-1",
+            "card-1",
+            "passage-1",
+            "paper-1",
+            "space-1",
+            "analysis-run-1",
         )
-        conn.execute(
-            """
-            INSERT INTO knowledge_card_sources (
-                id, card_id, passage_id, paper_id, space_id, analysis_run_id
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "source-1",
+
+        with pytest.raises(sqlite3.IntegrityError):
+            insert_card_source(
+                conn,
+                "source-duplicate",
                 "card-1",
                 "passage-1",
                 "paper-1",
                 "space-1",
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            insert_card_source(
+                conn,
+                "source-card-mismatch",
+                "card-2",
+                "passage-1",
+                "paper-1",
+                "space-1",
                 "analysis-run-1",
-            ),
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            insert_card_source(
+                conn,
+                "source-passage-mismatch",
+                "card-1",
+                "passage-2",
+                "paper-1",
+                "space-1",
+                "analysis-run-1",
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            insert_card_source(
+                conn,
+                "source-run-mismatch",
+                "card-1",
+                "passage-1",
+                "paper-1",
+                "space-1",
+                "analysis-run-2",
+            )
+
+        conn.close()
+
+
+def test_knowledge_card_sources_apply_expected_delete_actions() -> None:
+    """Deleting source parents cascades rows or clears analysis run provenance."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+        insert_provenance_scope_fixture(conn)
+
+        insert_card_source(
+            conn,
+            "source-card-delete",
+            "card-1",
+            "passage-1",
+            "paper-1",
+            "space-1",
+            "analysis-run-1",
+        )
+        conn.execute("DELETE FROM knowledge_cards WHERE id = ?", ("card-1",))
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM knowledge_card_sources WHERE id = ?",
+                ("source-card-delete",),
+            ).fetchone()[0]
+            == 0
         )
 
-        with pytest.raises(sqlite3.IntegrityError):
+        insert_card(conn, "card-3", "paper-1", "space-1")
+        insert_card_source(
+            conn,
+            "source-passage-delete",
+            "card-3",
+            "passage-1",
+            "paper-1",
+            "space-1",
+            "analysis-run-1",
+        )
+        conn.execute("DELETE FROM passages WHERE id = ?", ("passage-1",))
+        assert (
             conn.execute(
-                """
-                INSERT INTO knowledge_card_sources (
-                    id, card_id, passage_id, paper_id, space_id
-                )
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                ("source-duplicate", "card-1", "passage-1", "paper-1", "space-1"),
-            )
+                "SELECT COUNT(*) FROM knowledge_card_sources WHERE id = ?",
+                ("source-passage-delete",),
+            ).fetchone()[0]
+            == 0
+        )
 
-        with pytest.raises(sqlite3.IntegrityError):
+        insert_passage(conn, "passage-3", "paper-1", "space-1")
+        insert_card_source(
+            conn,
+            "source-run-delete",
+            "card-3",
+            "passage-3",
+            "paper-1",
+            "space-1",
+            "analysis-run-1",
+        )
+        conn.execute("DELETE FROM analysis_runs WHERE id = ?", ("analysis-run-1",))
+        run_deleted_source = conn.execute(
+            """
+            SELECT analysis_run_id
+            FROM knowledge_card_sources
+            WHERE id = ?
+            """,
+            ("source-run-delete",),
+        ).fetchone()
+        assert run_deleted_source["analysis_run_id"] is None
+
+        insert_analysis_run(conn, "analysis-run-3", "paper-1", "space-1")
+        insert_card(conn, "card-4", "paper-1", "space-1")
+        insert_passage(conn, "passage-4", "paper-1", "space-1")
+        insert_card_source(
+            conn,
+            "source-paper-delete",
+            "card-4",
+            "passage-4",
+            "paper-1",
+            "space-1",
+            "analysis-run-3",
+        )
+        conn.commit()
+        conn.execute("PRAGMA defer_foreign_keys = ON")
+        conn.execute("BEGIN")
+        conn.execute("DELETE FROM papers WHERE id = ?", ("paper-1",))
+        assert (
             conn.execute(
-                """
-                INSERT INTO knowledge_card_sources (
-                    id, card_id, passage_id, paper_id, space_id
-                )
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                ("source-bad-space", "card-1", "passage-1", "paper-1", "space-2"),
-            )
+                "SELECT COUNT(*) FROM knowledge_card_sources WHERE id = ?",
+                ("source-paper-delete",),
+            ).fetchone()[0]
+            == 0
+        )
+        conn.rollback()
 
         conn.close()

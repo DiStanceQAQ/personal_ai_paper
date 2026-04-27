@@ -254,6 +254,10 @@ def _create_analysis_run_and_card_provenance_schema(conn: sqlite3.Connection) ->
         )
         """,
         """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_runs_id_paper_space_unique
+            ON analysis_runs(id, paper_id, space_id)
+        """,
+        """
         ALTER TABLE knowledge_cards
         ADD COLUMN created_by TEXT NOT NULL DEFAULT 'heuristic'
             CHECK(created_by IN ('user', 'heuristic', 'ai'))
@@ -277,6 +281,18 @@ def _create_analysis_run_and_card_provenance_schema(conn: sqlite3.Connection) ->
         ADD COLUMN quality_flags_json TEXT NOT NULL DEFAULT '[]'
         """,
         """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_cards_id_paper_space_unique
+            ON knowledge_cards(id, paper_id, space_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_knowledge_cards_analysis_run_id
+            ON knowledge_cards(analysis_run_id)
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_passages_id_paper_space_unique
+            ON passages(id, paper_id, space_id)
+        """,
+        """
         UPDATE knowledge_cards
         SET created_by = 'user'
         WHERE user_edited = 1
@@ -298,11 +314,11 @@ def _create_analysis_run_and_card_provenance_schema(conn: sqlite3.Connection) ->
             confidence REAL,
             metadata_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (card_id)
-                REFERENCES knowledge_cards(id)
+            FOREIGN KEY (card_id, paper_id, space_id)
+                REFERENCES knowledge_cards(id, paper_id, space_id)
                 ON DELETE CASCADE,
-            FOREIGN KEY (passage_id)
-                REFERENCES passages(id)
+            FOREIGN KEY (passage_id, paper_id, space_id)
+                REFERENCES passages(id, paper_id, space_id)
                 ON DELETE CASCADE,
             FOREIGN KEY (paper_id, space_id)
                 REFERENCES papers(id, space_id)
@@ -311,6 +327,42 @@ def _create_analysis_run_and_card_provenance_schema(conn: sqlite3.Connection) ->
                 REFERENCES analysis_runs(id)
                 ON DELETE SET NULL
         )
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_knowledge_card_sources_analysis_scope_insert
+        BEFORE INSERT ON knowledge_card_sources
+        WHEN NEW.analysis_run_id IS NOT NULL
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM analysis_runs
+                 WHERE id = NEW.analysis_run_id
+                   AND paper_id = NEW.paper_id
+                   AND space_id = NEW.space_id
+             )
+        BEGIN
+            SELECT RAISE(
+                ABORT,
+                'analysis_run_id must match source paper and space'
+            );
+        END
+        """,
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_knowledge_card_sources_analysis_scope_update
+        BEFORE UPDATE OF analysis_run_id, paper_id, space_id ON knowledge_card_sources
+        WHEN NEW.analysis_run_id IS NOT NULL
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM analysis_runs
+                 WHERE id = NEW.analysis_run_id
+                   AND paper_id = NEW.paper_id
+                   AND space_id = NEW.space_id
+             )
+        BEGIN
+            SELECT RAISE(
+                ABORT,
+                'analysis_run_id must match source paper and space'
+            );
+        END
         """,
         """
         CREATE INDEX IF NOT EXISTS idx_analysis_runs_paper_id

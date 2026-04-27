@@ -677,11 +677,11 @@ git commit -m "feat: extract source-grounded AI card batches"
 - Modify: `analysis_pipeline.py`
 - Test: `tests/test_analysis_pipeline_dedup.py`
 
-- [ ] Deduplicate cards by normalized summary similarity, same card type, and overlapping source passage IDs.
-- [ ] Prefer higher confidence, stronger source coverage, and cards from method/result/limitation sections.
-- [ ] Limit final AI-generated cards to 20 by default while keeping rejected and overflow diagnostics in `analysis_runs`.
-- [ ] Run: `pytest tests/test_analysis_pipeline_dedup.py -q`
-- [ ] Expected: PASS; duplicate method/result cards collapse deterministically.
+- [x] Deduplicate cards by normalized summary similarity, same card type, and overlapping source passage IDs.
+- [x] Prefer higher confidence, stronger source coverage, and cards from method/result/limitation sections.
+- [x] Limit final AI-generated cards to 20 by default while keeping rejected and overflow diagnostics in `analysis_runs`.
+- [x] Run: `pytest tests/test_analysis_pipeline_dedup.py -q`
+- [x] Expected: PASS; duplicate method/result cards collapse deterministically.
 - [ ] Commit:
 
 ```bash

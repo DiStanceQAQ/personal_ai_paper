@@ -37,6 +37,8 @@ SECTION_NUMBER_RE = re.compile(
     re.IGNORECASE,
 )
 DEFAULT_ANALYSIS_BATCH_TOKEN_BUDGET = 3500
+DEFAULT_FINAL_AI_CARD_LIMIT = 20
+SUMMARY_DUPLICATE_SIMILARITY_THRESHOLD = 0.75
 SECTION_PRIORITIES: dict[str, int] = {
     "abstract": 0,
     "introduction": 1,
@@ -55,6 +57,29 @@ REFERENCE_LABELS = {
     "works cited",
     "literature cited",
 }
+KEY_RANKING_SECTIONS = {"method", "result", "limitation"}
+SUMMARY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "in",
+    "is",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "to",
+    "with",
+}
+SUMMARY_TOKEN_RE = re.compile(r"[a-z0-9]+(?:'[a-z0-9]+)?")
 
 
 @dataclass(frozen=True)
@@ -71,6 +96,15 @@ class AnalysisPassageBatch:
 
 
 @dataclass(frozen=True)
+class CardRankingResult:
+    """Final ranked AI cards plus diagnostics for analysis run persistence."""
+
+    cards: list[CardExtraction]
+    rejected_cards: list[RejectedCardDiagnostic]
+    diagnostics: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class _PreparedAnalysisPassage:
     passage: PipelineInput
     source_id: str
@@ -81,6 +115,16 @@ class _PreparedAnalysisPassage:
     priority: int
     position: int
     token_count: int
+
+
+@dataclass(frozen=True)
+class _RankedCardCandidate:
+    card: CardExtraction
+    original_index: int
+    normalized_summary: str
+    summary_tokens: frozenset[str]
+    source_ids: frozenset[str]
+    section_score: int
 
 
 def select_analysis_passage_batches(
@@ -579,6 +623,84 @@ async def extract_card_batches_stage(
     )
 
 
+def deduplicate_and_rank_cards_stage(
+    cards: Sequence[CardExtraction],
+    *,
+    rejected_cards: Sequence[RejectedCardDiagnostic] = (),
+    batches: Sequence[AnalysisPassageBatch] = (),
+    max_cards: int = DEFAULT_FINAL_AI_CARD_LIMIT,
+) -> CardRankingResult:
+    """Collapse duplicate AI cards and return the final ranked card set."""
+    if max_cards <= 0:
+        raise ValueError("max_cards must be positive")
+
+    source_section_scores = _source_section_scores(batches)
+    candidates = [
+        _ranked_card_candidate(
+            card,
+            original_index=index,
+            source_section_scores=source_section_scores,
+        )
+        for index, card in enumerate(cards)
+    ]
+    ranked_candidates = sorted(
+        candidates,
+        key=_card_rank_key,
+        reverse=True,
+    )
+
+    deduped_candidates: list[_RankedCardCandidate] = []
+    duplicate_diagnostics: list[dict[str, Any]] = []
+    for candidate in ranked_candidates:
+        duplicate_of = _matching_duplicate(candidate, deduped_candidates)
+        if duplicate_of is None:
+            deduped_candidates.append(candidate)
+            continue
+
+        duplicate_diagnostics.append(
+            {
+                "reason": "duplicate",
+                "similarity": _summary_similarity(
+                    candidate.summary_tokens,
+                    duplicate_of.summary_tokens,
+                ),
+                "kept": _card_candidate_diagnostic(duplicate_of),
+                "dropped": _card_candidate_diagnostic(candidate),
+            }
+        )
+
+    final_candidates = deduped_candidates[:max_cards]
+    overflow_candidates = deduped_candidates[max_cards:]
+    overflow_diagnostics = [
+        {
+            "reason": "overflow",
+            "rank": max_cards + overflow_index + 1,
+            "dropped": _card_candidate_diagnostic(candidate),
+        }
+        for overflow_index, candidate in enumerate(overflow_candidates)
+    ]
+
+    diagnostics: dict[str, Any] = {
+        "final_card_limit": max_cards,
+        "input_card_count": len(cards),
+        "ranked_card_count": len(final_candidates),
+        "duplicate_card_count": len(duplicate_diagnostics),
+        "overflow_card_count": len(overflow_diagnostics),
+        "rejected_card_count": len(rejected_cards),
+        "duplicate_cards": duplicate_diagnostics,
+        "overflow_cards": overflow_diagnostics,
+        "rejected_cards": [
+            _diagnostic_payload(diagnostic) for diagnostic in rejected_cards
+        ],
+    }
+
+    return CardRankingResult(
+        cards=[candidate.card for candidate in final_candidates],
+        rejected_cards=list(rejected_cards),
+        diagnostics=diagnostics,
+    )
+
+
 async def _call_card_batch_extraction(
     *,
     paper_id: str,
@@ -689,6 +811,138 @@ def _diagnostics_with_repair_error(
         )
         for diagnostic in diagnostics
     ]
+
+
+def _ranked_card_candidate(
+    card: CardExtraction,
+    *,
+    original_index: int,
+    source_section_scores: Mapping[str, int],
+) -> _RankedCardCandidate:
+    source_ids = frozenset(card.source_passage_ids)
+    section_score = 0
+    for source_id in source_ids:
+        section_score = max(section_score, source_section_scores.get(source_id, 0))
+    return _RankedCardCandidate(
+        card=card,
+        original_index=original_index,
+        normalized_summary=_normalized_summary(card.summary),
+        summary_tokens=frozenset(_summary_tokens(card.summary)),
+        source_ids=source_ids,
+        section_score=section_score,
+    )
+
+
+def _source_section_scores(
+    batches: Sequence[AnalysisPassageBatch],
+) -> dict[str, int]:
+    scores: dict[str, int] = {}
+    for batch in batches:
+        batch_score = _section_ranking_score(batch.passage_type)
+        for source_id in batch.source_passage_ids:
+            scores[source_id] = max(scores.get(source_id, 0), batch_score)
+
+        for passage in batch.passages:
+            data = _object_to_mapping(passage)
+            source_id = _optional_string(data, "id", "source_id")
+            if not source_id:
+                continue
+            section = _optional_string(data, "section")
+            heading_path = tuple(_heading_path_for_analysis(data, section))
+            passage_type = _analysis_passage_type(
+                _optional_string(data, "passage_type", "type"),
+                section,
+                heading_path,
+            )
+            passage_score = _section_ranking_score(passage_type)
+            scores[source_id] = max(scores.get(source_id, 0), passage_score)
+    return scores
+
+
+def _section_ranking_score(passage_type: str) -> int:
+    normalized_type = _analysis_passage_type(passage_type, "", ())
+    if normalized_type in KEY_RANKING_SECTIONS:
+        return 3
+    if normalized_type == "discussion":
+        return 2
+    if normalized_type in {"abstract", "introduction"}:
+        return 1
+    return 0
+
+
+def _card_rank_key(
+    candidate: _RankedCardCandidate,
+) -> tuple[float, int, int, int]:
+    return (
+        round(float(candidate.card.confidence), 6),
+        len(candidate.source_ids),
+        candidate.section_score,
+        -candidate.original_index,
+    )
+
+
+def _matching_duplicate(
+    candidate: _RankedCardCandidate,
+    kept_candidates: Sequence[_RankedCardCandidate],
+) -> _RankedCardCandidate | None:
+    for kept in kept_candidates:
+        if _cards_are_duplicates(candidate, kept):
+            return kept
+    return None
+
+
+def _cards_are_duplicates(
+    candidate: _RankedCardCandidate,
+    kept: _RankedCardCandidate,
+) -> bool:
+    if candidate.card.card_type != kept.card.card_type:
+        return False
+    if not candidate.source_ids.intersection(kept.source_ids):
+        return False
+    return (
+        _summary_similarity(candidate.summary_tokens, kept.summary_tokens)
+        >= SUMMARY_DUPLICATE_SIMILARITY_THRESHOLD
+    )
+
+
+def _summary_similarity(
+    left_tokens: frozenset[str],
+    right_tokens: frozenset[str],
+) -> float:
+    if not left_tokens or not right_tokens:
+        return 0.0
+    intersection_count = len(left_tokens.intersection(right_tokens))
+    union_count = len(left_tokens.union(right_tokens))
+    if union_count == 0:
+        return 0.0
+    return intersection_count / union_count
+
+
+def _normalized_summary(value: str) -> str:
+    return re.sub(r"[^a-z0-9']+", " ", _clean_text(value).casefold()).strip()
+
+
+def _summary_tokens(value: str) -> list[str]:
+    return [
+        token
+        for token in SUMMARY_TOKEN_RE.findall(_normalized_summary(value))
+        if token not in SUMMARY_STOPWORDS
+    ]
+
+
+def _card_candidate_diagnostic(
+    candidate: _RankedCardCandidate,
+) -> dict[str, Any]:
+    return {
+        "card_index": candidate.original_index,
+        "card_type": candidate.card.card_type,
+        "summary": candidate.card.summary,
+        "source_passage_ids": list(candidate.card.source_passage_ids),
+        "confidence": candidate.card.confidence,
+        "source_coverage": len(candidate.source_ids),
+        "section_score": candidate.section_score,
+        "normalized_summary": candidate.normalized_summary,
+    }
 
 
 class _SourceValue(BaseModel):
@@ -975,6 +1229,8 @@ def _dedupe_strings(values: Sequence[str]) -> list[str]:
 
 __all__ = [
     "AnalysisPassageBatch",
+    "CardRankingResult",
+    "deduplicate_and_rank_cards_stage",
     "extract_card_batches_stage",
     "extract_metadata_stage",
     "select_analysis_passage_batches",

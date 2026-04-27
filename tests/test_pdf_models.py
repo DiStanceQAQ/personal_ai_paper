@@ -215,6 +215,194 @@ def test_models_reject_empty_required_identity_fields(
         (
             ParseElement,
             {
+                "id": "   ",
+                "element_index": 0,
+                "element_type": "paragraph",
+                "extraction_method": "native_text",
+            },
+        ),
+        (ParseTable, {"id": "\t"}),
+        (ParseAsset, {"id": "   ", "asset_type": "figure"}),
+        (
+            ParseDocument,
+            {
+                "paper_id": "   ",
+                "space_id": "space-1",
+                "backend": "structured-parser",
+                "extraction_method": "native_text",
+                "quality": PdfQualityReport(),
+            },
+        ),
+        (
+            ParseDocument,
+            {
+                "paper_id": "paper-1",
+                "space_id": "   ",
+                "backend": "structured-parser",
+                "extraction_method": "native_text",
+                "quality": PdfQualityReport(),
+            },
+        ),
+        (ChunkCandidate, {"id": "   ", "element_ids": ["element-1"], "text": "text"}),
+        (ChunkCandidate, {"id": "chunk-1", "element_ids": ["   "], "text": "text"}),
+        (ChunkCandidate, {"id": "chunk-1", "element_ids": ["element-1"], "text": "   "}),
+        (
+            PassageRecord,
+            {
+                "id": "   ",
+                "paper_id": "paper-1",
+                "space_id": "space-1",
+                "original_text": "text",
+            },
+        ),
+        (
+            PassageRecord,
+            {
+                "id": "passage-1",
+                "paper_id": "   ",
+                "space_id": "space-1",
+                "original_text": "text",
+            },
+        ),
+        (
+            PassageRecord,
+            {
+                "id": "passage-1",
+                "paper_id": "paper-1",
+                "space_id": "   ",
+                "original_text": "text",
+            },
+        ),
+        (
+            PassageRecord,
+            {
+                "id": "passage-1",
+                "paper_id": "paper-1",
+                "space_id": "space-1",
+                "original_text": "   ",
+            },
+        ),
+        (
+            PassageRecord,
+            {
+                "id": "passage-1",
+                "paper_id": "paper-1",
+                "space_id": "space-1",
+                "original_text": "text",
+                "parse_run_id": "run-1",
+                "element_ids": ["   "],
+            },
+        ),
+    ],
+)
+def test_models_reject_blank_required_identity_and_text_fields(
+    model_cls: type[Any],
+    kwargs: dict[str, Any],
+) -> None:
+    """Required IDs, source IDs, and required text should reject blank strings."""
+    with pytest.raises(ValidationError):
+        model_cls(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("model_cls", "kwargs"),
+    [
+        (ParseTable, {"id": "table-1", "element_id": ""}),
+        (ParseAsset, {"id": "asset-1", "asset_type": "figure", "element_id": "   "}),
+        (
+            PassageRecord,
+            {
+                "id": "passage-1",
+                "paper_id": "paper-1",
+                "space_id": "space-1",
+                "original_text": "text",
+                "parse_run_id": "",
+                "element_ids": ["element-1"],
+            },
+        ),
+    ],
+)
+def test_models_reject_blank_optional_provenance_references(
+    model_cls: type[Any],
+    kwargs: dict[str, Any],
+) -> None:
+    """Optional provenance references should be None or non-blank strings."""
+    with pytest.raises(ValidationError):
+        model_cls(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("model_cls", "kwargs"),
+    [
+        (
+            ChunkCandidate,
+            {
+                "id": "chunk-1",
+                "element_ids": ["element-1", "element-1"],
+                "text": "text",
+            },
+        ),
+        (
+            PassageRecord,
+            {
+                "id": "passage-1",
+                "paper_id": "paper-1",
+                "space_id": "space-1",
+                "original_text": "text",
+                "parse_run_id": "run-1",
+                "element_ids": ["element-1", "element-1"],
+            },
+        ),
+    ],
+)
+def test_models_reject_duplicate_source_element_ids(
+    model_cls: type[Any],
+    kwargs: dict[str, Any],
+) -> None:
+    """Source element ID lists should not contain duplicates."""
+    with pytest.raises(ValidationError):
+        model_cls(**kwargs)
+
+
+def test_models_strip_non_blank_identity_and_provenance_strings() -> None:
+    """Non-blank identities should be normalized while preserving list order."""
+    chunk = ChunkCandidate(
+        id=" chunk-1 ",
+        element_ids=[" element-1 ", " element-2 "],
+        text=" chunk text ",
+    )
+    passage = PassageRecord(
+        id=" passage-1 ",
+        paper_id=" paper-1 ",
+        space_id=" space-1 ",
+        original_text=" passage text ",
+        parse_run_id=" run-1 ",
+        element_ids=[" element-1 ", " element-2 "],
+    )
+    table = ParseTable(id=" table-1 ", element_id=" element-1 ")
+    asset = ParseAsset(id=" asset-1 ", asset_type="figure", element_id=" element-2 ")
+
+    assert chunk.id == "chunk-1"
+    assert chunk.element_ids == ["element-1", "element-2"]
+    assert chunk.text == "chunk text"
+    assert passage.id == "passage-1"
+    assert passage.paper_id == "paper-1"
+    assert passage.space_id == "space-1"
+    assert passage.original_text == "passage text"
+    assert passage.parse_run_id == "run-1"
+    assert passage.element_ids == ["element-1", "element-2"]
+    assert table.id == "table-1"
+    assert table.element_id == "element-1"
+    assert asset.id == "asset-1"
+    assert asset.element_id == "element-2"
+
+
+@pytest.mark.parametrize(
+    ("model_cls", "kwargs"),
+    [
+        (
+            ParseElement,
+            {
                 "id": "element-1",
                 "element_index": 0,
                 "element_type": "paragraph",

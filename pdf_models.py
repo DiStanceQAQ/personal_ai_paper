@@ -4,7 +4,14 @@ import json
 import math
 from typing import Annotated, Any, Final, Literal, Self, TypeAlias
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 ElementType: TypeAlias = Literal[
     "title",
@@ -61,7 +68,11 @@ BBox: TypeAlias = Annotated[
     AfterValidator(_validate_bbox),
 ]
 
-NonEmptyString: TypeAlias = Annotated[str, Field(min_length=1)]
+NonBlankString: TypeAlias = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1),
+]
+NonEmptyString: TypeAlias = NonBlankString
 
 ELEMENT_TYPES: Final[tuple[ElementType, ...]] = (
     "title",
@@ -132,7 +143,7 @@ class PdfQualityReport(_ParserContractModel):
 class ParseElement(_ParserContractModel):
     """A single structured text or layout element extracted from a PDF."""
 
-    id: NonEmptyString
+    id: NonBlankString
     element_index: int = Field(ge=0)
     element_type: ElementType
     text: str = ""
@@ -146,8 +157,8 @@ class ParseElement(_ParserContractModel):
 class ParseTable(_ParserContractModel):
     """A normalized table extracted from a parsed document."""
 
-    id: NonEmptyString
-    element_id: str | None = None
+    id: NonBlankString
+    element_id: NonBlankString | None = None
     table_index: int = Field(default=0, ge=0)
     page_number: int = Field(default=0, ge=0)
     caption: str = ""
@@ -159,8 +170,8 @@ class ParseTable(_ParserContractModel):
 class ParseAsset(_ParserContractModel):
     """A non-text asset extracted from a parsed document."""
 
-    id: NonEmptyString
-    element_id: str | None = None
+    id: NonBlankString
+    element_id: NonBlankString | None = None
     asset_type: str
     page_number: int = Field(default=0, ge=0)
     uri: str = ""
@@ -171,8 +182,8 @@ class ParseAsset(_ParserContractModel):
 class ParseDocument(_ParserContractModel):
     """Complete structured parse output for a paper."""
 
-    paper_id: NonEmptyString
-    space_id: NonEmptyString
+    paper_id: NonBlankString
+    space_id: NonBlankString
     backend: str
     extraction_method: ExtractionMethod
     quality: PdfQualityReport
@@ -208,9 +219,9 @@ class ParseDocument(_ParserContractModel):
 class ChunkCandidate(_ParserContractModel):
     """Candidate passage chunk assembled from one or more parse elements."""
 
-    id: NonEmptyString
-    element_ids: list[NonEmptyString] = Field(min_length=1)
-    text: str = Field(min_length=1)
+    id: NonBlankString
+    element_ids: list[NonBlankString] = Field(min_length=1)
+    text: NonBlankString
     heading_path: list[str] = Field(default_factory=list)
     page_start: int = Field(default=0, ge=0)
     page_end: int = Field(default=0, ge=0)
@@ -223,6 +234,7 @@ class ChunkCandidate(_ParserContractModel):
     @model_validator(mode="after")
     def validate_page_range(self) -> Self:
         """Validate that the candidate page range is ordered."""
+        _reject_duplicate_ids("element", self.element_ids)
         if self.page_end < self.page_start:
             raise ValueError("page_end must be greater than or equal to page_start")
         return self
@@ -231,17 +243,17 @@ class ChunkCandidate(_ParserContractModel):
 class PassageRecord(_ParserContractModel):
     """Storage-ready passage row with structured parse provenance."""
 
-    id: NonEmptyString
-    paper_id: NonEmptyString
-    space_id: NonEmptyString
+    id: NonBlankString
+    paper_id: NonBlankString
+    space_id: NonBlankString
     section: str = ""
     page_number: int = Field(default=0, ge=0)
     paragraph_index: int = Field(default=0, ge=0)
-    original_text: NonEmptyString
+    original_text: NonBlankString
     parse_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     passage_type: PassageType = "body"
-    parse_run_id: str | None = None
-    element_ids: list[NonEmptyString] = Field(default_factory=list)
+    parse_run_id: NonBlankString | None = None
+    element_ids: list[NonBlankString] = Field(default_factory=list)
     heading_path: list[str] = Field(default_factory=list)
     bbox: BBox | None = None
     token_count: int | None = Field(default=None, ge=0)
@@ -255,6 +267,7 @@ class PassageRecord(_ParserContractModel):
     @model_validator(mode="after")
     def validate_source_grounding(self) -> Self:
         """Validate structured provenance has source element IDs."""
+        _reject_duplicate_ids("element", self.element_ids)
         if self.parse_run_id is not None and not self.element_ids:
             raise ValueError("element_ids must be set when parse_run_id is set")
         return self
@@ -301,6 +314,7 @@ __all__ = [
     "BBox",
     "ELEMENT_TYPES",
     "EXTRACTION_METHODS",
+    "NonBlankString",
     "NonEmptyString",
     "PASSAGE_TYPES",
     "PassageType",

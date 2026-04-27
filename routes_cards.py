@@ -83,9 +83,18 @@ async def create_card(
 
         conn.execute(
             """INSERT INTO knowledge_cards
-               (id, space_id, paper_id, source_passage_id, card_type, summary, confidence)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (card_id, space_id, paper_id, source_passage_id, card_type, summary, confidence),
+               (id, space_id, paper_id, source_passage_id, card_type, summary,
+                confidence, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'user')""",
+            (
+                card_id,
+                space_id,
+                paper_id,
+                source_passage_id,
+                card_type,
+                summary,
+                confidence,
+            ),
         )
         conn.commit()
 
@@ -178,6 +187,7 @@ async def update_card(
 
         if updates:
             updates.append("user_edited = 1")
+            updates.append("created_by = 'user'")
             updates.append("updated_at = datetime('now')")
             params.append(card_id)
             conn.execute(

@@ -6,11 +6,18 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import json
 import re
+import sqlite3
+import uuid
 from typing import Any, TypeAlias
 
 from pydantic import BaseModel, ValidationError
 
-from analysis_models import CardExtraction, CardExtractionBatch, PaperMetadataExtraction
+from analysis_models import (
+    CardExtraction,
+    CardExtractionBatch,
+    MergedAnalysisResult,
+    PaperMetadataExtraction,
+)
 from analysis_prompts import (
     build_card_batch_extraction_prompt,
     build_metadata_extraction_prompt,
@@ -701,6 +708,160 @@ def deduplicate_and_rank_cards_stage(
     )
 
 
+def persist_analysis_result(
+    conn: sqlite3.Connection,
+    result: MergedAnalysisResult,
+) -> str:
+    """Persist one AI analysis run and replace only prior unedited AI cards."""
+    analysis_run_id = f"analysis-run-{uuid.uuid4()}"
+    savepoint = f"persist_analysis_result_{uuid.uuid4().hex}"
+    conn.execute(f"SAVEPOINT {savepoint}")
+    try:
+        _insert_analysis_run(conn, analysis_run_id, result)
+        conn.execute(
+            """
+            DELETE FROM knowledge_cards
+            WHERE paper_id = ?
+              AND space_id = ?
+              AND created_by = 'ai'
+              AND user_edited != 1
+            """,
+            (result.paper_id, result.space_id),
+        )
+        for card in result.cards:
+            card_id = f"ai-card-{uuid.uuid4()}"
+            _insert_ai_card(conn, analysis_run_id, card_id, result, card)
+            _insert_ai_card_sources(conn, analysis_run_id, card_id, result, card)
+
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+    except Exception:
+        conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        raise
+
+    return analysis_run_id
+
+
+def _analysis_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _insert_analysis_run(
+    conn: sqlite3.Connection,
+    analysis_run_id: str,
+    result: MergedAnalysisResult,
+) -> None:
+    accepted_card_count = result.quality.accepted_card_count
+    if accepted_card_count == 0 and result.cards:
+        accepted_card_count = len(result.cards)
+    conn.execute(
+        """
+        INSERT INTO analysis_runs (
+            id, paper_id, space_id, status, model, provider, extractor_version,
+            accepted_card_count, rejected_card_count, metadata_json,
+            warnings_json, diagnostics_json, completed_at
+        )
+        VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        """,
+        (
+            analysis_run_id,
+            result.paper_id,
+            result.space_id,
+            result.model,
+            result.provider,
+            result.extractor_version,
+            accepted_card_count,
+            result.quality.rejected_card_count,
+            _analysis_json(
+                {
+                    "paper_metadata": result.metadata.model_dump(),
+                    "metadata_extra": result.metadata_extra,
+                    "quality": {
+                        "source_coverage": result.quality.source_coverage,
+                        "validation_errors": result.quality.validation_errors,
+                        "quality_flags": result.quality.quality_flags,
+                    },
+                }
+            ),
+            _analysis_json(result.quality.warnings),
+            _analysis_json(result.quality.diagnostics),
+        ),
+    )
+
+
+def _insert_ai_card(
+    conn: sqlite3.Connection,
+    analysis_run_id: str,
+    card_id: str,
+    result: MergedAnalysisResult,
+    card: CardExtraction,
+) -> None:
+    evidence_payload = {
+        "source_passage_ids": list(card.source_passage_ids),
+        "evidence_quote": card.evidence_quote,
+        "reasoning_summary": card.reasoning_summary,
+        "metadata": card.metadata,
+    }
+    conn.execute(
+        """
+        INSERT INTO knowledge_cards (
+            id, space_id, paper_id, source_passage_id, card_type, summary,
+            confidence, user_edited, created_by, extractor_version,
+            analysis_run_id, evidence_json, quality_flags_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'ai', ?, ?, ?, ?)
+        """,
+        (
+            card_id,
+            result.space_id,
+            result.paper_id,
+            card.source_passage_ids[0],
+            card.card_type,
+            card.summary,
+            card.confidence,
+            result.extractor_version,
+            analysis_run_id,
+            _analysis_json(evidence_payload),
+            _analysis_json(card.quality_flags),
+        ),
+    )
+
+
+def _insert_ai_card_sources(
+    conn: sqlite3.Connection,
+    analysis_run_id: str,
+    card_id: str,
+    result: MergedAnalysisResult,
+    card: CardExtraction,
+) -> None:
+    for source_index, passage_id in enumerate(card.source_passage_ids):
+        conn.execute(
+            """
+            INSERT INTO knowledge_card_sources (
+                id, card_id, passage_id, paper_id, space_id, analysis_run_id,
+                evidence_quote, confidence, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"card-source-{uuid.uuid4()}",
+                card_id,
+                passage_id,
+                result.paper_id,
+                result.space_id,
+                analysis_run_id,
+                card.evidence_quote,
+                card.confidence,
+                _analysis_json(
+                    {
+                        "source_index": source_index,
+                        "card_metadata": card.metadata,
+                    }
+                ),
+            ),
+        )
+
+
 async def _call_card_batch_extraction(
     *,
     paper_id: str,
@@ -1233,5 +1394,6 @@ __all__ = [
     "deduplicate_and_rank_cards_stage",
     "extract_card_batches_stage",
     "extract_metadata_stage",
+    "persist_analysis_result",
     "select_analysis_passage_batches",
 ]

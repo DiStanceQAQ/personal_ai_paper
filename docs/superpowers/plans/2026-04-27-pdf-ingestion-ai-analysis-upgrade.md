@@ -696,13 +696,13 @@ git commit -m "feat: deduplicate and rank extracted AI cards"
 - Modify: `routes_cards.py`
 - Test: `tests/test_analysis_persistence.py`
 
-- [ ] Create an `analysis_run` per AI run.
-- [ ] Replace only prior cards where `created_by='ai'` and `paper_id` matches.
-- [ ] Preserve cards with `created_by='user'`, `user_edited=1`, or `created_by='heuristic'`.
-- [ ] Fill `knowledge_card_sources` with all source passage IDs.
-- [ ] Run: `pytest tests/test_analysis_persistence.py tests/test_routes_cards.py -q`
-- [ ] Expected: PASS; manually edited cards survive AI re-analysis.
-- [ ] Commit:
+- [x] Create an `analysis_run` per AI run.
+- [x] Replace only prior cards where `created_by='ai'` and `paper_id` matches.
+- [x] Preserve cards with `created_by='user'`, `user_edited=1`, or `created_by='heuristic'`.
+- [x] Fill `knowledge_card_sources` with all source passage IDs.
+- [x] Run: `pytest tests/test_analysis_persistence.py tests/test_routes_cards.py -q`
+- [x] Expected: PASS; manually edited cards survive AI re-analysis.
+- [x] Commit:
 
 ```bash
 git add analysis_pipeline.py routes_cards.py tests/test_analysis_persistence.py tests/test_routes_cards.py

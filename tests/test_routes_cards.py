@@ -24,7 +24,15 @@ PRIOR_CARD_FIELDS = {
     "updated_at",
 }
 
-PROVENANCE_DEFAULTS = {
+MANUAL_PROVENANCE = {
+    "created_by": "user",
+    "extractor_version": "",
+    "analysis_run_id": None,
+    "evidence_json": "{}",
+    "quality_flags_json": "[]",
+}
+
+HEURISTIC_PROVENANCE = {
     "created_by": "heuristic",
     "extractor_version": "",
     "analysis_run_id": None,
@@ -38,9 +46,15 @@ def assert_prior_card_fields(card: dict[str, object]) -> None:
     assert PRIOR_CARD_FIELDS <= card.keys()
 
 
-def assert_provenance_defaults(card: dict[str, object]) -> None:
-    """Legacy card inserts use migration-owned provenance defaults."""
-    for key, expected_value in PROVENANCE_DEFAULTS.items():
+def assert_manual_provenance(card: dict[str, object]) -> None:
+    """Manual card writes are marked as user-owned for AI replacement safety."""
+    for key, expected_value in MANUAL_PROVENANCE.items():
+        assert card[key] == expected_value
+
+
+def assert_heuristic_provenance(card: dict[str, object]) -> None:
+    """Heuristic extraction keeps its non-AI generated provenance."""
+    for key, expected_value in HEURISTIC_PROVENANCE.items():
         assert card[key] == expected_value
 
 
@@ -92,7 +106,7 @@ async def test_create_and_get_card(client: AsyncClient, setup_space_and_paper: t
     assert resp.status_code == 200
     card = resp.json()
     assert_prior_card_fields(card)
-    assert_provenance_defaults(card)
+    assert_manual_provenance(card)
     assert card["card_type"] == "Method"
     assert card["paper_id"] == paper_id
 
@@ -100,7 +114,7 @@ async def test_create_and_get_card(client: AsyncClient, setup_space_and_paper: t
     assert resp.status_code == 200
     fetched_card = resp.json()
     assert_prior_card_fields(fetched_card)
-    assert_provenance_defaults(fetched_card)
+    assert_manual_provenance(fetched_card)
 
 
 @pytest.mark.asyncio
@@ -115,7 +129,7 @@ async def test_list_cards(client: AsyncClient, setup_space_and_paper: tuple[str,
     assert len(cards) == 2
     for card in cards:
         assert_prior_card_fields(card)
-        assert_provenance_defaults(card)
+        assert_manual_provenance(card)
 
 
 @pytest.mark.asyncio
@@ -128,7 +142,7 @@ async def test_update_card(client: AsyncClient, setup_space_and_paper: tuple[str
     assert resp.status_code == 200
     card = resp.json()
     assert_prior_card_fields(card)
-    assert_provenance_defaults(card)
+    assert_manual_provenance(card)
     assert card["summary"] == "New"
     assert card["user_edited"] == 1
 
@@ -245,4 +259,4 @@ async def test_extract_cards_returns_heuristic_metadata(
     assert cards
     for card in cards:
         assert_prior_card_fields(card)
-        assert_provenance_defaults(card)
+        assert_heuristic_provenance(card)

@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 import pymupdf
+import parser
 
 from parser import (
     _guess_passage_type,
@@ -108,3 +109,33 @@ def test_extract_passages_nonexistent_file() -> None:
         Path("/nonexistent/file.pdf"), "paper-1", "space-1"
     )
     assert passages == []
+
+
+def test_extract_passages_delegates_to_legacy_backend(monkeypatch) -> None:
+    """Parser compatibility wrapper should delegate extraction to the legacy backend."""
+    calls = []
+    expected = [
+        {
+            "id": "passage-1",
+            "paper_id": "paper-1",
+            "space_id": "space-1",
+            "section": "body",
+            "page_number": 1,
+            "paragraph_index": 0,
+            "original_text": "Delegated passage text.",
+            "parse_confidence": 0.9,
+            "passage_type": "body",
+        }
+    ]
+
+    class FakeLegacyBackend:
+        def extract_passages(self, file_path: Path, paper_id: str, space_id: str):
+            calls.append((file_path, paper_id, space_id))
+            return expected
+
+    monkeypatch.setattr(parser, "LegacyPyMuPDFBackend", FakeLegacyBackend)
+
+    result = parser.extract_passages_from_pdf(Path("paper.pdf"), "paper-1", "space-1")
+
+    assert result == expected
+    assert calls == [(Path("paper.pdf"), "paper-1", "space-1")]

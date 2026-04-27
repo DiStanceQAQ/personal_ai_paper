@@ -38,6 +38,7 @@ py-modules = [
     "mcp_server",
     "parser",
     "pdf_backend_base",
+    "pdf_backend_legacy",
     "pdf_backend_pymupdf4llm",
     "pdf_models",
     "pdf_profile",

@@ -7,8 +7,10 @@ import pymupdf
 
 def _save(doc: pymupdf.Document, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    doc.save(str(path))
-    doc.close()
+    try:
+        doc.save(str(path))
+    finally:
+        doc.close()
     return path
 
 

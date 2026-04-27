@@ -23,7 +23,7 @@ def test_simple_academic_pdf_contains_expected_sections(tmp_path: Path) -> None:
     pdf_path = simple_academic_pdf(tmp_path / "simple.pdf")
 
     with pymupdf.open(pdf_path) as doc:
-        assert doc.page_count >= 1
+        assert doc.page_count == 1
         text = "\n".join(page.get_text() for page in doc)
 
     for heading in ("Abstract", "Introduction", "Method", "Results"):
@@ -35,7 +35,7 @@ def test_two_column_pdf_extracts_text_from_both_columns(tmp_path: Path) -> None:
     pdf_path = two_column_pdf(tmp_path / "two-column.pdf")
 
     with pymupdf.open(pdf_path) as doc:
-        assert doc.page_count >= 1
+        assert doc.page_count == 1
         page = doc[0]
         text = page.get_text()
         words = page.get_text("words")
@@ -49,7 +49,7 @@ def test_table_pdf_contains_header_terms_and_grid_drawing(tmp_path: Path) -> Non
     pdf_path = table_pdf(tmp_path / "table.pdf")
 
     with pymupdf.open(pdf_path) as doc:
-        assert doc.page_count >= 1
+        assert doc.page_count == 1
         page = doc[0]
         text = page.get_text()
         drawings = page.get_drawings()
@@ -63,7 +63,7 @@ def test_image_only_pdf_has_image_without_selectable_text(tmp_path: Path) -> Non
     pdf_path = image_only_pdf(tmp_path / "image-only.pdf")
 
     with pymupdf.open(pdf_path) as doc:
-        assert doc.page_count >= 1
+        assert doc.page_count == 1
         page = doc[0]
         assert page.get_text().strip() == ""
         assert page.get_images(full=True) or page.get_drawings()
@@ -87,7 +87,7 @@ def test_long_section_pdf_has_multiple_pages_and_substantial_text(
 
     with pymupdf.open(pdf_path) as doc:
         text = "\n".join(page.get_text() for page in doc)
-        assert doc.page_count >= 2
+        assert doc.page_count == 3
 
     assert text.count("Long Evaluation Section") >= 2
     assert len(text) > 4_000

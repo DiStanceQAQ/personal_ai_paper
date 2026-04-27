@@ -623,12 +623,12 @@ git commit -m "feat: extract scholarly metadata with source priority"
 - Modify: `analysis_pipeline.py`
 - Test: `tests/test_analysis_pipeline_selection.py`
 
-- [ ] Select passages from the full paper, not just the first 60.
-- [ ] Group by heading path and passage type; prioritize abstract, introduction, method, result, discussion, limitation; exclude references unless analyzing citations.
-- [ ] Cap each LLM request by token budget using the same tokenizer helper as `pdf_chunker.py`.
-- [ ] Run: `pytest tests/test_analysis_pipeline_selection.py -q`
-- [ ] Expected: PASS; long fixture includes late result/limitation sections in selected batches.
-- [ ] Commit:
+- [x] Select passages from the full paper, not just the first 60.
+- [x] Group by heading path and passage type; prioritize abstract, introduction, method, result, discussion, limitation; exclude references unless analyzing citations.
+- [x] Cap each LLM request by token budget using the same tokenizer helper as `pdf_chunker.py`.
+- [x] Run: `pytest tests/test_analysis_pipeline_selection.py -q`
+- [x] Expected: PASS; long fixture includes late result/limitation sections in selected batches.
+- [x] Commit:
 
 ```bash
 git add analysis_pipeline.py tests/test_analysis_pipeline_selection.py

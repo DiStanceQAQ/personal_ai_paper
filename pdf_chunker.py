@@ -145,6 +145,14 @@ class _TokenEstimator:
         return max(len(words), char_estimate)
 
 
+_DEFAULT_TOKEN_ESTIMATOR = _TokenEstimator()
+
+
+def count_text_tokens(text: str) -> int:
+    """Count text tokens with the same estimator used for PDF chunking."""
+    return _DEFAULT_TOKEN_ESTIMATOR.count(text)
+
+
 def _is_searchable_body_element(element: ParseElement) -> bool:
     if element.element_type in _IGNORED_ELEMENT_TYPES:
         return False
@@ -783,4 +791,4 @@ def _passage_type_for_heading(heading_path: Sequence[str]) -> PassageType:
     return "body"
 
 
-__all__ = ["chunk_parse_document"]
+__all__ = ["chunk_parse_document", "count_text_tokens"]

@@ -117,7 +117,7 @@ def test_pyproject_declares_grobid_module() -> None:
 
 
 def test_is_alive_returns_true_for_grobid_status_ok() -> None:
-    from pdf_backend_grobid import GrobidClient
+    from paper_engine.pdf.backends.grobid import GrobidClient
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
@@ -133,7 +133,7 @@ def test_is_alive_returns_true_for_grobid_status_ok() -> None:
 
 
 def test_is_alive_returns_false_for_down_or_unreachable_service() -> None:
-    from pdf_backend_grobid import GrobidClient
+    from paper_engine.pdf.backends.grobid import GrobidClient
 
     down_client = GrobidClient(
         "http://grobid.test",
@@ -155,7 +155,7 @@ def test_is_alive_returns_false_for_down_or_unreachable_service() -> None:
 
 
 def test_process_header_posts_pdf_and_extracts_metadata(tmp_path: Path) -> None:
-    from pdf_backend_grobid import GrobidClient
+    from paper_engine.pdf.backends.grobid import GrobidClient
 
     pdf_path = tmp_path / "paper.pdf"
     pdf_path.write_bytes(b"%PDF-1.7\n")
@@ -184,7 +184,7 @@ def test_process_header_posts_pdf_and_extracts_metadata(tmp_path: Path) -> None:
 
 
 def test_process_header_falls_back_to_analytic_authors(tmp_path: Path) -> None:
-    from pdf_backend_grobid import GrobidClient
+    from paper_engine.pdf.backends.grobid import GrobidClient
 
     pdf_path = tmp_path / "paper.pdf"
     pdf_path.write_bytes(b"%PDF-1.7\n")
@@ -235,7 +235,7 @@ def test_process_header_falls_back_to_analytic_authors(tmp_path: Path) -> None:
 
 
 def test_process_fulltext_extracts_sections_references_and_raw_tei(tmp_path: Path) -> None:
-    from pdf_backend_grobid import GrobidClient
+    from paper_engine.pdf.backends.grobid import GrobidClient
 
     pdf_path = tmp_path / "paper.pdf"
     pdf_path.write_bytes(b"%PDF-1.7\n")
@@ -280,7 +280,7 @@ def test_process_fulltext_extracts_sections_references_and_raw_tei(tmp_path: Pat
 
 
 def test_fulltext_reference_falls_back_to_monograph_fields() -> None:
-    from pdf_backend_grobid import parse_grobid_fulltext
+    from paper_engine.pdf.backends.grobid import parse_grobid_fulltext
 
     tei = """<?xml version="1.0" encoding="UTF-8"?>
 <TEI xmlns="http://www.tei-c.org/ns/1.0">
@@ -325,7 +325,7 @@ def test_fulltext_reference_falls_back_to_monograph_fields() -> None:
 
 
 def test_fulltext_nested_sections_do_not_duplicate_child_paragraphs() -> None:
-    from pdf_backend_grobid import parse_grobid_fulltext
+    from paper_engine.pdf.backends.grobid import parse_grobid_fulltext
 
     tei = """<?xml version="1.0" encoding="UTF-8"?>
 <TEI xmlns="http://www.tei-c.org/ns/1.0">
@@ -361,7 +361,7 @@ def test_fulltext_nested_sections_do_not_duplicate_child_paragraphs() -> None:
 
 
 def test_process_header_wraps_http_failures(tmp_path: Path) -> None:
-    from pdf_backend_grobid import GrobidClient, GrobidClientError
+    from paper_engine.pdf.backends.grobid import GrobidClient, GrobidClientError
 
     pdf_path = tmp_path / "paper.pdf"
     pdf_path.write_bytes(b"%PDF-1.7\n")
@@ -379,8 +379,8 @@ def test_process_header_wraps_http_failures(tmp_path: Path) -> None:
 def test_get_configured_grobid_client_uses_optional_app_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import pdf_backend_grobid
-    from pdf_backend_grobid import GrobidClient, get_configured_grobid_client
+    import paper_engine.pdf.backends.grobid as pdf_backend_grobid
+    from paper_engine.pdf.backends.grobid import GrobidClient, get_configured_grobid_client
 
     def connection_with_value(value: str | None) -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
@@ -418,8 +418,8 @@ def test_get_configured_grobid_client_uses_optional_app_state(
 def test_get_configured_grobid_client_treats_missing_app_state_as_unconfigured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import pdf_backend_grobid
-    from pdf_backend_grobid import get_configured_grobid_client
+    import paper_engine.pdf.backends.grobid as pdf_backend_grobid
+    from paper_engine.pdf.backends.grobid import get_configured_grobid_client
 
     def connection_without_app_state() -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")

@@ -3,7 +3,7 @@
 from typing import Any
 
 import analysis_pipeline
-from pdf_chunker import count_text_tokens
+from paper_engine.pdf.chunking import count_text_tokens
 
 
 def _passage(

@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from pdf_models import ParseDocument, PdfQualityReport
+from paper_engine.pdf.models import ParseDocument, PdfQualityReport
 
 
 @runtime_checkable

@@ -12,12 +12,12 @@ from typing import Any
 import httpx
 import pytest
 
-from pdf_backend_base import ParserBackendError, ParserBackendUnavailable
-from pdf_models import PdfQualityReport
+from paper_engine.pdf.backends.base import ParserBackendError, ParserBackendUnavailable
+from paper_engine.pdf.models import PdfQualityReport
 
 
 def _backend_module() -> Any:
-    return importlib.import_module("pdf_backend_llamaparse")
+    return importlib.import_module("paper_engine.pdf.backends.llamaparse")
 
 
 def _quality() -> PdfQualityReport:

@@ -8,17 +8,17 @@ from pathlib import Path
 from typing import Any, Callable, Final, cast
 
 from paper_engine.storage.database import get_connection
-from pdf_backend_base import (
+from paper_engine.pdf.backends.base import (
     ParserBackendError,
     ParserBackendUnavailable,
     PdfParserBackend,
 )
-from pdf_backend_docling import DoclingBackend
-from pdf_backend_grobid import GrobidClient, get_configured_grobid_client
-from pdf_backend_legacy import LegacyPyMuPDFBackend
-from pdf_backend_llamaparse import get_configured_llamaparse_backend
-from pdf_backend_pymupdf4llm import PyMuPDF4LLMBackend
-from pdf_models import ParseDocument, PdfQualityReport
+from paper_engine.pdf.backends.docling import DoclingBackend
+from paper_engine.pdf.backends.grobid import GrobidClient, get_configured_grobid_client
+from paper_engine.pdf.backends.legacy import LegacyPyMuPDFBackend
+from paper_engine.pdf.backends.llamaparse import get_configured_llamaparse_backend
+from paper_engine.pdf.backends.pymupdf4llm import PyMuPDF4LLMBackend
+from paper_engine.pdf.models import ParseDocument, PdfQualityReport
 
 
 FORCED_BACKEND_KEY: Final = "pdf_forced_backend"
@@ -285,7 +285,7 @@ def get_forced_backend_setting() -> str:
 
 def inspect_pdf(file_path: Path | str) -> PdfQualityReport:
     """Inspect PDF quality lazily so router imports do not require PyMuPDF."""
-    from pdf_profile import inspect_pdf as _inspect_pdf
+    from paper_engine.pdf.profile import inspect_pdf as _inspect_pdf
 
     return _inspect_pdf(Path(file_path))
 

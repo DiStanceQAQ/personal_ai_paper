@@ -100,9 +100,9 @@ def test_local_pymupdf4llm_route_stays_within_20_page_budget(
     """Budget: a 20-page native-text PDF should inspect, parse, and chunk under 15s."""
     _skip_if_performance_budget_is_unavailable()
     _suppress_pymupdf_import_warnings()
-    from pdf_chunker import chunk_parse_document
-    from pdf_profile import inspect_pdf
-    from pdf_router import PdfBackendRouter
+    from paper_engine.pdf.chunking import chunk_parse_document
+    from paper_engine.pdf.profile import inspect_pdf
+    from paper_engine.pdf.router import PdfBackendRouter
 
     pdf_path = _twenty_page_pdf(tmp_path / "twenty-page-performance.pdf")
 

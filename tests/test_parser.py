@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pymupdf
 import pytest
-import parser
+import paper_engine.pdf.compat as parser
 
-from pdf_backend_base import ParserBackendError
-from parser import (
+from paper_engine.pdf.backends.base import ParserBackendError
+from paper_engine.pdf.compat import (
     _guess_passage_type,
     _guess_section,
     _split_paragraphs,

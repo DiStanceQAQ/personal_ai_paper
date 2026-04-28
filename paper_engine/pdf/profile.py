@@ -9,7 +9,7 @@ from typing import Any
 
 import pymupdf
 
-from pdf_models import PdfQualityReport
+from paper_engine.pdf.models import PdfQualityReport
 
 _MIN_NATIVE_TEXT_CHARS = 20
 _MIN_NATIVE_WORDS = 3

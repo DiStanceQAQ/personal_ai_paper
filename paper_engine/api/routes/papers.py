@@ -10,9 +10,9 @@ from fastapi import APIRouter, Body, HTTPException, Query, UploadFile
 
 from paper_engine.core import config
 from paper_engine.storage.database import get_connection
-from pdf_backend_base import ParserBackendError
-from pdf_persistence import embed_passages_for_parse_run
-from parser import (
+from paper_engine.pdf.backends.base import ParserBackendError
+from paper_engine.pdf.persistence import embed_passages_for_parse_run
+from paper_engine.pdf.compat import (
     chunk_parse_document,
     inspect_pdf,
     persist_parse_result,

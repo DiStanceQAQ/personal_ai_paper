@@ -11,12 +11,12 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-import pdf_persistence
+import paper_engine.pdf.persistence as pdf_persistence
 import paper_engine.api.routes.papers as routes_papers
 from paper_engine.storage.database import get_connection, init_db
 from embeddings import EmbeddingConfig, EmbeddingProviderError
 from main import app
-from pdf_models import (
+from paper_engine.pdf.models import (
     ParseDocument,
     ParseElement,
     PassageRecord,

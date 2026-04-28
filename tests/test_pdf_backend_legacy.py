@@ -9,10 +9,10 @@ from typing import Any
 import pymupdf
 import pytest
 
-from pdf_backend_base import ParserBackendError
-from pdf_backend_legacy import LegacyPyMuPDFBackend, _normalize_table_cell
-from pdf_chunker import chunk_parse_document
-from pdf_models import ParseDocument, PdfQualityReport
+from paper_engine.pdf.backends.base import ParserBackendError
+from paper_engine.pdf.backends.legacy import LegacyPyMuPDFBackend, _normalize_table_cell
+from paper_engine.pdf.chunking import chunk_parse_document
+from paper_engine.pdf.models import ParseDocument, PdfQualityReport
 from tests.fixtures.pdf_factory import table_pdf
 
 
@@ -161,7 +161,7 @@ def test_backend_invalid_pdf_raises_parser_backend_error(tmp_path: Path) -> None
 
 
 def test_extract_passages_keeps_invalid_pdf_compatibility(tmp_path: Path) -> None:
-    from parser import extract_passages_from_pdf
+    from paper_engine.pdf.compat import extract_passages_from_pdf
 
     bad_path = tmp_path / "bad.pdf"
     bad_path.write_text("not a pdf")

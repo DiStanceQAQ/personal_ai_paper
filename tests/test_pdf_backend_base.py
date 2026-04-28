@@ -1,11 +1,11 @@
 from pathlib import Path
 
-from pdf_backend_base import (
+from paper_engine.pdf.backends.base import (
     ParserBackendError,
     ParserBackendUnavailable,
     PdfParserBackend,
 )
-from pdf_models import ParseDocument, PdfQualityReport
+from paper_engine.pdf.models import ParseDocument, PdfQualityReport
 
 
 class WorkingBackend:

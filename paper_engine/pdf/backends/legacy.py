@@ -9,8 +9,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from pdf_backend_base import ParserBackendError, ParserBackendUnavailable
-from pdf_models import ParseDocument, ParseElement, ParseTable, PdfQualityReport
+from paper_engine.pdf.backends.base import ParserBackendError, ParserBackendUnavailable
+from paper_engine.pdf.models import ParseDocument, ParseElement, ParseTable, PdfQualityReport
 
 
 _BACKEND_NAME = "legacy-pymupdf"

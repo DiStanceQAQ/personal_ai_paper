@@ -10,7 +10,7 @@ import re
 from collections.abc import Iterable, Sequence
 from typing import Any, cast
 
-from pdf_models import (
+from paper_engine.pdf.models import (
     BBox,
     ParseDocument,
     ParseElement,

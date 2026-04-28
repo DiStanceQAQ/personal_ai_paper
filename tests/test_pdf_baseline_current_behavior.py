@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pymupdf
 
-from parser import extract_passages_from_pdf
+from paper_engine.pdf.compat import extract_passages_from_pdf
 
 
 def _create_simple_one_page_pdf(path: Path) -> None:

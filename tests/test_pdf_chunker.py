@@ -2,9 +2,9 @@
 
 import pytest
 
-import pdf_chunker
-from pdf_chunker import chunk_parse_document
-from pdf_models import ParseDocument, ParseElement, ParseTable, PdfQualityReport
+import paper_engine.pdf.chunking as pdf_chunker
+from paper_engine.pdf.chunking import chunk_parse_document
+from paper_engine.pdf.models import ParseDocument, ParseElement, ParseTable, PdfQualityReport
 
 
 def _element(

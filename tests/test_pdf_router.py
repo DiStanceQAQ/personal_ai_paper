@@ -9,14 +9,14 @@ from typing import Any, Literal
 
 import pytest
 
-from pdf_backend_base import ParserBackendError, ParserBackendUnavailable
-from pdf_backend_grobid import (
+from paper_engine.pdf.backends.base import ParserBackendError, ParserBackendUnavailable
+from paper_engine.pdf.backends.grobid import (
     GrobidMetadata,
     GrobidParseResult,
     GrobidReference,
     GrobidSection,
 )
-from pdf_models import ParseDocument, PdfQualityReport
+from paper_engine.pdf.models import ParseDocument, PdfQualityReport
 
 
 RouterAction = Literal["ok", "unavailable", "error"]
@@ -133,7 +133,7 @@ class FakeGrobidClient:
 
 
 def _router_module() -> Any:
-    return importlib.import_module("pdf_router")
+    return importlib.import_module("paper_engine.pdf.router")
 
 
 def _quality(**overrides: Any) -> PdfQualityReport:

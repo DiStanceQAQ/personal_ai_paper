@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from pdf_backend_base import ParserBackendError, ParserBackendUnavailable
-from pdf_models import ParseDocument, PdfQualityReport
+from paper_engine.pdf.backends.base import ParserBackendError, ParserBackendUnavailable
+from paper_engine.pdf.models import ParseDocument, PdfQualityReport
 
 
 def test_pyproject_declares_docling_extra_and_module() -> None:
@@ -21,7 +21,7 @@ def test_pyproject_declares_docling_extra_and_module() -> None:
 
 
 def test_availability_uses_find_spec_without_importing_docling(monkeypatch: pytest.MonkeyPatch) -> None:
-    from pdf_backend_docling import DoclingBackend
+    from paper_engine.pdf.backends.docling import DoclingBackend
 
     calls: list[str] = []
 
@@ -36,7 +36,7 @@ def test_availability_uses_find_spec_without_importing_docling(monkeypatch: pyte
 
 
 def test_availability_is_false_when_docling_absent(monkeypatch: pytest.MonkeyPatch) -> None:
-    from pdf_backend_docling import DoclingBackend
+    from paper_engine.pdf.backends.docling import DoclingBackend
 
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
 
@@ -44,7 +44,7 @@ def test_availability_is_false_when_docling_absent(monkeypatch: pytest.MonkeyPat
 
 
 def test_parse_requires_docling_when_backend_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    from pdf_backend_docling import DoclingBackend
+    from paper_engine.pdf.backends.docling import DoclingBackend
 
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
 
@@ -58,8 +58,8 @@ def test_parse_requires_docling_when_backend_unavailable(monkeypatch: pytest.Mon
 
 
 def test_parse_wraps_docling_conversion_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    import pdf_backend_docling
-    from pdf_backend_docling import DoclingBackend
+    import paper_engine.pdf.backends.docling as pdf_backend_docling
+    from paper_engine.pdf.backends.docling import DoclingBackend
 
     class FailingConverter:
         def convert(self, file_path: str) -> object:
@@ -82,8 +82,8 @@ def test_parse_wraps_docling_conversion_errors(monkeypatch: pytest.MonkeyPatch) 
 def test_parse_normalizes_mixed_docling_items_in_reading_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import pdf_backend_docling
-    from pdf_backend_docling import DoclingBackend
+    import paper_engine.pdf.backends.docling as pdf_backend_docling
+    from paper_engine.pdf.backends.docling import DoclingBackend
 
     quality = PdfQualityReport(page_count=2, needs_layout_model=True)
     fake_document = SimpleNamespace(
@@ -196,8 +196,8 @@ def test_parse_normalizes_mixed_docling_items_in_reading_order(
 def test_parse_prefers_docling_iterated_reading_order_over_top_level_texts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import pdf_backend_docling
-    from pdf_backend_docling import DoclingBackend
+    import paper_engine.pdf.backends.docling as pdf_backend_docling
+    from paper_engine.pdf.backends.docling import DoclingBackend
 
     heading = SimpleNamespace(label="section_header", text="Methods", level=1, page_no=1)
     paragraph = SimpleNamespace(label="text", text="We evaluate the parser.", page_no=1)
@@ -267,8 +267,8 @@ def test_parse_prefers_docling_iterated_reading_order_over_top_level_texts(
 def test_parse_resolves_caption_ref_lists_without_caption_text_method(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import pdf_backend_docling
-    from pdf_backend_docling import DoclingBackend
+    import paper_engine.pdf.backends.docling as pdf_backend_docling
+    from paper_engine.pdf.backends.docling import DoclingBackend
 
     caption = SimpleNamespace(label="caption", text="Table 2: Ablation", page_no=3)
     table = SimpleNamespace(
@@ -310,8 +310,8 @@ def test_parse_resolves_caption_ref_lists_without_caption_text_method(
 def test_parse_maps_docling_page_margins_without_corrupting_heading_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import pdf_backend_docling
-    from pdf_backend_docling import DoclingBackend
+    import paper_engine.pdf.backends.docling as pdf_backend_docling
+    from paper_engine.pdf.backends.docling import DoclingBackend
 
     page_header = SimpleNamespace(
         label="page_header",
@@ -371,8 +371,8 @@ def test_parse_maps_docling_page_margins_without_corrupting_heading_path(
 def test_parse_preserves_docling_provenance_bbox_objects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import pdf_backend_docling
-    from pdf_backend_docling import DoclingBackend
+    import paper_engine.pdf.backends.docling as pdf_backend_docling
+    from paper_engine.pdf.backends.docling import DoclingBackend
 
     class TupleBBox:
         def as_tuple(self) -> tuple[float, float, float, float]:
@@ -422,7 +422,7 @@ def test_parse_preserves_docling_provenance_bbox_objects(
     reason="docling is not installed",
 )
 def test_live_docling_conversion_when_installed(tmp_path: Path) -> None:
-    from pdf_backend_docling import DoclingBackend
+    from paper_engine.pdf.backends.docling import DoclingBackend
 
     pytest.importorskip("docling")
 

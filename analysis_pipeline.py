@@ -30,7 +30,7 @@ from analysis_verifier import (
 )
 from paper_engine.storage.database import get_connection
 from llm_client import LLMStructuredOutputError, call_llm_schema
-from pdf_chunker import count_text_tokens
+from paper_engine.pdf.chunking import count_text_tokens
 
 
 PipelineInput: TypeAlias = Mapping[str, Any] | BaseModel

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from analysis_models import PaperMetadataExtraction
-from pdf_models import ParseElement, PassageRecord
+from paper_engine.pdf.models import ParseElement, PassageRecord
 
 
 def _passage(

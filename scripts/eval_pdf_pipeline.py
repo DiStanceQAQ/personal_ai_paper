@@ -19,10 +19,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from pdf_chunker import chunk_parse_document, count_text_tokens
-from pdf_models import ParseDocument, PassageRecord, PdfQualityReport
-from pdf_profile import inspect_pdf
-from pdf_router import PdfBackendRouter
+from paper_engine.pdf.chunking import chunk_parse_document, count_text_tokens
+from paper_engine.pdf.models import ParseDocument, PassageRecord, PdfQualityReport
+from paper_engine.pdf.profile import inspect_pdf
+from paper_engine.pdf.router import PdfBackendRouter
 
 DEFAULT_MAX_TOKENS = 900
 EXPECTED_METRIC_KEYS = {

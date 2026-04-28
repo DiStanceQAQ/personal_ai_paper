@@ -10,14 +10,14 @@ from typing import Any
 
 import pytest
 
-from pdf_backend_base import ParserBackendError
-from pdf_models import PdfQualityReport
-from pdf_profile import inspect_pdf
+from paper_engine.pdf.backends.base import ParserBackendError
+from paper_engine.pdf.models import PdfQualityReport
+from paper_engine.pdf.profile import inspect_pdf
 from tests.fixtures.pdf_factory import simple_academic_pdf, table_pdf
 
 
 def _backend_module() -> Any:
-    return importlib.import_module("pdf_backend_pymupdf4llm")
+    return importlib.import_module("paper_engine.pdf.backends.pymupdf4llm")
 
 
 def _quality(**kwargs: Any) -> PdfQualityReport:

@@ -8,7 +8,7 @@ def test_importing_parser_does_not_import_pymupdf() -> None:
     """Keep PyMuPDF out of the app startup import path."""
     code = (
         "import sys\n"
-        "import parser\n"
+        "import paper_engine.pdf.compat\n"
         "raise SystemExit(1 if 'pymupdf' in sys.modules else 0)\n"
     )
     result = subprocess.run(

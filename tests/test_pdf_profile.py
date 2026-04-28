@@ -6,8 +6,8 @@ import tomllib
 
 import pytest
 
-from pdf_models import PdfQualityReport
-from pdf_profile import inspect_pdf
+from paper_engine.pdf.models import PdfQualityReport
+from paper_engine.pdf.profile import inspect_pdf
 from tests.fixtures.pdf_factory import (
     image_only_pdf,
     long_section_pdf,
@@ -108,7 +108,7 @@ def test_layout_activation_does_not_make_paragraph_pages_look_like_tables(
     if importlib.util.find_spec("pymupdf4llm") is None:
         pytest.skip("pymupdf4llm is required to reproduce layout activation")
 
-    from pdf_backend_pymupdf4llm import PyMuPDF4LLMBackend
+    from paper_engine.pdf.backends.pymupdf4llm import PyMuPDF4LLMBackend
 
     warmup_pdf = simple_academic_pdf(tmp_path / "warmup.pdf")
     PyMuPDF4LLMBackend().parse(

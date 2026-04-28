@@ -8,8 +8,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
-from pdf_backend_base import ParserBackendError, ParserBackendUnavailable
-from pdf_models import (
+from paper_engine.pdf.backends.base import ParserBackendError, ParserBackendUnavailable
+from paper_engine.pdf.models import (
     ElementType,
     ParseAsset,
     ParseDocument,

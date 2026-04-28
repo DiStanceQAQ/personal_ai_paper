@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from pdf_models import (
+from paper_engine.pdf.models import (
     ChunkCandidate,
     ELEMENT_TYPES,
     EXTRACTION_METHODS,

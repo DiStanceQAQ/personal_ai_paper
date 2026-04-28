@@ -10,8 +10,8 @@ from typing import Any, Mapping
 import httpx
 
 from paper_engine.storage.database import get_connection
-from pdf_backend_base import ParserBackendError, ParserBackendUnavailable
-from pdf_models import (
+from paper_engine.pdf.backends.base import ParserBackendError, ParserBackendUnavailable
+from paper_engine.pdf.models import (
     BBox,
     ElementType,
     ParseAsset,

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from paper_engine.storage.database import init_db
-from pdf_models import (
+from paper_engine.pdf.models import (
     ParseAsset,
     ParseDocument,
     ParseElement,
@@ -16,7 +16,7 @@ from pdf_models import (
     PassageRecord,
     PdfQualityReport,
 )
-from pdf_persistence import persist_parse_result
+from paper_engine.pdf.persistence import persist_parse_result
 
 
 def _test_conn() -> sqlite3.Connection:

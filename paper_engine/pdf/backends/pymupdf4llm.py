@@ -9,8 +9,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, cast
 
-from pdf_backend_base import ParserBackendError, ParserBackendUnavailable
-from pdf_models import (
+from paper_engine.pdf.backends.base import ParserBackendError, ParserBackendUnavailable
+from paper_engine.pdf.models import (
     ElementType,
     ExtractionMethod,
     ParseAsset,

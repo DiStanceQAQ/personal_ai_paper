@@ -14,7 +14,7 @@ from embeddings import (
     get_embedding_provider,
     serialize_embedding_vector,
 )
-from pdf_models import ParseAsset, ParseDocument, ParseElement, ParseTable, PassageRecord
+from paper_engine.pdf.models import ParseAsset, ParseDocument, ParseElement, ParseTable, PassageRecord
 from search import FTS_TABLE
 
 __all__ = ["embed_passages_for_parse_run", "persist_parse_result"]

@@ -2,7 +2,7 @@
 
 from typing import Any
 
-import analysis_pipeline
+import paper_engine.analysis.pipeline as analysis_pipeline
 from paper_engine.pdf.chunking import count_text_tokens
 
 

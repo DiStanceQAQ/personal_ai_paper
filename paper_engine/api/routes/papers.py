@@ -18,7 +18,7 @@ from paper_engine.pdf.compat import (
     persist_parse_result,
     route_parse,
 )
-from search import FTS_TABLE
+from paper_engine.retrieval.lexical import FTS_TABLE
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
 

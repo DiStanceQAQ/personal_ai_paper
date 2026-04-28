@@ -396,7 +396,7 @@ def test_mcp_space_isolation_search(db_path: str) -> None:
     orig = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)
 
-    from search import rebuild_fts_index
+    from paper_engine.retrieval.lexical import rebuild_fts_index
 
     conn = get_connection()
     conn.execute("INSERT INTO spaces (id, name) VALUES ('space-1', 'A'), ('space-2', 'B')")
@@ -485,7 +485,7 @@ def test_agent_results_have_source_info(db_path: str) -> None:
     orig = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)
 
-    from search import rebuild_fts_index
+    from paper_engine.retrieval.lexical import rebuild_fts_index
 
     conn = get_connection()
     conn.execute("INSERT INTO spaces (id, name) VALUES ('s1', 'Test')")
@@ -552,7 +552,7 @@ def test_no_source_less_results(db_path: str) -> None:
     orig = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)
 
-    from search import rebuild_fts_index
+    from paper_engine.retrieval.lexical import rebuild_fts_index
 
     conn = get_connection()
     conn.execute("INSERT INTO spaces (id, name) VALUES ('s1', 'Test')")

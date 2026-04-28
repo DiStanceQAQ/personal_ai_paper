@@ -10,7 +10,7 @@ from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ValidationError
 
-from analysis_models import CardExtraction, CardExtractionBatch
+from paper_engine.analysis.models import CardExtraction, CardExtractionBatch
 
 
 CardInput: TypeAlias = CardExtraction | Mapping[str, Any]

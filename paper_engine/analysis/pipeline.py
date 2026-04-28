@@ -12,24 +12,24 @@ from typing import Any, TypeAlias
 
 from pydantic import BaseModel, ValidationError
 
-from analysis_models import (
+from paper_engine.analysis.models import (
     AnalysisQualityReport,
     CardExtraction,
     CardExtractionBatch,
     MergedAnalysisResult,
     PaperMetadataExtraction,
 )
-from analysis_prompts import (
+from paper_engine.analysis.prompts import (
     build_card_batch_extraction_prompt,
     build_metadata_extraction_prompt,
 )
-from analysis_verifier import (
+from paper_engine.analysis.verifier import (
     RejectedCardDiagnostic,
     SourceVerificationResult,
     verify_extraction_batch_sources,
 )
 from paper_engine.storage.database import get_connection
-from llm_client import LLMStructuredOutputError, call_llm_schema
+from paper_engine.agent.llm_client import LLMStructuredOutputError, call_llm_schema
 from paper_engine.pdf.chunking import count_text_tokens
 
 

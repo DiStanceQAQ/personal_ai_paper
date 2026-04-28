@@ -1,6 +1,6 @@
 """Domain-neutral heuristic extraction tests."""
 
-from card_extractor import extract_cards_from_passages
+from paper_engine.cards.extraction import extract_cards_from_passages
 
 
 def test_extracts_generic_protocol_and_measurement_language() -> None:

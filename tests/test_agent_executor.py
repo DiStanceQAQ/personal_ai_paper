@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from analysis_models import (
+from paper_engine.analysis.models import (
     AnalysisQualityReport,
     CardExtraction,
     MergedAnalysisResult,
@@ -18,7 +18,7 @@ from analysis_models import (
 
 def test_agent_executor_module_compiles() -> None:
     """Agent executor must remain importable for PyInstaller sidecar packaging."""
-    py_compile.compile(str(Path("agent_executor.py")), doraise=True)
+    py_compile.compile(str(Path("paper_engine/agent/executor.py")), doraise=True)
 
 
 @pytest.mark.asyncio
@@ -26,7 +26,7 @@ async def test_analyze_paper_with_llm_delegates_to_analysis_pipeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Agent analysis should use the multi-stage pipeline and return route-compatible counts."""
-    import agent_executor
+    import paper_engine.agent.executor as agent_executor
 
     calls: list[tuple[str, str]] = []
 

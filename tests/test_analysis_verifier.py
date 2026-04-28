@@ -2,8 +2,8 @@
 
 from typing import Any
 
-from analysis_models import CardExtraction
-from analysis_verifier import (
+from paper_engine.analysis.models import CardExtraction
+from paper_engine.analysis.verifier import (
     verify_card_sources,
     verify_extraction_batch_sources,
 )

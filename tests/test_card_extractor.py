@@ -2,7 +2,7 @@
 
 import json
 
-from card_extractor import extract_cards_from_passages
+from paper_engine.cards.extraction import extract_cards_from_passages
 
 
 def test_extract_method_card() -> None:

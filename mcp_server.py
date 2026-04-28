@@ -11,7 +11,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from paper_engine.storage.database import get_connection, init_db
-from search import search_passages
+from paper_engine.retrieval.lexical import search_passages
 
 mcp = FastMCP("paper-knowledge-engine")
 

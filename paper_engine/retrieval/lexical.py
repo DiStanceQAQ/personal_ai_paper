@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 from paper_engine.storage.database import get_connection
-from hybrid_search import (
+from paper_engine.retrieval.hybrid import (
     SearchMode,
     has_semantic_embeddings,
     reciprocal_rank_fusion,

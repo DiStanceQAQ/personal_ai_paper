@@ -5,7 +5,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query
 
 from paper_engine.storage.database import get_connection
-from search import search_passages
+from paper_engine.retrieval.lexical import search_passages
 
 SearchModeParam = Literal["fts", "hybrid"]
 

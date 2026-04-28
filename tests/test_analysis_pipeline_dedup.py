@@ -2,9 +2,9 @@
 
 from typing import Any
 
-import analysis_pipeline
-from analysis_models import CardExtraction
-from analysis_verifier import RejectedCardDiagnostic
+import paper_engine.analysis.pipeline as analysis_pipeline
+from paper_engine.analysis.models import CardExtraction
+from paper_engine.analysis.verifier import RejectedCardDiagnostic
 
 
 def _passage(

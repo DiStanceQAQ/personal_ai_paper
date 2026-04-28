@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from analysis_models import PaperMetadataExtraction
+from paper_engine.analysis.models import PaperMetadataExtraction
 from paper_engine.pdf.models import ParseElement, PassageRecord
 
 
@@ -54,7 +54,7 @@ async def test_metadata_stage_prefers_grobid_fields_and_first_page_title(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """GROBID scholarly fields should beat LLM guesses, title element beats LLM."""
-    import analysis_pipeline
+    import paper_engine.analysis.pipeline as analysis_pipeline
 
     async def fake_call_llm_schema(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return {
@@ -102,7 +102,7 @@ async def test_metadata_stage_uses_llm_fallback_when_grobid_is_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Missing GROBID metadata should be filled by the strict LLM fallback."""
-    import analysis_pipeline
+    import paper_engine.analysis.pipeline as analysis_pipeline
 
     calls: list[dict[str, Any]] = []
 
@@ -163,7 +163,7 @@ async def test_metadata_stage_extracts_doi_and_arxiv_from_source_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """DOI and arXiv regex hits should beat conflicting LLM fallback values."""
-    import analysis_pipeline
+    import paper_engine.analysis.pipeline as analysis_pipeline
 
     async def fake_call_llm_schema(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return {
@@ -205,7 +205,7 @@ async def test_metadata_stage_returns_rule_based_values_when_llm_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Configured-source metadata should not fail just because LLM is unavailable."""
-    import analysis_pipeline
+    import paper_engine.analysis.pipeline as analysis_pipeline
 
     async def unavailable_llm(*args: Any, **kwargs: Any) -> dict[str, Any]:
         raise ValueError("LLM API Key is missing")

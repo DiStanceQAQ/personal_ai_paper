@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 import pytest
 
-import embeddings
+import paper_engine.retrieval.embeddings as embeddings
 
 
 def create_app_state_connection() -> sqlite3.Connection:

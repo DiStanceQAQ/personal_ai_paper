@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from paper_engine.api.routes.cards import CARD_TYPES as ROUTE_CARD_TYPES
 
-from analysis_models import (
+from paper_engine.analysis.models import (
     CARD_TYPES,
     AnalysisQualityReport,
     CardExtraction,

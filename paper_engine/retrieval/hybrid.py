@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Literal, TypeAlias
 
 from paper_engine.storage.database import get_connection
-from embeddings import EmbeddingProvider, get_embedding_config, get_embedding_provider
+from paper_engine.retrieval.embeddings import EmbeddingProvider, get_embedding_config, get_embedding_provider
 
 SearchMode: TypeAlias = Literal["fts", "hybrid"]
 

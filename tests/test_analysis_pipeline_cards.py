@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-import analysis_pipeline
+import paper_engine.analysis.pipeline as analysis_pipeline
 
 
 def _passage(

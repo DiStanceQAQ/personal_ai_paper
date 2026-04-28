@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 import pytest
 
-import llm_client
+import paper_engine.agent.llm_client as llm_client
 
 
 SIMPLE_SCHEMA: dict[str, Any] = {

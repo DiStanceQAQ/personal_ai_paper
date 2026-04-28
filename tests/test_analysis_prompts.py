@@ -4,8 +4,8 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from analysis_models import CardExtraction
-from analysis_prompts import (
+from paper_engine.analysis.models import CardExtraction
+from paper_engine.analysis.prompts import (
     SourcePassageInput,
     build_card_batch_extraction_prompt,
     build_merge_dedup_prompt,

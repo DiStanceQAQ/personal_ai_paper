@@ -8,14 +8,14 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from embeddings import (
+from paper_engine.retrieval.embeddings import (
     EmbeddingProvider,
     get_embedding_config,
     get_embedding_provider,
     serialize_embedding_vector,
 )
 from paper_engine.pdf.models import ParseAsset, ParseDocument, ParseElement, ParseTable, PassageRecord
-from search import FTS_TABLE
+from paper_engine.retrieval.lexical import FTS_TABLE
 
 __all__ = ["embed_passages_for_parse_run", "persist_parse_result"]
 

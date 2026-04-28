@@ -6,13 +6,13 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from analysis_models import (
+from paper_engine.analysis.models import (
     AnalysisQualityReport,
     CardExtraction,
     MergedAnalysisResult,
     PaperMetadataExtraction,
 )
-from analysis_pipeline import persist_analysis_result
+from paper_engine.analysis.pipeline import persist_analysis_result
 from paper_engine.storage.database import init_db
 
 

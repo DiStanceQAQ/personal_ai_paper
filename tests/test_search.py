@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 
 from paper_engine.storage.database import DATABASE_PATH, get_connection, init_db
 from main import app
-from search import ensure_fts_index, rebuild_fts_index, search_passages
+from paper_engine.retrieval.lexical import ensure_fts_index, rebuild_fts_index, search_passages
 
 
 @pytest.fixture

@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from analysis_pipeline import PaperAnalysisRunResult, run_paper_analysis
+from paper_engine.analysis.pipeline import PaperAnalysisRunResult, run_paper_analysis
 
 
 def _analysis_success_payload(analysis: PaperAnalysisRunResult) -> dict[str, Any]:

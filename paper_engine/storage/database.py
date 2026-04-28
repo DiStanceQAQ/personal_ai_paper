@@ -131,7 +131,7 @@ def init_db(database_path: Path | None = None) -> sqlite3.Connection:
     conn.commit()
 
     # Initialize FTS5 index on the same connection (standalone, no content=)
-    from search import FTS_TABLE
+    from paper_engine.retrieval.lexical import FTS_TABLE
 
     conn.execute(f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS {FTS_TABLE}

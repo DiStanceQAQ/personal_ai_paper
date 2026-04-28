@@ -11,8 +11,8 @@ from typing import Any
 import pytest
 
 from paper_engine.storage.database import init_db
-from hybrid_search import reciprocal_rank_fusion
-from search import rebuild_fts_index, search_passages
+from paper_engine.retrieval.hybrid import reciprocal_rank_fusion
+from paper_engine.retrieval.lexical import rebuild_fts_index, search_passages
 
 
 class QueryEmbeddingProvider:
@@ -127,7 +127,7 @@ def test_search_defaults_to_fts_when_no_embeddings_exist(
         def fail_provider_lookup(config: object) -> None:
             raise AssertionError("Embedding provider should not be used without vectors")
 
-        monkeypatch.setattr("hybrid_search.get_embedding_provider", fail_provider_lookup)
+        monkeypatch.setattr("paper_engine.retrieval.hybrid.get_embedding_provider", fail_provider_lookup)
 
         results = search_passages(
             "transformer",
@@ -144,7 +144,7 @@ def test_search_defaults_to_hybrid_when_embeddings_exist(
 ) -> None:
     """Auto mode should include semantic-only matches when embeddings exist."""
     provider = QueryEmbeddingProvider([1.0, 0.0])
-    monkeypatch.setattr("hybrid_search.get_embedding_provider", lambda config: provider)
+    monkeypatch.setattr("paper_engine.retrieval.hybrid.get_embedding_provider", lambda config: provider)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"

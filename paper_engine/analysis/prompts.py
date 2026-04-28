@@ -9,7 +9,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from analysis_models import (
+from paper_engine.analysis.models import (
     CARD_TYPES,
     CardExtraction,
     CardExtractionBatch,

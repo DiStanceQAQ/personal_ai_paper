@@ -14,7 +14,7 @@ from httpx import ASGITransport, AsyncClient
 import paper_engine.pdf.persistence as pdf_persistence
 import paper_engine.api.routes.papers as routes_papers
 from paper_engine.storage.database import get_connection, init_db
-from embeddings import EmbeddingConfig, EmbeddingProviderError
+from paper_engine.retrieval.embeddings import EmbeddingConfig, EmbeddingProviderError
 from main import app
 from paper_engine.pdf.models import (
     ParseDocument,

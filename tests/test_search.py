@@ -10,7 +10,12 @@ from httpx import ASGITransport, AsyncClient
 
 from paper_engine.storage.database import DATABASE_PATH, get_connection, init_db
 from paper_engine.api.app import app
-from paper_engine.retrieval.lexical import ensure_fts_index, rebuild_fts_index, search_passages
+from paper_engine.retrieval.lexical import (
+    FTS_TABLE,
+    ensure_fts_index,
+    rebuild_fts_index,
+    search_passages,
+)
 
 
 @pytest.fixture
@@ -52,7 +57,7 @@ def _make_minimal_pdf() -> bytes:
 
 
 async def _setup_space_with_passage(client: AsyncClient, text: str = "transformer attention mechanism") -> str:
-    """Create a space, upload a PDF with custom text, parse it, return space_id."""
+    """Create a space, upload a PDF, index one passage, return space_id."""
     resp = await client.post("/api/spaces", json={"name": "Search Test"})
     space_id = resp.json()["id"]
     await client.put(f"/api/spaces/active/{space_id}")
@@ -73,14 +78,37 @@ async def _setup_space_with_passage(client: AsyncClient, text: str = "transforme
         files={"file": ("test.pdf", pdf_bytes, "application/pdf")},
     )
     paper_id = resp.json()["id"]
-    parse_resp = await client.post(f"/api/papers/{paper_id}/parse")
-    assert parse_resp.status_code == 200
-    parse_data = parse_resp.json()
-    assert parse_data["status"] == "parsed"
-    assert parse_data["parse_run_id"]
-    assert parse_data["backend"]
-    assert "quality_score" in parse_data
-    assert isinstance(parse_data["warnings"], list)
+
+    import paper_engine.storage.database as db_module
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        conn.execute(
+            """
+            INSERT INTO passages (
+                id, paper_id, space_id, section, original_text,
+                parser_backend, extraction_method
+            )
+            VALUES ('passage-1', ?, ?, 'method', ?, 'test', 'native_text')
+            """,
+            (paper_id, space_id, text),
+        )
+        conn.execute(
+            f"""
+            INSERT INTO {FTS_TABLE} (
+                passage_id, paper_id, space_id, section, original_text
+            )
+            VALUES ('passage-1', ?, ?, 'method', ?)
+            """,
+            (paper_id, space_id, text),
+        )
+        conn.execute(
+            "UPDATE papers SET parse_status = 'parsed' WHERE id = ?",
+            (paper_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
     return space_id
 

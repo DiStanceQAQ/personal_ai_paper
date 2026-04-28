@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -133,6 +134,71 @@ def test_worker_executes_selected_parser_and_persists(tmp_path: Path) -> None:
         "GROBID Title"
     )
     assert backend.calls
+
+
+def test_worker_runs_grobid_while_selected_parser_is_running(tmp_path: Path) -> None:
+    conn = _conn(tmp_path)
+    queue_parse_run(
+        conn,
+        paper_id="paper-1",
+        space_id="space-1",
+        parser_backend="docling",
+        parser_config={"parser_backend": "docling"},
+    )
+    backend_started = threading.Event()
+    grobid_started = threading.Event()
+    parse_can_finish = threading.Event()
+
+    class CoordinatedBackend(FakeBackend):
+        def parse(
+            self,
+            file_path: Path,
+            paper_id: str,
+            space_id: str,
+            quality_report: PdfQualityReport,
+        ) -> ParseDocument:
+            backend_started.set()
+            assert grobid_started.wait(timeout=1)
+            parse_can_finish.set()
+            return super().parse(file_path, paper_id, space_id, quality_report)
+
+    backend = CoordinatedBackend("docling")
+
+    def coordinated_grobid(file_path: Path) -> dict[str, Any]:
+        grobid_started.set()
+        assert backend_started.wait(timeout=1)
+        assert parse_can_finish.wait(timeout=1)
+        return {"metadata": {"title": "Parallel GROBID"}, "references": []}
+
+    worker = ParseWorker(
+        conn_factory=lambda: conn,
+        worker_id="worker-1",
+        parser_factory=ParserFactory(
+            mineru=lambda config: FakeBackend("mineru"),
+            docling=lambda config: backend,
+        ),
+        persist_parse_result=lambda *args, **kwargs: str(kwargs["parse_run_id"]),
+        embed_passages_for_parse_run=lambda conn_arg, parse_run_id: [],
+        inspect_pdf=lambda file_path: PdfQualityReport(page_count=1),
+        grobid_enricher=coordinated_grobid,
+        chunk_parse_document=lambda document: [
+            PassageRecord(
+                id="passage-1",
+                paper_id=document.paper_id,
+                space_id=document.space_id,
+                original_text="parsed text",
+                element_ids=["element-1"],
+                parser_backend=document.backend,
+                extraction_method="layout_model",
+            )
+        ],
+        close_connection=False,
+    )
+
+    assert worker.run_once() is True
+    assert backend.calls
+    row = conn.execute("SELECT status FROM parse_runs").fetchone()
+    assert row["status"] == "completed"
 
 
 def test_worker_fails_missing_file(tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ import os
 import sqlite3
 import time
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -100,8 +101,10 @@ class ParseWorker:
                     else factory.docling(job.config)
                 )
                 quality = self.inspect_pdf(file_path)
-                document = backend.parse(file_path, job.paper_id, job.space_id, quality)
-                document = self._merge_grobid(file_path, document)
+                with ThreadPoolExecutor(max_workers=1) as grobid_executor:
+                    grobid_future = grobid_executor.submit(self.grobid_enricher, file_path)
+                    document = backend.parse(file_path, job.paper_id, job.space_id, quality)
+                    document = self._merge_grobid(file_path, document, grobid_future)
 
                 heartbeat_parse_run(conn, job.id)
                 passages = self.chunk_parse_document(document)
@@ -142,9 +145,18 @@ class ParseWorker:
             if self.close_connection:
                 conn.close()
 
-    def _merge_grobid(self, file_path: Path, document: Any) -> Any:
+    def _merge_grobid(
+        self,
+        file_path: Path,
+        document: Any,
+        grobid_future: Future[dict[str, Any] | None] | None = None,
+    ) -> Any:
         try:
-            grobid = self.grobid_enricher(file_path)
+            grobid = (
+                grobid_future.result()
+                if grobid_future is not None
+                else self.grobid_enricher(file_path)
+            )
         except Exception as exc:
             document.quality.warnings.append(f"grobid_failed:{exc}")
             return document

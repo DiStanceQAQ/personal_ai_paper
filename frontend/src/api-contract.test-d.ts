@@ -1,11 +1,13 @@
 import { api } from './api';
 import type {
+  AgentConfig,
   DocumentElement,
   DocumentElementType,
   DocumentTable,
   KnowledgeCard,
   KnowledgeCardEvidence,
   KnowledgeCardOrigin,
+  MinerUTestResult,
   Paper,
   PaperParseDiagnostics,
   ParsePaperResponse,
@@ -23,6 +25,15 @@ type AsyncReturn<T extends (...args: any[]) => Promise<unknown>> = Awaited<Retur
 
 type _ParsePaperReturnsExtendedResponse = Assert<
   IsEqual<AsyncReturn<typeof api.parsePaper>, ParsePaperResponse>
+>;
+type _AgentConfigReturnsParserSettings = Assert<
+  IsEqual<
+    AsyncReturn<typeof api.getAgentConfig>,
+    Omit<AgentConfig, 'llm_api_key' | 'mineru_api_key'>
+  >
+>;
+type _MinerUTestReturnsStatus = Assert<
+  IsEqual<AsyncReturn<typeof api.testMineruConnection>, MinerUTestResult>
 >;
 type _ListParseRunsReturnsRuns = Assert<
   IsEqual<AsyncReturn<typeof api.listParseRuns>, ParseRun[]>

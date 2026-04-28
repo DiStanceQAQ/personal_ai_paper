@@ -59,7 +59,14 @@ export default function App(): JSX.Element {
     papers, selectedPaper, setSelectedPaper, passages, cards, setCards, agentStatus, setAgentStatus,
     loadPapers, openPaper, deletePaper: handleDeletePaper, uploadPaper, runDeepAnalysis 
   } = usePapers(activeSpace?.id, setNotice, setIsProcessing);
-  const { llmConfig, setLlmConfig, loadLlmConfig, saveLlmConfig } = useLlmConfig(setNotice);
+  const {
+    llmConfig,
+    setLlmConfig,
+    loadLlmConfig,
+    saveLlmConfig,
+    mineruTestResult,
+    testMineruConnection,
+  } = useLlmConfig(setNotice);
 
   // --- Derived State ---
   const visibleCards = useMemo(() => cards.filter((card) => card.card_type === activeTab), [cards, activeTab]);
@@ -218,6 +225,8 @@ export default function App(): JSX.Element {
         llmConfig={llmConfig}
         setLlmConfig={setLlmConfig}
         saveLlmConfig={saveLlmConfig}
+        mineruTestResult={mineruTestResult}
+        testMineruConnection={testMineruConnection}
         createOrUpdateSpace={createOrUpdateSpace}
         deleteSpace={deleteSpace}
         handleUpdatePaper={handleUpdatePaper}

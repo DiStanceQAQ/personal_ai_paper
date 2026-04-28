@@ -1,6 +1,7 @@
 export type SpaceStatus = 'active' | 'archived' | 'deleted';
 export type ParseStatus = 'pending' | 'parsing' | 'parsed' | 'error';
 export type ParsePaperStatus = 'queued' | Extract<ParseStatus, 'parsed' | 'error'>;
+export type PdfParserBackend = 'mineru' | 'docling';
 export type KnowledgeCardOrigin = 'user' | 'heuristic' | 'ai';
 export type DocumentElementType =
   | 'title'
@@ -32,6 +33,35 @@ export interface Space {
   status: SpaceStatus;
   created_at: string;
   updated_at: string;
+}
+
+export interface ParserAvailability {
+  docling: {
+    available: boolean;
+    install_hint: string;
+  };
+  mineru: {
+    configured: boolean;
+    last_check_status: string;
+  };
+}
+
+export interface AgentConfig {
+  llm_provider: string;
+  llm_base_url: string;
+  llm_model: string;
+  llm_api_key: string;
+  has_api_key: boolean;
+  pdf_parser_backend: PdfParserBackend;
+  mineru_base_url: string;
+  mineru_api_key: string;
+  has_mineru_api_key: boolean;
+  parsers: ParserAvailability;
+}
+
+export interface MinerUTestResult {
+  status: 'ok' | 'missing_credentials' | 'http_error' | 'network_error';
+  detail: string;
 }
 
 export interface PaperParseDiagnostics {

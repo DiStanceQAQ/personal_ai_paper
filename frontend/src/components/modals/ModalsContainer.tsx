@@ -4,13 +4,15 @@ import { SpaceModal } from './SpaceModal';
 import { EditPaperModal } from './EditPaperModal';
 import { ConfirmModal } from './ConfirmModal';
 import { MCPGuideModal } from './MCPGuideModal';
-import { Paper } from '../../types';
+import type { AgentConfig, MinerUTestResult, Paper } from '../../types';
 
 interface ModalsContainerProps {
   modals: any; // useModals 的返回值
-  llmConfig: any;
-  setLlmConfig: (config: any) => void;
+  llmConfig: AgentConfig;
+  setLlmConfig: (config: AgentConfig) => void;
   saveLlmConfig: () => Promise<boolean>;
+  mineruTestResult: MinerUTestResult | null;
+  testMineruConnection: () => Promise<MinerUTestResult>;
   createOrUpdateSpace: (name: string, description: string, editingSpace: any) => Promise<boolean>;
   deleteSpace: (id: string) => Promise<boolean>;
   handleUpdatePaper: (id: string, data: any) => Promise<void>;
@@ -25,6 +27,8 @@ export const ModalsContainer: React.FC<ModalsContainerProps> = ({
   llmConfig,
   setLlmConfig,
   saveLlmConfig,
+  mineruTestResult,
+  testMineruConnection,
   createOrUpdateSpace,
   deleteSpace,
   handleUpdatePaper,
@@ -39,6 +43,8 @@ export const ModalsContainer: React.FC<ModalsContainerProps> = ({
         isOpen={modals.settings}
         onClose={() => modals.closeModal('settings')}
         onSave={saveLlmConfig}
+        onTestMineru={testMineruConnection}
+        mineruTestResult={mineruTestResult}
         config={llmConfig}
         setConfig={setLlmConfig}
       />

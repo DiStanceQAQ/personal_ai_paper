@@ -1,10 +1,12 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type {
+  AgentConfig,
   AgentStatus,
   DocumentElement,
   DocumentElementType,
   DocumentTable,
   KnowledgeCard,
+  MinerUTestResult,
   Paper,
   ParsePaperResponse,
   ParseRun,
@@ -105,10 +107,13 @@ export const api = {
   agentStatus: () => request<AgentStatus>('/api/agent/status'),
   setAgentStatus: (enabled: boolean) =>
     request<{ enabled: boolean }>('/api/agent/status', { method: 'PUT', body: JSON.stringify({ enabled }) }),
-  getAgentConfig: () => request<{ llm_provider: string; llm_base_url: string; llm_model: string; has_api_key: boolean }>('/api/agent/config'),
+  getAgentConfig: () =>
+    request<Omit<AgentConfig, 'llm_api_key' | 'mineru_api_key'>>('/api/agent/config'),
   getAppInfo: () => request<{ project_root: string; os: string }>('/api/info'),
-  updateAgentConfig: (config: { llm_provider: string; llm_base_url: string; llm_model: string; llm_api_key: string }) =>
+  updateAgentConfig: (config: AgentConfig) =>
     request<{ status: string }>('/api/agent/config', { method: 'PUT', body: JSON.stringify(config) }),
+  testMineruConnection: () =>
+    request<MinerUTestResult>('/api/agent/config/mineru/test', { method: 'POST' }),
   runDeepAnalysis: (paperId: string) =>
     request<RunDeepAnalysisResponse>(`/api/agent/analyze/${paperId}`, { method: 'POST' }),
 };

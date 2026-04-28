@@ -1,25 +1,24 @@
 import React from 'react';
 import { X, Cpu } from 'lucide-react';
 import { Select } from '../ui/Select';
+import type { AgentConfig, MinerUTestResult, PdfParserBackend } from '../../types';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: () => void;
-  config: {
-    llm_provider: string;
-    llm_base_url: string;
-    llm_model: string;
-    llm_api_key: string;
-    has_api_key: boolean;
-  };
-  setConfig: (config: any) => void;
+  onSave: () => void | Promise<boolean>;
+  onTestMineru: () => Promise<MinerUTestResult>;
+  mineruTestResult: MinerUTestResult | null;
+  config: AgentConfig;
+  setConfig: (config: AgentConfig) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
   onSave,
+  onTestMineru,
+  mineruTestResult,
   config,
   setConfig,
 }) => {
@@ -33,7 +32,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="brand-mark" style={{ width: '28px', height: '28px', fontSize: '14px' }}>
               <Cpu size={16} />
             </div>
-            <h2>LLM 深度解析配置</h2>
+            <h2>解析与模型配置</h2>
           </div>
           <button className="btn-icon-close" onClick={onClose}>
             <X size={20} />
@@ -41,10 +40,67 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         <p className="modal-subtitle">
-          配置您的模型参数，为论文提供语义化的深度知识抽取能力。
+          配置 PDF 解析后端与模型参数。
         </p>
 
         <div className="form-scroll-area">
+          <div className="settings-section-title">PDF 解析</div>
+          <Select
+            label="PDF 解析方式"
+            value={config.pdf_parser_backend}
+            onChange={(e) =>
+              setConfig({
+                ...config,
+                pdf_parser_backend: e.target.value as PdfParserBackend,
+              })
+            }
+            options={[
+              { value: 'mineru', label: 'MinerU API（推荐）' },
+              { value: 'docling', label: 'Docling 本地解析' },
+            ]}
+          />
+
+          {config.pdf_parser_backend === 'docling' && !config.parsers.docling.available && (
+            <p className="field-warning">
+              请安装 docling: {config.parsers.docling.install_hint || 'pip install docling'}
+            </p>
+          )}
+
+          {config.pdf_parser_backend === 'mineru' && (
+            <div className="settings-subsection">
+              <div className="form-group">
+                <label>MinerU Base URL</label>
+                <input
+                  value={config.mineru_base_url}
+                  onChange={(e) => setConfig({ ...config, mineru_base_url: e.target.value })}
+                  placeholder="例如：http://127.0.0.1:8000"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>
+                  MinerU API Key {config.has_mineru_api_key && <span className="secure-tag">已安全保存</span>}
+                </label>
+                <input
+                  type="password"
+                  value={config.mineru_api_key}
+                  onChange={(e) => setConfig({ ...config, mineru_api_key: e.target.value })}
+                  placeholder="输入 MinerU API Key..."
+                />
+              </div>
+
+              <button className="btn-secondary parser-test-btn" type="button" onClick={onTestMineru}>
+                测试 MinerU 连接
+              </button>
+              {mineruTestResult && (
+                <p className={mineruTestResult.status === 'ok' ? 'field-success' : 'field-warning'}>
+                  {mineruTestResult.detail}
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="settings-section-title">LLM 深度解析</div>
           <Select
             label="API 提供商"
             value={config.llm_provider}

@@ -21,7 +21,7 @@ from paper_engine.storage.migrations import (
 
 
 SCHEMA_VERSION_KEY = "schema_version"
-EXPECTED_SCHEMA_VERSION = 4
+EXPECTED_SCHEMA_VERSION = 5
 
 
 def schema_version_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -221,6 +221,39 @@ def test_apply_migrations_creates_initial_schema_version_row() -> None:
         assert len(rows) == 1
         assert rows[0]["value"] == str(EXPECTED_SCHEMA_VERSION)
 
+        conn.close()
+
+
+def test_migration_5_adds_parse_run_worker_columns_and_indexes() -> None:
+    """Parse runs carry durable worker state and claiming indexes."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+
+        columns = table_columns(conn, "parse_runs")
+        assert {
+            "claimed_at",
+            "heartbeat_at",
+            "worker_id",
+            "attempt_count",
+            "last_error",
+        }.issubset(columns)
+
+        column_info = table_column_info(conn, "parse_runs")
+        assert column_info["attempt_count"]["dflt_value"] == "0"
+
+        indexes = index_names(conn, "parse_runs")
+        assert {
+            "idx_parse_runs_status_started",
+            "idx_parse_runs_paper_status",
+        }.issubset(indexes)
+        assert_index_columns(
+            conn,
+            {
+                "idx_parse_runs_status_started": ("status", "started_at"),
+                "idx_parse_runs_paper_status": ("paper_id", "status"),
+            },
+        )
         conn.close()
 
 

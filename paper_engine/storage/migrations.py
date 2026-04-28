@@ -12,7 +12,7 @@ __all__ = [
 ]
 
 SCHEMA_VERSION_KEY = "schema_version"
-LATEST_SCHEMA_VERSION = 4
+LATEST_SCHEMA_VERSION = 5
 
 Migration = Callable[[sqlite3.Connection], None]
 
@@ -487,11 +487,42 @@ def _create_passage_embedding_schema(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _add_parse_run_worker_state(conn: sqlite3.Connection) -> None:
+    """Add durable worker state to parse runs."""
+    statements = (
+        "ALTER TABLE parse_runs ADD COLUMN claimed_at TEXT",
+        "ALTER TABLE parse_runs ADD COLUMN heartbeat_at TEXT",
+        "ALTER TABLE parse_runs ADD COLUMN worker_id TEXT",
+        "ALTER TABLE parse_runs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE parse_runs ADD COLUMN last_error TEXT",
+        """
+        CREATE INDEX IF NOT EXISTS idx_parse_runs_status_started
+            ON parse_runs(status, started_at)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_parse_runs_paper_status
+            ON parse_runs(paper_id, status)
+        """,
+        """
+        UPDATE parse_runs
+        SET status = 'completed'
+        WHERE status = ''
+        """,
+    )
+    for statement in statements:
+        try:
+            conn.execute(statement)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+
+
 MIGRATIONS: dict[int, Migration] = {
     1: _create_parse_run_document_tables,
     2: _extend_passages_with_provenance_columns,
     3: _create_analysis_run_and_card_provenance_schema,
     4: _create_passage_embedding_schema,
+    5: _add_parse_run_worker_state,
 }
 
 

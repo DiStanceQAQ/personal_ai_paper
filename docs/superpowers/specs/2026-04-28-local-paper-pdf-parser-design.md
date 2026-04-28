@@ -1,13 +1,13 @@
-# Local Paper PDF Parser Design
+# MinerU API-First Paper PDF Parser Design
 
 ## Goal
 
-Build a fully local, paper-specific PDF parsing layer that replaces cloud parser fallback with a deterministic local pipeline. The parser should quickly show scholarly metadata, produce source-grounded document elements for retrieval, and degrade to usable raw text instead of failing silently.
+Build a paper-specific PDF parsing layer whose body parser uses the configured MinerU Precision Parsing API as the primary parser. The parser should quickly show scholarly metadata, produce source-grounded document elements for retrieval, and degrade to local parsing or usable raw text instead of failing silently.
 
 ## Non-Goals
 
-- No LlamaParse or other paid cloud parser in the default pipeline.
-- No online metadata enrichment in the core path. Crossref or similar APIs are outside this local parser design.
+- No LlamaParse or non-MinerU parser API in the default pipeline.
+- No online metadata enrichment in the core path. Crossref or similar APIs are outside this parser design.
 - No general-purpose document ingestion beyond academic papers.
 - No V1 citation-mention matching between body text and references. V1 stores structured references only.
 
@@ -23,13 +23,16 @@ Parse Worker
   -> parallel:
        GROBID metadata + references
        Body parser:
-         normal -> PyMuPDF4LLM
-         complex/scanned -> MinerU
+         configured MinerU API -> MinerU Precision Parsing API
+         no API config -> local fallback
+           normal -> PyMuPDF4LLM
+           complex/scanned -> local MinerU when available
+           last resort -> raw PyMuPDF
 
   -> normalize to ParseDocument
   -> quality gate
-       if low and primary != MinerU -> rerun MinerU
-       if still low -> raw PyMuPDF fallback + review_needed
+       if API result is low -> local fallback
+       if local fallback is low -> raw PyMuPDF fallback + review_needed
 
   -> academic enrichment
        merge GROBID references
@@ -46,9 +49,9 @@ Parse Worker
 
 Reuse the current upload route for file storage, hash calculation, and same-space duplicate detection. Extend ingestion so upload creates a durable `parse_job` record with `pending` status. The upload request should return quickly after the job is created.
 
-Validation should reject non-PDF content, encrypted PDFs that cannot be opened locally, obviously invalid files, and files above the configured size/page limit.
+Validation should reject non-PDF content, encrypted PDFs that cannot be opened locally, obviously invalid files, and files exceeding the maximum size/page limit.
 
-Ingestion should also support global content-hash parse reuse. If the same file hash already has a successful local parse result, the new paper should clone or re-link the existing parse output instead of rerunning expensive parsing. Same-space duplicate detection can still return the existing paper, but cross-space reuse should avoid duplicate MinerU/GROBID work.
+Ingestion should also support global content-hash parse reuse. If the same file hash already has a successful parse result, the new paper should clone or re-link the existing parse output instead of rerunning expensive parsing. Same-space duplicate detection can still return the existing paper, but cross-space reuse should avoid duplicate MinerU/GROBID work.
 
 ### Parse Worker
 
@@ -68,9 +71,9 @@ The worker owns parse state transitions:
 - `cancelled`
 - `failed`
 
-V1 must support cancellation. The UI or API can set a job to `cancelled`; the worker checks cancellation before starting each stage and before starting any MinerU run. Pausing is out of scope for V1.
+V1 must support cancellation. The UI or API can set a job to `cancelled`; the worker checks cancellation before starting each stage and before starting any MinerU API or local MinerU run. Pausing is out of scope for V1.
 
-MinerU is resource constrained. V1 must enforce a global MinerU concurrency limit of one active MinerU task per application process. Other jobs that need MinerU wait in the queue. The implementation can use an `asyncio.Semaphore(1)`, a process-level lock, or a single-worker MinerU executor, but it must be explicit and tested.
+Local MinerU is resource constrained. V1 must enforce a global local MinerU concurrency limit of one active local MinerU task per application process. Other jobs that need local MinerU wait in the queue with a timeout. The hosted MinerU API path uses HTTP timeouts and does not consume the local MinerU gate.
 
 ### PyMuPDF Profiler
 
@@ -86,19 +89,21 @@ The plan should include:
 - detected language when cheap enough
 - `is_scanned`
 - `is_complex_layout`
-- `primary_backend`
-- `fallback_backend`
+- `prefer_mineru_api`
+- `local_fallback_backend`
+- `last_resort_backend`
 - `run_grobid`
 
-Normal selectable papers should choose `pymupdf4llm` first. Scanned, table-heavy, formula-heavy, or unstable layout papers should choose `mineru` first.
+All papers prefer the MinerU API when configured. The profiler only decides which local fallback backend should be used if the API is not configured or the API result fails quality checks.
 
 V1 profiler rules are intentionally simple:
 
 ```python
 is_scanned = native_text_page_ratio < 0.8
 is_complex_layout = has_tables or has_formulas or has_multi_column_pages
-primary_backend = "mineru" if is_scanned or is_complex_layout else "pymupdf4llm"
-fallback_backend = "mineru" if primary_backend != "mineru" else "raw-pymupdf"
+prefer_mineru_api = True
+local_fallback_backend = "mineru-local" if is_scanned or is_complex_layout else "pymupdf4llm"
+last_resort_backend = "raw-pymupdf"
 ```
 
 `has_tables` can use PyMuPDF table detection plus cheap keyword signals such as `Table 1`, `TABLE 1`, or dense grid drawings. `has_formulas` can use cheap text signals such as equation-heavy symbols, numbered equations, or MathJax-like fragments. These signals are routing hints, not correctness guarantees.
@@ -127,13 +132,15 @@ GROBID calls must have bounded runtime. V1 uses a total timeout of 60 seconds an
 
 ### Body Parsers
 
-Use `PyMuPDF4LLM` as the fast normal-PDF parser. Use raw PyMuPDF only for profiling and last-resort text fallback.
+Use the MinerU Precision Parsing API as the primary body parser when `mineru_api_base_url` and `mineru_api_key` are configured.
 
-Use `MinerU` as the advanced local parser for scanned or complex academic PDFs. MinerU should be integrated behind the same `PdfParserBackend` contract as the existing backends and normalize its output into the current `ParseDocument`, `ParseElement`, `ParseTable`, and `ParseAsset` models.
+Use `PyMuPDF4LLM` only as the fast normal-PDF local fallback. Use raw PyMuPDF only for profiling and last-resort text fallback.
 
-Remove LlamaParse from the parser router. This local parser layer does not include a cloud parser path.
+Use local `MinerU` only as the advanced local fallback for scanned or complex academic PDFs when the MinerU API is not configured or produces low-quality output. MinerU API and local MinerU should both be integrated behind the same `PdfParserBackend` contract and normalize output into the current `ParseDocument`, `ParseElement`, `ParseTable`, and `ParseAsset` models.
 
-If MinerU fails or times out, fall back to raw PyMuPDF text extraction when possible. That fallback is intentionally incomplete: it only provides searchable text and limited page provenance. The parse must be marked `completed_with_warnings` with a clear diagnostic such as `raw_text_only_fallback`; it must not silently appear equivalent to a structured parse.
+Remove LlamaParse from the parser router. This parser layer does not include a non-MinerU parser API path.
+
+If MinerU API is not configured, route directly to local fallback. If MinerU API fails quality checks, route to local fallback. If local fallback fails or times out, fall back to raw PyMuPDF text extraction when possible. That fallback is intentionally incomplete: it only provides searchable text and limited page provenance. The parse must be marked `completed_with_warnings` with a clear diagnostic such as `raw_text_only_fallback`; it must not silently appear equivalent to a structured parse.
 
 ### Normalization
 
@@ -169,7 +176,7 @@ Other signals are recorded for diagnostics only in V1:
 - reference filtering
 - empty element ratio
 
-If quality is low and the primary backend was not MinerU, rerun the body parse with MinerU. If MinerU also produces low quality, fall back to raw PyMuPDF text, preserve warnings, and mark the parse as `review_needed` or `completed_with_warnings` depending on whether searchable text exists.
+If quality is low and the body backend was `mineru-api`, rerun the body parse through the local fallback backend from `ParsePlan`. If local fallback also produces low quality, fall back to raw PyMuPDF text, preserve warnings, and mark the parse as `review_needed` or `completed_with_warnings` depending on whether searchable text exists.
 
 ### Academic Enrichment
 
@@ -233,14 +240,15 @@ Version diagnostics should include:
 
 - PyMuPDF version
 - PyMuPDF4LLM version
-- MinerU version and model profile when available
+- MinerU API model profile when available
+- local MinerU version and model profile when available
 - GROBID service version when available
 
 The reference-paper evaluation report should include these versions so quality changes can be compared across upgrades.
 
 ## Evaluation
 
-Use `reference_paper/` as the first real-paper local evaluation corpus. These PDFs must not be committed. The directory should be ignored by git. Keep only a lightweight manifest, such as `reference_paper/papers.json` or `tests/fixtures/reference_papers.json`, with filename, DOI or source URL when known, and whether the PDF is allowed for local-only testing.
+Use `reference_paper/` as the first real-paper evaluation corpus. These PDFs must not be committed. The directory should be ignored by git. Keep only a lightweight manifest, such as `reference_paper/papers.json` or `tests/fixtures/reference_papers.json`, with filename, DOI or source URL when known, and whether the PDF is allowed for local testing.
 
 Evaluation should report per paper:
 
@@ -265,7 +273,8 @@ Minimum acceptance for the first implementation:
 - every parsed reference PDF has searchable passages or an explicit `review_needed` reason
 - no passage exceeds the hard chunk token budget
 - GROBID failure does not fail body parsing
-- MinerU failure falls back to raw PyMuPDF text when possible
+- MinerU API absence or failure falls back to local parsing
+- local fallback failure falls back to raw PyMuPDF text when possible
 - raw PyMuPDF fallback is marked `completed_with_warnings` and includes a user-visible "raw text only" warning
 
 ## Testing
@@ -274,11 +283,12 @@ Add unit tests for:
 
 - `ParsePlan` generation
 - router selection without LlamaParse
-- MinerU backend normalization with mocked output
+- MinerU API backend normalization with mocked HTTP output
+- local fallback selection when MinerU API is not configured
 - quality gate fallback decisions
 - GROBID metadata provenance merge
 - worker status transitions
-- MinerU concurrency limit
+- local MinerU concurrency limit
 - GROBID timeout/retry fallback
 - cancellation before expensive parser stages
 - content-hash parse reuse
@@ -288,8 +298,8 @@ Add an evaluation script for `reference_paper/` that can run locally and write a
 ## Migration Strategy
 
 1. Add job tables and worker state without changing the existing parse endpoint behavior.
-2. Introduce `ParsePlan` and local-only router selection.
-3. Add MinerU backend behind the existing backend protocol.
+2. Introduce `ParsePlan` and MinerU API-first router selection.
+3. Add MinerU API backend and local fallback backends behind the existing backend protocol.
 4. Move `/parse` to enqueue a job and optionally add a synchronous compatibility path for tests.
 5. Add quality gate fallback and review status.
 6. Add GROBID metadata provenance and reference enrichment.
@@ -299,4 +309,5 @@ Add an evaluation script for `reference_paper/` that can run locally and write a
 
 - Use an in-process background worker for the first implementation.
 - Keep `papers.parse_status` compatible with the existing enum. Store `review_needed` on `parse_jobs.status`, `parse_runs.status`, and parse diagnostics. A paper with searchable fallback text can still show `parsed` at the paper row level.
+- Configure MinerU API with `mineru_api_base_url` and `mineru_api_key` in `app_state`, or `MINERU_API_BASE_URL` and `MINERU_API_KEY` in the environment; if either value is missing, skip the API path and use local fallback.
 - Configure GROBID as a local service URL. Do not bundle or auto-install GROBID in this implementation.

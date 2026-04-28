@@ -1,24 +1,58 @@
-# Local Paper PDF Parser Implementation Plan
+# MinerU API-First Paper PDF Parser Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a fully local, paper-only PDF parsing layer that routes normal PDFs to PyMuPDF4LLM, routes scanned or complex papers to MinerU, extracts metadata with bounded GROBID calls, persists parse jobs and diagnostics, and falls back visibly when structured parsing is incomplete.
+**Goal:** Build a paper-only PDF parsing layer whose body parser uses the configured MinerU Precision Parsing API as the primary path, extracts metadata with bounded GROBID calls, persists parse jobs and diagnostics, and falls back to local parsing only when the MinerU API is not configured or cannot produce usable output.
 
-**Architecture:** Keep the current `ParseDocument` -> `pdf_chunker` -> `pdf_persistence` contract as the downstream boundary. Add a durable `parse_jobs` state machine, a `ParsePlan` produced by the PyMuPDF profiler, local-only parser routing, quality-gated fallback, GROBID metadata enrichment, and a worker facade that can run in-process now and move to Celery/RQ later.
+**Architecture:** Keep the current `ParseDocument` -> `pdf_chunker` -> `pdf_persistence` contract as the downstream boundary. Add a durable `parse_jobs` state machine, a `ParsePlan` produced by the PyMuPDF profiler, a MinerU API client as the primary body parser, local fallback parsing when API configuration is absent or unusable, quality-gated fallback, GROBID metadata enrichment, and a worker facade that can run in-process now and move to Celery/RQ later.
 
-**Tech Stack:** Python 3.11, FastAPI, SQLite, PyMuPDF, PyMuPDF4LLM, optional MinerU local package, GROBID HTTP service, pytest.
+**Tech Stack:** Python 3.11, FastAPI, SQLite, HTTPX, PyMuPDF, PyMuPDF4LLM, optional local MinerU package, MinerU Precision Parsing API, GROBID HTTP service, pytest.
 
 ---
+
+## Updated Architecture Diagram
+
+```text
+Upload -> validate/hash/store/reuse cached parse or create parse_job
+   |
+   v
+Parse Worker
+  |
+  +-> PyMuPDF Profiler -> ParsePlan
+  |
+  +-> parallel:
+  |     +-> GROBID metadata + references
+  |     |
+  |     +-> Body parser
+  |           |
+  |           +-> if MinerU Precision API configured
+  |           |      -> MinerU API client
+  |           |      -> normalize to ParseDocument
+  |           |
+  |           +-> else API not configured
+  |                  -> local fallback:
+  |                       normal -> PyMuPDF4LLM
+  |                       complex/scanned -> local MinerU
+  |                       last resort -> raw PyMuPDF
+  |
+  +-> quality gate
+  |     +-> if API result low quality -> local fallback
+  |     +-> if fallback still low -> raw PyMuPDF + warnings/review flags
+  |
+  +-> academic enrichment
+  +-> persist parse_run/elements/tables/assets/passages + chunk/index
+```
 
 ## File Structure
 
 ### New Files
 
-- `pdf_parse_plan.py`: Builds `ParsePlan` from `PdfQualityReport` and profiler metadata. Owns the routing heuristics.
+- `pdf_parse_plan.py`: Builds `ParsePlan` from `PdfQualityReport` and profiler metadata. Owns scan/complexity signals and local fallback hints.
 - `pdf_quality_gate.py`: Computes text density, garbled ratio, page coverage, and the V1 low-quality decision.
 - `parse_jobs.py`: SQLite helpers for creating jobs, transitions, cancellation, warnings, timings, and reusable parse lookup.
-- `parse_worker.py`: In-process local parse orchestration. Owns stage order, GROBID/body parallelism, MinerU concurrency, fallback, persistence, and paper status updates.
-- `pdf_backend_mineru.py`: Optional MinerU adapter behind `PdfParserBackend`.
+- `parse_worker.py`: In-process parse orchestration. Owns stage order, GROBID/body parallelism, MinerU API primary parsing, local fallback, persistence, and paper status updates.
+- `pdf_backend_mineru_api.py`: MinerU Precision Parsing API adapter behind `PdfParserBackend`.
+- `pdf_backend_mineru_local.py`: Optional local MinerU fallback adapter behind `PdfParserBackend`.
 - `pdf_backend_raw.py`: Last-resort raw PyMuPDF text backend that preserves searchable text and marks `raw_text_only_fallback`.
 - `pdf_enrichment.py`: Local academic enrichment that merges structured references, binds nearby captions, and preserves formula metadata.
 - `paper_metadata.py`: Metadata merge helpers for updating `papers` from GROBID without overwriting user-filled fields.
@@ -27,7 +61,8 @@
 - `tests/test_parse_jobs.py`
 - `tests/test_pdf_parse_plan.py`
 - `tests/test_pdf_quality_gate.py`
-- `tests/test_pdf_backend_mineru.py`
+- `tests/test_pdf_backend_mineru_api.py`
+- `tests/test_pdf_backend_mineru_local.py`
 - `tests/test_pdf_backend_raw.py`
 - `tests/test_pdf_enrichment.py`
 - `tests/test_parse_worker.py`
@@ -41,8 +76,8 @@
 - `tests/test_db_migrations.py`: Assert schema version 5 and parse-job diagnostics schema.
 - `pdf_models.py`: Add `raw_text` extraction method and diagnostics metadata expectations.
 - `pdf_profile.py`: Emit profiler metadata needed by `ParsePlan`.
-- `pdf_router.py`: Remove LlamaParse from routing, add MinerU and raw PyMuPDF candidates.
-- `tests/test_pdf_router.py`: Replace LlamaParse routing tests with local-only router expectations.
+- `pdf_router.py`: Remove LlamaParse from routing, choose MinerU API first when configured, and use local parser candidates only as fallback.
+- `tests/test_pdf_router.py`: Replace LlamaParse routing tests with MinerU API-first and local-fallback router expectations.
 - `pdf_backend_grobid.py`: Set default timeout to 60 seconds, add one retry, keep failure non-fatal to the worker.
 - `pdf_persistence.py`: Persist parse-plan diagnostics, stage timings, review flags, and clone reusable parse results.
 - `parser.py`: Export lazy wrappers for the new local worker entry points.
@@ -52,12 +87,14 @@
 
 ## Invariants
 
-- The parser router must not call LlamaParse or any cloud parser.
+- The parser router must not call LlamaParse or any non-MinerU parser API.
+- The body parser must call the configured MinerU Precision Parsing API first.
+- Local body parsing is a fallback path, not the normal routing path.
 - `papers.parse_status` stays coarse: `pending`, `parsing`, `parsed`, `error`. Detailed statuses live in `parse_jobs.status`.
 - `completed_with_warnings` and `review_needed` parse jobs map to `papers.parse_status = 'parsed'` when searchable passages exist.
 - GROBID failure records a warning and never fails the whole job.
-- MinerU has a process-wide concurrency limit of one active MinerU parse.
-- V1 cancellation is cooperative: worker checks before every stage and before acquiring the MinerU gate.
+- Local MinerU has a process-wide concurrency limit of one active local MinerU parse.
+- V1 cancellation is cooperative: worker checks before every stage and before starting MinerU API or local MinerU work.
 - V1 does not link in-text citation mentions to reference entries.
 - `reference_paper/` PDFs remain local and untracked.
 
@@ -87,7 +124,7 @@ httpx>=0.27.0
 tiktoken>=0.7.0
 ```
 
-The MinerU adapter will detect either `magic_pdf` or `mineru` at runtime. Keep MinerU outside this file until the local installation in this machine confirms the import path and model profile that work with `reference_paper/`.
+The local MinerU fallback adapter will detect either `magic_pdf` or `mineru` at runtime. Keep local MinerU outside this file until the local installation in this machine confirms the import path and model profile that work with `reference_paper/`.
 
 - [ ] **Step 2: Verify the local PDFs are ignored**
 
@@ -546,8 +583,8 @@ def test_normal_text_pdf_routes_to_pymupdf4llm() -> None:
 
     assert plan.is_scanned is False
     assert plan.is_complex_layout is False
-    assert plan.primary_backend == "pymupdf4llm"
-    assert plan.fallback_backend == "mineru"
+    assert plan.prefer_mineru_api is True
+    assert plan.local_fallback_backend == "pymupdf4llm"
     assert plan.run_grobid is True
 
 
@@ -566,8 +603,8 @@ def test_scanned_pdf_routes_to_mineru() -> None:
 
     assert plan.native_text_page_ratio == 0.5
     assert plan.is_scanned is True
-    assert plan.primary_backend == "mineru"
-    assert plan.fallback_backend == "raw-pymupdf"
+    assert plan.prefer_mineru_api is True
+    assert plan.local_fallback_backend == "mineru-local"
 
 
 def test_formula_or_multicolumn_pdf_is_complex() -> None:
@@ -585,7 +622,7 @@ def test_formula_or_multicolumn_pdf_is_complex() -> None:
     assert plan.is_complex_layout is True
     assert plan.has_formulas is True
     assert plan.has_multi_column_pages is True
-    assert plan.primary_backend == "mineru"
+    assert plan.local_fallback_backend == "mineru-local"
 ```
 
 - [ ] **Step 2: Run tests and verify failure**
@@ -611,7 +648,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pdf_models import PdfQualityReport
 
-ParserBackendName: TypeAlias = Literal["pymupdf4llm", "mineru", "raw-pymupdf"]
+LocalFallbackBackendName: TypeAlias = Literal["pymupdf4llm", "mineru-local", "raw-pymupdf"]
 
 
 class ParsePlan(BaseModel):
@@ -629,8 +666,9 @@ class ParsePlan(BaseModel):
     has_multi_column_pages: bool
     is_scanned: bool
     is_complex_layout: bool
-    primary_backend: ParserBackendName
-    fallback_backend: ParserBackendName
+    prefer_mineru_api: bool = True
+    local_fallback_backend: LocalFallbackBackendName
+    last_resort_backend: LocalFallbackBackendName = "raw-pymupdf"
     run_grobid: bool = True
 
 
@@ -652,8 +690,7 @@ def build_parse_plan(quality: PdfQualityReport) -> ParsePlan:
     has_multi_column_pages = quality.estimated_two_column_pages > 0
     is_scanned = native_ratio < 0.8
     is_complex = has_tables or has_formulas or has_multi_column_pages
-    primary = "mineru" if is_scanned or is_complex else "pymupdf4llm"
-    fallback = "mineru" if primary != "mineru" else "raw-pymupdf"
+    local_fallback = "mineru-local" if is_scanned or is_complex else "pymupdf4llm"
 
     return ParsePlan(
         page_count=page_count,
@@ -668,8 +705,8 @@ def build_parse_plan(quality: PdfQualityReport) -> ParsePlan:
         has_multi_column_pages=has_multi_column_pages,
         is_scanned=is_scanned,
         is_complex_layout=is_complex,
-        primary_backend=primary,
-        fallback_backend=fallback,
+        prefer_mineru_api=True,
+        local_fallback_backend=local_fallback,
     )
 ```
 
@@ -1088,58 +1125,117 @@ git commit -m "Add raw PyMuPDF fallback backend"
 
 ---
 
-## Task 7: MinerU Backend Adapter And Concurrency Gate
+## Task 7: MinerU API Backend And Local Fallback Adapter
 
 **Files:**
-- Create: `pdf_backend_mineru.py`
-- Create: `tests/test_pdf_backend_mineru.py`
+- Create: `pdf_backend_mineru_api.py`
+- Create: `pdf_backend_mineru_local.py`
+- Create: `tests/test_pdf_backend_mineru_api.py`
+- Create: `tests/test_pdf_backend_mineru_local.py`
 - Modify: `pyproject.toml`
 
-- [ ] **Step 1: Write failing MinerU adapter tests**
+- [ ] **Step 1: Write failing MinerU API tests**
 
-Create `tests/test_pdf_backend_mineru.py`:
+Create `tests/test_pdf_backend_mineru_api.py`:
 
 ```python
 from pathlib import Path
 
+import httpx
 import pytest
 
-from pdf_backend_mineru import MinerUBackend, MinerUConcurrencyGate
+from pdf_backend_mineru_api import MinerUApiBackend, MinerUApiConfig, get_configured_mineru_api_backend
 from pdf_models import PdfQualityReport
 
 
-def test_mineru_backend_normalizes_markdown_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    backend = MinerUBackend(
+def test_mineru_api_backend_posts_pdf_and_normalizes_payload(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/api/v1/pdf/parse"
+        assert request.headers["Authorization"] == "Bearer token-1"
+        assert b"%PDF" in request.read()
+        return httpx.Response(
+            200,
+            json={
+                "markdown": "# Title\n\nParagraph text\n\n$$x=1$$",
+                "tables": [
+                    {"page": 2, "caption": "Table 1", "cells": [["A", "B"], ["1", "2"]]},
+                ],
+                "assets": [
+                    {"type": "figure", "page": 3, "uri": "figures/fig1.png", "caption": "Figure 1"},
+                ],
+                "metadata": {"model_profile": "precision-api"},
+            },
+        )
+
+    backend = MinerUApiBackend(
+        MinerUApiConfig(base_url="https://mineru.test", api_key="token-1"),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    document = backend.parse(
+        pdf_path,
+        "paper-1",
+        "space-1",
+        PdfQualityReport(page_count=3, needs_layout_model=True),
+    )
+
+    assert document.backend == "mineru-api"
+    assert document.extraction_method == "layout_model"
+    assert any(element.element_type == "heading" for element in document.elements)
+    assert any(element.element_type == "equation" for element in document.elements)
+    assert len(document.tables) == 1
+    assert len(document.assets) == 1
+    assert document.metadata["mineru"]["model_profile"] == "precision-api"
+
+
+def test_unconfigured_mineru_api_backend_is_unavailable() -> None:
+    assert get_configured_mineru_api_backend({}) is None
+
+
+def test_configured_mineru_api_backend_is_available() -> None:
+    backend = get_configured_mineru_api_backend(
+        {"mineru_api_base_url": "https://mineru.test", "mineru_api_key": "token-1"}
+    )
+
+    assert backend is not None
+    assert backend.is_available() is True
+```
+
+Create `tests/test_pdf_backend_mineru_local.py`:
+
+```python
+from pathlib import Path
+
+from pdf_backend_mineru_local import MinerULocalBackend, MinerULocalConcurrencyGate
+from pdf_models import PdfQualityReport
+
+
+def test_local_mineru_backend_uses_injected_runner() -> None:
+    backend = MinerULocalBackend(
         runner=lambda path: {
-            "markdown": "# Title\n\nParagraph text\n\n$$x=1$$",
-            "tables": [
-                {"page": 2, "caption": "Table 1", "cells": [["A", "B"], ["1", "2"]]},
-            ],
-            "assets": [
-                {"type": "figure", "page": 3, "uri": "figures/fig1.png", "caption": "Figure 1"},
-            ],
+            "markdown": "# Local Title\n\nLocal paragraph",
             "metadata": {"model_profile": "local-test"},
-        }
+        },
+        acquire_timeout_seconds=0.01,
     )
 
     document = backend.parse(
         Path("paper.pdf"),
         "paper-1",
         "space-1",
-        PdfQualityReport(page_count=3, needs_layout_model=True),
+        PdfQualityReport(page_count=1, needs_layout_model=True),
     )
 
-    assert document.backend == "mineru"
-    assert document.extraction_method == "layout_model"
-    assert any(element.element_type == "heading" for element in document.elements)
-    assert any(element.element_type == "equation" for element in document.elements)
-    assert len(document.tables) == 1
-    assert len(document.assets) == 1
+    assert document.backend == "mineru-local"
     assert document.metadata["mineru"]["model_profile"] == "local-test"
 
 
 def test_mineru_gate_allows_one_active_task() -> None:
-    gate = MinerUConcurrencyGate(limit=1)
+    gate = MinerULocalConcurrencyGate(limit=1)
     assert gate.try_acquire() is True
     assert gate.try_acquire() is False
     gate.release()
@@ -1148,7 +1244,7 @@ def test_mineru_gate_allows_one_active_task() -> None:
 
 
 def test_mineru_gate_acquire_can_timeout() -> None:
-    gate = MinerUConcurrencyGate(limit=1)
+    gate = MinerULocalConcurrencyGate(limit=1)
     assert gate.acquire(timeout_seconds=0.01) is True
     assert gate.acquire(timeout_seconds=0.01) is False
     gate.release()
@@ -1157,90 +1253,55 @@ def test_mineru_gate_acquire_can_timeout() -> None:
 - [ ] **Step 2: Run tests and verify failure**
 
 ```bash
-.venv/bin/pytest -q tests/test_pdf_backend_mineru.py
+.venv/bin/pytest -q tests/test_pdf_backend_mineru_api.py tests/test_pdf_backend_mineru_local.py
 ```
 
-Expected: FAIL because `pdf_backend_mineru.py` does not exist.
+Expected: FAIL because the MinerU API and local fallback modules do not exist.
 
-- [ ] **Step 3: Implement MinerU adapter**
+- [ ] **Step 3: Implement MinerU API backend**
 
-Create `pdf_backend_mineru.py`:
+Create `pdf_backend_mineru_api.py`:
 
 ```python
-"""Optional MinerU parser backend for local complex-paper parsing."""
+"""MinerU Precision Parsing API backend."""
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
-import threading
-from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
+
+import httpx
 
 from pdf_backend_base import ParserBackendError, ParserBackendUnavailable
 from pdf_models import ParseAsset, ParseDocument, ParseElement, ParseTable, PdfQualityReport
 
-_BACKEND_NAME = "mineru"
+_BACKEND_NAME = "mineru-api"
 
 
-class MinerUConcurrencyGate:
-    def __init__(self, limit: int = 1) -> None:
-        self._semaphore = threading.BoundedSemaphore(limit)
-
-    def try_acquire(self) -> bool:
-        return self._semaphore.acquire(blocking=False)
-
-    def acquire(self, *, timeout_seconds: float | None = None) -> bool:
-        if timeout_seconds is None:
-            self._semaphore.acquire()
-            return True
-        return self._semaphore.acquire(timeout=timeout_seconds)
-
-    def release(self) -> None:
-        self._semaphore.release()
+@dataclass(frozen=True)
+class MinerUApiConfig:
+    base_url: str
+    api_key: str
+    parse_endpoint: str = "/api/v1/pdf/parse"
+    timeout_seconds: float = 300.0
 
 
-MINERU_GATE = MinerUConcurrencyGate(limit=1)
-
-
-def _mineru_available() -> bool:
-    return (
-        importlib.util.find_spec("magic_pdf") is not None
-        or importlib.util.find_spec("mineru") is not None
-    )
-
-
-def _run_installed_mineru(file_path: Path) -> dict[str, Any]:
-    if importlib.util.find_spec("magic_pdf") is not None:
-        magic_pdf = importlib.import_module("magic_pdf")
-        analyze = getattr(magic_pdf, "analyze_pdf", None)
-        if callable(analyze):
-            return dict(analyze(str(file_path)))
-    if importlib.util.find_spec("mineru") is not None:
-        mineru = importlib.import_module("mineru")
-        analyze = getattr(mineru, "analyze_pdf", None)
-        if callable(analyze):
-            return dict(analyze(str(file_path)))
-    raise ParserBackendUnavailable(_BACKEND_NAME, "MinerU import path is not available")
-
-
-class MinerUBackend:
+class MinerUApiBackend:
     name = _BACKEND_NAME
 
     def __init__(
         self,
+        config: MinerUApiConfig,
         *,
-        runner: Callable[[Path], dict[str, Any]] | None = None,
-        gate: MinerUConcurrencyGate = MINERU_GATE,
-        acquire_timeout_seconds: float = 600.0,
+        http_client: httpx.Client | None = None,
     ) -> None:
-        self._runner = runner or _run_installed_mineru
-        self._gate = gate
-        self._acquire_timeout_seconds = acquire_timeout_seconds
+        self.config = config
+        self._owns_client = http_client is None
+        self._client = http_client or httpx.Client(timeout=config.timeout_seconds)
 
     def is_available(self) -> bool:
-        return self._runner is not _run_installed_mineru or _mineru_available()
+        return bool(self.config.base_url.strip() and self.config.api_key.strip())
 
     def parse(
         self,
@@ -1249,21 +1310,33 @@ class MinerUBackend:
         space_id: str,
         quality_report: PdfQualityReport,
     ) -> ParseDocument:
-        acquired = self._gate.acquire(timeout_seconds=self._acquire_timeout_seconds)
-        if not acquired:
-            raise ParserBackendUnavailable(
-                self.name,
-                f"timed out waiting for MinerU gate after {self._acquire_timeout_seconds}s",
-            )
         try:
-            payload = self._runner(file_path)
+            payload = self._post_pdf(file_path)
             return _payload_to_document(payload, paper_id, space_id, quality_report)
         except ParserBackendUnavailable:
             raise
         except Exception as exc:
-            raise ParserBackendError(self.name, "MinerU parse failed", cause=exc) from exc
-        finally:
-            self._gate.release()
+            raise ParserBackendError(self.name, "MinerU API parse failed", cause=exc) from exc
+
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
+
+    def _post_pdf(self, file_path: Path) -> dict[str, Any]:
+        if not self.is_available():
+            raise ParserBackendUnavailable(self.name, "MinerU API is not configured")
+        url = f"{self.config.base_url.rstrip('/')}/{self.config.parse_endpoint.lstrip('/')}"
+        with file_path.open("rb") as pdf_file:
+            response = self._client.post(
+                url,
+                headers={"Authorization": f"Bearer {self.config.api_key}"},
+                files={"file": (file_path.name, pdf_file, "application/pdf")},
+            )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ParserBackendError(self.name, "MinerU API returned non-object JSON")
+        return payload
 
 
 def _payload_to_document(
@@ -1271,6 +1344,9 @@ def _payload_to_document(
     paper_id: str,
     space_id: str,
     quality_report: PdfQualityReport,
+    *,
+    backend_name: str = _BACKEND_NAME,
+    source: str = "mineru-api",
 ) -> ParseDocument:
     markdown = str(payload.get("markdown", "") or "")
     elements: list[ParseElement] = []
@@ -1295,7 +1371,7 @@ def _payload_to_document(
                 text=text,
                 page_number=0,
                 extraction_method="layout_model",
-                metadata={"source": "mineru"},
+                metadata={"source": source},
             )
         )
 
@@ -1308,7 +1384,7 @@ def _payload_to_document(
                 page_number=int(raw.get("page", 0) or 0),
                 caption=str(raw.get("caption", "") or ""),
                 cells=[[str(cell) for cell in row] for row in list(raw.get("cells", []) or [])],
-                metadata={"source": "mineru"},
+                metadata={"source": source},
             )
         )
 
@@ -1320,14 +1396,14 @@ def _payload_to_document(
                 asset_type=str(raw.get("type", "figure") or "figure"),
                 page_number=int(raw.get("page", 0) or 0),
                 uri=str(raw.get("uri", "") or ""),
-                metadata={"source": "mineru", "caption": str(raw.get("caption", "") or "")},
+                metadata={"source": source, "caption": str(raw.get("caption", "") or "")},
             )
         )
 
     return ParseDocument(
         paper_id=paper_id,
         space_id=space_id,
-        backend=_BACKEND_NAME,
+        backend=backend_name,
         extraction_method="layout_model",
         quality=quality_report,
         elements=elements,
@@ -1335,28 +1411,148 @@ def _payload_to_document(
         assets=assets,
         metadata={"mineru": dict(payload.get("metadata", {}) or {})},
     )
+
+
+def get_configured_mineru_api_backend(settings: Mapping[str, str]) -> MinerUApiBackend | None:
+    base_url = str(settings.get("mineru_api_base_url", "") or "").strip()
+    api_key = str(settings.get("mineru_api_key", "") or "").strip()
+    if not base_url or not api_key:
+        return None
+    return MinerUApiBackend(MinerUApiConfig(base_url=base_url, api_key=api_key))
 ```
 
-Add `pdf_backend_mineru` to `pyproject.toml`.
+- [ ] **Step 4: Implement local MinerU fallback gate**
 
-- [ ] **Step 4: Run tests**
+Create `pdf_backend_mineru_local.py`:
+
+```python
+"""Optional local MinerU fallback backend."""
+
+from __future__ import annotations
+
+import importlib
+import importlib.util
+import threading
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+from pdf_backend_base import ParserBackendError, ParserBackendUnavailable
+from pdf_backend_mineru_api import _payload_to_document
+from pdf_models import ParseDocument, PdfQualityReport
+
+_BACKEND_NAME = "mineru-local"
+
+
+class MinerULocalConcurrencyGate:
+    def __init__(self, limit: int = 1) -> None:
+        self._semaphore = threading.BoundedSemaphore(limit)
+
+    def try_acquire(self) -> bool:
+        return self._semaphore.acquire(blocking=False)
+
+    def acquire(self, *, timeout_seconds: float | None = None) -> bool:
+        if timeout_seconds is None:
+            self._semaphore.acquire()
+            return True
+        return self._semaphore.acquire(timeout=timeout_seconds)
+
+    def release(self) -> None:
+        self._semaphore.release()
+
+
+MINERU_LOCAL_GATE = MinerULocalConcurrencyGate(limit=1)
+
+
+def _local_mineru_available() -> bool:
+    return (
+        importlib.util.find_spec("magic_pdf") is not None
+        or importlib.util.find_spec("mineru") is not None
+    )
+
+
+def _run_installed_local_mineru(file_path: Path) -> dict[str, Any]:
+    if importlib.util.find_spec("magic_pdf") is not None:
+        magic_pdf = importlib.import_module("magic_pdf")
+        analyze = getattr(magic_pdf, "analyze_pdf", None)
+        if callable(analyze):
+            return dict(analyze(str(file_path)))
+    if importlib.util.find_spec("mineru") is not None:
+        mineru = importlib.import_module("mineru")
+        analyze = getattr(mineru, "analyze_pdf", None)
+        if callable(analyze):
+            return dict(analyze(str(file_path)))
+    raise ParserBackendUnavailable(_BACKEND_NAME, "local MinerU import path is not available")
+
+
+class MinerULocalBackend:
+    name = _BACKEND_NAME
+
+    def __init__(
+        self,
+        *,
+        runner: Callable[[Path], dict[str, Any]] | None = None,
+        gate: MinerULocalConcurrencyGate = MINERU_LOCAL_GATE,
+        acquire_timeout_seconds: float = 600.0,
+    ) -> None:
+        self._runner = runner or _run_installed_local_mineru
+        self._gate = gate
+        self._acquire_timeout_seconds = acquire_timeout_seconds
+
+    def is_available(self) -> bool:
+        return self._runner is not _run_installed_local_mineru or _local_mineru_available()
+
+    def parse(
+        self,
+        file_path: Path,
+        paper_id: str,
+        space_id: str,
+        quality_report: PdfQualityReport,
+    ) -> ParseDocument:
+        acquired = self._gate.acquire(timeout_seconds=self._acquire_timeout_seconds)
+        if not acquired:
+            raise ParserBackendUnavailable(
+                self.name,
+                f"timed out waiting for local MinerU gate after {self._acquire_timeout_seconds}s",
+            )
+        try:
+            document = _payload_to_document(
+                self._runner(file_path),
+                paper_id,
+                space_id,
+                quality_report,
+                backend_name=self.name,
+                source="mineru-local",
+            )
+            return document
+        except ParserBackendUnavailable:
+            raise
+        except Exception as exc:
+            raise ParserBackendError(self.name, "local MinerU parse failed", cause=exc) from exc
+        finally:
+            self._gate.release()
+```
+
+Add `pdf_backend_mineru_api` and `pdf_backend_mineru_local` to `pyproject.toml`.
+
+- [ ] **Step 5: Run tests**
 
 ```bash
-.venv/bin/pytest -q tests/test_pdf_backend_mineru.py
+.venv/bin/pytest -q tests/test_pdf_backend_mineru_api.py tests/test_pdf_backend_mineru_local.py
 ```
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add pdf_backend_mineru.py tests/test_pdf_backend_mineru.py pyproject.toml
-git commit -m "Add MinerU parser backend"
+git add pdf_backend_mineru_api.py pdf_backend_mineru_local.py tests/test_pdf_backend_mineru_api.py tests/test_pdf_backend_mineru_local.py pyproject.toml
+git commit -m "Add MinerU API parser backend"
 ```
 
 ---
 
-## Task 8: Local-Only Router
+## Task 8: MinerU API-First Body Router
 
 **Files:**
 - Modify: `pdf_router.py`
@@ -1367,36 +1563,38 @@ git commit -m "Add MinerU parser backend"
 In `tests/test_pdf_router.py`, remove tests that expect lazy LlamaParse resolution. Add these tests:
 
 ```python
-def test_complex_pdf_selects_mineru_before_pymupdf(tmp_path: Path) -> None:
+def test_configured_mineru_api_is_used_for_normal_pdf(tmp_path: Path) -> None:
     router_module = _router_module()
-    mineru = FakeBackend("mineru", extraction_method="layout_model")
+    mineru_api = FakeBackend("mineru-api", extraction_method="layout_model")
     pymupdf = FakeBackend("pymupdf4llm")
 
     router = router_module.PdfBackendRouter(
+        mineru_api=mineru_api,
         pymupdf4llm=pymupdf,
-        mineru=mineru,
+        mineru_local=FakeBackend("mineru-local", extraction_method="layout_model"),
         raw=FakeBackend("raw-pymupdf", extraction_method="raw_text"),
         grobid_client=None,
     )
     document = router.parse_pdf(
-        tmp_path / "complex.pdf",
+        tmp_path / "normal.pdf",
         "paper-1",
         "space-1",
-        _quality(needs_layout_model=True, estimated_table_pages=1),
+        _quality(),
     )
 
-    assert document.backend == "mineru"
-    assert len(mineru.calls) == 1
+    assert document.backend == "mineru-api"
+    assert len(mineru_api.calls) == 1
     assert pymupdf.calls == []
 
 
-def test_router_never_resolves_llamaparse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unconfigured_mineru_api_falls_back_to_local_pymupdf_for_normal_pdf(tmp_path: Path) -> None:
     router_module = _router_module()
-    monkeypatch.delattr(router_module, "get_configured_llamaparse_backend", raising=False)
+    pymupdf = FakeBackend("pymupdf4llm")
 
     router = router_module.PdfBackendRouter(
-        pymupdf4llm=FakeBackend("pymupdf4llm"),
-        mineru=FakeBackend("mineru", available=False, extraction_method="layout_model"),
+        mineru_api=None,
+        pymupdf4llm=pymupdf,
+        mineru_local=FakeBackend("mineru-local", extraction_method="layout_model"),
         raw=FakeBackend("raw-pymupdf", extraction_method="raw_text"),
         grobid_client=None,
     )
@@ -1404,29 +1602,47 @@ def test_router_never_resolves_llamaparse(tmp_path: Path, monkeypatch: pytest.Mo
     document = router.parse_pdf(tmp_path / "clean.pdf", "paper-1", "space-1", _quality())
 
     assert document.backend == "pymupdf4llm"
+    assert len(pymupdf.calls) == 1
 
 
-def test_mineru_failure_falls_back_to_raw_for_scanned_pdf(tmp_path: Path) -> None:
+def test_unconfigured_mineru_api_falls_back_to_local_mineru_for_complex_pdf(tmp_path: Path) -> None:
     router_module = _router_module()
-    mineru = FakeBackend("mineru", action="error", extraction_method="layout_model")
-    raw = FakeBackend("raw-pymupdf", extraction_method="raw_text")
+    mineru_local = FakeBackend("mineru-local", extraction_method="layout_model")
 
     router = router_module.PdfBackendRouter(
+        mineru_api=None,
         pymupdf4llm=FakeBackend("pymupdf4llm"),
-        mineru=mineru,
-        raw=raw,
+        mineru_local=mineru_local,
+        raw=FakeBackend("raw-pymupdf", extraction_method="raw_text"),
         grobid_client=None,
     )
 
     document = router.parse_pdf(
-        tmp_path / "scan.pdf",
+        tmp_path / "complex.pdf",
         "paper-1",
         "space-1",
-        _quality(needs_ocr=True, native_text_pages=0, image_only_pages=2),
+        _quality(needs_layout_model=True, estimated_table_pages=1),
     )
 
-    assert document.backend == "raw-pymupdf"
-    assert len(raw.calls) == 1
+    assert document.backend == "mineru-local"
+    assert len(mineru_local.calls) == 1
+
+
+def test_router_never_resolves_llamaparse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    router_module = _router_module()
+    monkeypatch.delattr(router_module, "get_configured_llamaparse_backend", raising=False)
+
+    router = router_module.PdfBackendRouter(
+        mineru_api=None,
+        pymupdf4llm=FakeBackend("pymupdf4llm"),
+        mineru_local=FakeBackend("mineru-local", available=False, extraction_method="layout_model"),
+        raw=FakeBackend("raw-pymupdf", extraction_method="raw_text"),
+        grobid_client=None,
+    )
+
+    document = router.parse_pdf(tmp_path / "clean.pdf", "paper-1", "space-1", _quality())
+
+    assert document.backend == "pymupdf4llm"
 ```
 
 Update `FakeBackend.extraction_method_for()` to accept `raw_text`.
@@ -1437,46 +1653,82 @@ Update `FakeBackend.extraction_method_for()` to accept `raw_text`.
 .venv/bin/pytest -q tests/test_pdf_router.py
 ```
 
-Expected: FAIL because `PdfBackendRouter` still has LlamaParse routing and no MinerU/raw arguments.
+Expected: FAIL because `PdfBackendRouter` still has LlamaParse routing and no MinerU API/local fallback arguments.
 
-- [ ] **Step 3: Implement local router constructor and candidates**
+- [ ] **Step 3: Implement API-first router constructor and candidates**
 
-In `pdf_router.py`, replace the default backend imports with local backends:
+In `pdf_router.py`, replace the default backend imports with the API backend and local fallback backends:
 
 ```python
-from pdf_backend_mineru import MinerUBackend
+import os
+
+from db import get_connection
+from pdf_backend_mineru_api import get_configured_mineru_api_backend
+from pdf_backend_mineru_local import MinerULocalBackend
 from pdf_backend_pymupdf4llm import PyMuPDF4LLMBackend
 from pdf_backend_raw import RawPyMuPDFBackend
 from pdf_parse_plan import ParsePlan, build_parse_plan
 ```
 
+Add settings loader in `pdf_router.py`:
+
+```python
+def _load_mineru_api_settings() -> dict[str, str]:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT key, value
+            FROM app_state
+            WHERE key IN ('mineru_api_base_url', 'mineru_api_key')
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    settings = {str(row["key"]): str(row["value"]) for row in rows}
+    settings.setdefault("mineru_api_base_url", os.environ.get("MINERU_API_BASE_URL", ""))
+    settings.setdefault("mineru_api_key", os.environ.get("MINERU_API_KEY", ""))
+    return settings
+```
+
 Change the router constructor shape:
 
 ```python
+_DEFAULT_MINERU_API = object()
+
+
 class PdfBackendRouter:
     def __init__(
         self,
         *,
+        mineru_api: PdfParserBackend | None | object = _DEFAULT_MINERU_API,
         pymupdf4llm: PdfParserBackend | None = None,
-        mineru: PdfParserBackend | None = None,
+        mineru_local: PdfParserBackend | None = None,
         raw: PdfParserBackend | None = None,
         grobid_client: GrobidClient | None = None,
     ) -> None:
+        self.mineru_api = (
+            get_configured_mineru_api_backend(_load_mineru_api_settings())
+            if mineru_api is _DEFAULT_MINERU_API
+            else mineru_api
+        )
         self.backends = {
             "pymupdf4llm": pymupdf4llm or PyMuPDF4LLMBackend(),
-            "mineru": mineru or MinerUBackend(),
+            "mineru-local": mineru_local or MinerULocalBackend(),
             "raw-pymupdf": raw or RawPyMuPDFBackend(),
         }
         self.grobid_client = grobid_client
 ```
 
-Select candidate names from `ParsePlan`:
+Select candidate names from API configuration first, then `ParsePlan` local fallback hints:
 
 ```python
 def _candidate_names(self, plan: ParsePlan) -> list[str]:
-    names = [plan.primary_backend]
-    if plan.fallback_backend not in names:
-        names.append(plan.fallback_backend)
+    names: list[str] = []
+    if plan.prefer_mineru_api and self.mineru_api is not None and self.mineru_api.is_available():
+        names.append("mineru-api")
+    if plan.local_fallback_backend not in names:
+        names.append(plan.local_fallback_backend)
     if "raw-pymupdf" not in names:
         names.append("raw-pymupdf")
     return names
@@ -1496,7 +1748,8 @@ def parse_pdf(
 ) -> ParseDocument:
     plan = parse_plan or build_parse_plan(quality_report)
     for backend_name in self._candidate_names(plan):
-        document = self._try_backend(backend_name, file_path, paper_id, space_id, quality_report)
+        backend = self.mineru_api if backend_name == "mineru-api" else self.backends[backend_name]
+        document = self._try_backend(backend, file_path, paper_id, space_id, quality_report)
         if document is not None:
             document.metadata.setdefault("parse_plan", plan.model_dump())
             return self._merge_grobid(file_path, document)
@@ -1508,7 +1761,7 @@ Keep `_merge_grobid()` but make it non-fatal, as it is today.
 - [ ] **Step 4: Run router tests**
 
 ```bash
-.venv/bin/pytest -q tests/test_pdf_router.py tests/test_pdf_parse_plan.py tests/test_pdf_backend_raw.py tests/test_pdf_backend_mineru.py
+.venv/bin/pytest -q tests/test_pdf_router.py tests/test_pdf_parse_plan.py tests/test_pdf_backend_raw.py tests/test_pdf_backend_mineru_api.py tests/test_pdf_backend_mineru_local.py
 ```
 
 Expected: PASS.
@@ -1517,7 +1770,7 @@ Expected: PASS.
 
 ```bash
 git add pdf_router.py tests/test_pdf_router.py
-git commit -m "Route PDFs through local parser backends"
+git commit -m "Route body parsing through MinerU API first"
 ```
 
 ---
@@ -1999,7 +2252,7 @@ def test_persist_parse_result_stores_diagnostics() -> None:
             )
         ],
         metadata={
-            "parse_plan": {"primary_backend": "pymupdf4llm"},
+            "parse_plan": {"prefer_mineru_api": True, "local_fallback_backend": "pymupdf4llm"},
             "stage_timings": {"body_parsing": 0.2},
             "review_flags": [],
             "parser_versions": {"pymupdf4llm": "0.0.20"},
@@ -2018,7 +2271,10 @@ def test_persist_parse_result_stores_diagnostics() -> None:
     parse_run_id = persist_parse_result(conn, "paper-1", "space-1", document, passages)
 
     row = conn.execute("SELECT * FROM parse_runs WHERE id = ?", (parse_run_id,)).fetchone()
-    assert json.loads(row["parse_plan_json"]) == {"primary_backend": "pymupdf4llm"}
+    assert json.loads(row["parse_plan_json"]) == {
+        "prefer_mineru_api": True,
+        "local_fallback_backend": "pymupdf4llm",
+    }
     assert json.loads(row["stage_timings_json"]) == {"body_parsing": 0.2}
     assert json.loads(row["review_flags_json"]) == []
     assert json.loads(row["parser_versions_json"]) == {"pymupdf4llm": "0.0.20"}
@@ -2358,7 +2614,7 @@ def _conn(tmp_path: Path) -> sqlite3.Connection:
 
 
 def _doc(backend: str, text: str = "method result " * 100) -> ParseDocument:
-    method = "layout_model" if backend == "mineru" else "native_text"
+    method = "layout_model" if backend in {"mineru-api", "mineru-local"} else "native_text"
     return ParseDocument(
         paper_id="paper-1",
         space_id="space-1",
@@ -2396,7 +2652,7 @@ def test_worker_runs_grobid_and_primary_parser_then_persists(tmp_path: Path) -> 
     worker = LocalParseWorker(
         conn_factory=lambda: conn,
         profiler=lambda path: PdfQualityReport(page_count=1, native_text_pages=1),
-        body_parser=lambda path, paper_id, space_id, quality, plan: _doc(plan.primary_backend),
+        body_parser=lambda path, paper_id, space_id, quality, plan: _doc("mineru-api"),
         grobid_parser=lambda path: GrobidParseResult(metadata=GrobidMetadata(title="Title")),
         embedder=lambda conn, parse_run_id: [],
     )
@@ -2411,7 +2667,7 @@ def test_worker_runs_grobid_and_primary_parser_then_persists(tmp_path: Path) -> 
     assert paper["parse_status"] == "parsed"
 
 
-def test_worker_reruns_mineru_when_primary_quality_is_low(tmp_path: Path) -> None:
+def test_worker_uses_local_fallback_when_api_quality_is_low(tmp_path: Path) -> None:
     conn = _conn(tmp_path)
     pdf = tmp_path / "paper.pdf"
     pdf.write_bytes(b"%PDF")
@@ -2428,10 +2684,11 @@ def test_worker_reruns_mineru_when_primary_quality_is_low(tmp_path: Path) -> Non
     calls: list[str] = []
 
     def body_parser(path, paper_id, space_id, quality, plan):
-        calls.append(plan.primary_backend)
-        if plan.primary_backend == "pymupdf4llm":
-            return _doc("pymupdf4llm", text="short")
-        return _doc("mineru", text="method result " * 100)
+        backend = "mineru-api" if len(calls) == 0 else plan.local_fallback_backend
+        calls.append(backend)
+        if backend == "mineru-api":
+            return _doc("mineru-api", text="short")
+        return _doc(backend, text="method result " * 100)
 
     worker = LocalParseWorker(
         conn_factory=lambda: conn,
@@ -2444,7 +2701,7 @@ def test_worker_reruns_mineru_when_primary_quality_is_low(tmp_path: Path) -> Non
     result = worker.run_job(job["id"])
 
     assert result.status == "completed"
-    assert calls == ["pymupdf4llm", "mineru"]
+    assert calls == ["mineru-api", "pymupdf4llm"]
 
 
 def test_worker_marks_raw_fallback_as_completed_with_warnings(tmp_path: Path) -> None:
@@ -2758,24 +3015,24 @@ Add fallback:
             return document
 
         append_job_warning(conn, job_id, f"low_quality:{','.join(decision.flags)}")
-        if document.backend != "mineru" and plan.fallback_backend == "mineru":
+        if document.backend == "mineru-api":
             check_not_cancelled(conn, job_id)
-            mineru_plan = plan.model_copy(update={"primary_backend": "mineru", "fallback_backend": "raw-pymupdf"})
-            mineru_document = self._timed(
+            fallback_plan = plan.model_copy(update={"prefer_mineru_api": False})
+            fallback_document = self._timed(
                 conn,
                 job_id,
-                "mineru_fallback",
-                lambda: self._body_parser(file_path, paper["id"], paper["space_id"], quality, mineru_plan),
+                "local_body_fallback",
+                lambda: self._body_parser(file_path, paper["id"], paper["space_id"], quality, fallback_plan),
             )
-            mineru_decision = evaluate_parse_quality(mineru_document)
-            if not mineru_decision.low_quality:
-                return mineru_document
-            append_job_warning(conn, job_id, f"mineru_low_quality:{','.join(mineru_decision.flags)}")
+            fallback_decision = evaluate_parse_quality(fallback_document)
+            if not fallback_decision.low_quality:
+                return fallback_document
+            append_job_warning(conn, job_id, f"local_fallback_low_quality:{','.join(fallback_decision.flags)}")
 
         if document.backend == "raw-pymupdf":
             return document
 
-        raw_plan = plan.model_copy(update={"primary_backend": "raw-pymupdf", "fallback_backend": "raw-pymupdf"})
+        raw_plan = plan.model_copy(update={"local_fallback_backend": "raw-pymupdf"})
         return self._timed(
             conn,
             job_id,
@@ -2822,17 +3079,22 @@ Add diagnostics:
             versions["pymupdf4llm"] = version("pymupdf4llm")
         except Exception:
             versions["pymupdf4llm"] = "unavailable"
+        versions["mineru_api_model"] = str(
+            document.metadata.get("mineru", {}).get("model_profile", "unknown")
+            if isinstance(document.metadata.get("mineru"), dict)
+            else "unknown"
+        )
         try:
             from importlib.metadata import version
 
-            versions["mineru"] = version("mineru")
+            versions["mineru_local"] = version("mineru")
         except Exception:
             try:
                 from importlib.metadata import version
 
-                versions["mineru"] = version("magic-pdf")
+                versions["mineru_local"] = version("magic-pdf")
             except Exception:
-                versions["mineru"] = "unavailable"
+                versions["mineru_local"] = "unavailable"
         versions["grobid"] = str(document.metadata.get("grobid_version", "unknown"))
         return versions
 ```
@@ -3174,7 +3436,7 @@ Expected: FAIL because `scripts/eval_reference_papers.py` does not exist.
 Create `scripts/eval_reference_papers.py`:
 
 ```python
-"""Evaluate the local parser on untracked reference PDFs."""
+"""Evaluate the paper parser on untracked reference PDFs."""
 
 from __future__ import annotations
 
@@ -3266,7 +3528,7 @@ Expected: PASS.
 .venv/bin/python scripts/eval_reference_papers.py --root reference_paper --output /tmp/paper-parser-eval/report.json
 ```
 
-Expected: command exits 0 and `/tmp/paper-parser-eval/report.json` includes one row per local PDF. Papers that require unavailable MinerU should show a warning or fallback status rather than crash the whole run.
+Expected: command exits 0 and `/tmp/paper-parser-eval/report.json` includes one row per local PDF. Papers that require an unavailable MinerU API or unavailable local fallback should show a warning or fallback status rather than crash the whole run.
 
 - [ ] **Step 6: Commit**
 
@@ -3287,27 +3549,28 @@ git commit -m "Add reference paper parser evaluation"
 Add a section to `docs/pdf-ingestion.md`:
 
 ```markdown
-## Local Paper Parser Pipeline
+## MinerU API-First Paper Parser Pipeline
 
-The parser is local-only and paper-specific:
+The parser is paper-specific and uses MinerU Precision Parsing API as the primary body parser:
 
 1. Upload validates, hashes, stores the PDF, and creates a `parse_jobs` row.
 2. The worker profiles with PyMuPDF and builds a `ParsePlan`.
 3. GROBID metadata/reference extraction runs with a 60 second timeout and one retry.
-4. The body parser uses PyMuPDF4LLM for normal papers and MinerU for scanned or complex papers.
-5. Parser output normalizes to `ParseDocument`.
-6. The quality gate reruns MinerU for low-quality PyMuPDF4LLM output.
-7. If structured parsing remains poor, raw PyMuPDF text is persisted and the job is marked `completed_with_warnings`.
-8. Academic enrichment stores references, binds captions, and preserves formula blocks. In-text citation linking is disabled in V1.
-9. `pdf_chunker` and `pdf_persistence` handle chunking, FTS, and optional embeddings.
+4. The body parser uses MinerU Precision Parsing API when `mineru_api_base_url` and `mineru_api_key` are configured.
+5. If MinerU API is not configured or produces low-quality output, local fallback uses PyMuPDF4LLM for normal papers and local MinerU for scanned or complex papers.
+6. Parser output normalizes to `ParseDocument`.
+7. The quality gate can force local fallback after a low-quality API result.
+8. If structured parsing remains poor, raw PyMuPDF text is persisted and the job is marked `completed_with_warnings`.
+9. Academic enrichment stores references, binds captions, and preserves formula blocks. In-text citation linking is disabled in V1.
+10. `pdf_chunker` and `pdf_persistence` handle chunking, FTS, and optional embeddings.
 
-`reference_paper/` is a local-only evaluation corpus and is ignored by git.
+`reference_paper/` is a local evaluation corpus and is ignored by git.
 ```
 
 - [ ] **Step 2: Run focused parser tests**
 
 ```bash
-.venv/bin/pytest -q tests/test_pdf_parse_plan.py tests/test_pdf_quality_gate.py tests/test_pdf_backend_raw.py tests/test_pdf_backend_mineru.py tests/test_pdf_router.py tests/test_pdf_backend_grobid.py tests/test_pdf_enrichment.py tests/test_parse_jobs.py tests/test_parse_worker.py tests/test_paper_metadata.py
+.venv/bin/pytest -q tests/test_pdf_parse_plan.py tests/test_pdf_quality_gate.py tests/test_pdf_backend_raw.py tests/test_pdf_backend_mineru_api.py tests/test_pdf_backend_mineru_local.py tests/test_pdf_router.py tests/test_pdf_backend_grobid.py tests/test_pdf_enrichment.py tests/test_parse_jobs.py tests/test_parse_worker.py tests/test_paper_metadata.py
 ```
 
 Expected: PASS.
@@ -3350,4 +3613,4 @@ git commit -m "Document local paper parser pipeline"
 - Implement tasks in order. Tasks 2 through 5 establish contracts used by later worker and route tasks.
 - Do not delete `pdf_backend_llamaparse.py` during this plan. The required behavioral change is that the router no longer imports or uses it.
 - Do not commit files under `reference_paper/`.
-- If real MinerU is not installed locally, unit tests still pass through the injected runner in `MinerUBackend`; the reference corpus run should report fallback behavior instead of blocking implementation.
+- If real local MinerU is not installed, unit tests still pass through the injected runner in `MinerULocalBackend`; normal body parsing uses MinerU API when configured.

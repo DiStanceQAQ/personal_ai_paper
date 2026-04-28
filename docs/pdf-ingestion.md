@@ -1,86 +1,124 @@
 # PDF Ingestion Configuration
 
-The PDF ingestion pipeline is local-first. It profiles every PDF, selects a
-parser backend, normalizes the result into document elements, chunks those
-elements into source-grounded passages, and persists parse diagnostics with the
-paper.
+PDF parsing is settings-driven. The app stores the selected parser in
+`app_state.pdf_parser_backend` and snapshots that choice into every queued
+`parse_run`. Upload and manual re-parse no longer run the parser synchronously;
+they create durable queued jobs for the parse worker.
 
-## Backend Order
+Available parser modes:
 
-The router uses `pdf_profile.inspect_pdf` to decide whether a file needs OCR or
-layout-aware parsing.
-
-1. If `app_state.pdf_forced_backend` is configured, that backend is tried first.
-   Supported values are `pymupdf4llm`, `docling`, `llamaparse`, `legacy`, and
-   `legacy-pymupdf`.
-2. For image-only PDFs, the default local order is Docling, then configured
-   LlamaParse, then legacy PyMuPDF.
-3. For table-heavy or multi-column PDFs with native text, the default local
-   order is Docling, then configured LlamaParse, then PyMuPDF4LLM, then legacy
-   PyMuPDF.
-4. For normal digital PDFs, the default local order is PyMuPDF4LLM, then
-   configured LlamaParse, then legacy PyMuPDF.
-5. If legacy PyMuPDF is selected for OCR- or layout-sensitive PDFs, the router
-   records `router_degraded:legacy-pymupdf:advanced_parser_unavailable_for_layout_pdf`
-   so callers can show a quality warning instead of treating the fallback as a
-   normal high-fidelity parse.
-6. GROBID is optional post-parse enrichment. When `app_state.grobid_base_url` is
-   configured and the service is alive, GROBID metadata and references are
-   merged into the parse metadata after the selected parser succeeds.
-
-Every attempted backend writes router diagnostics into parse warnings, including
-`router_attempt:*`, `router_selected:*`, `router_unavailable:*`, and
-`router_failed:*`.
-
-## Quality Modes
-
-| Mode | Backend | Runs where | Best for | Tradeoffs |
+| Mode | Backend | Runs where | Best for | Requirements |
 | --- | --- | --- | --- | --- |
-| Default digital | PyMuPDF4LLM | Local process | Clean academic PDFs with native text | Fast and private, but not OCR-first. |
-| Advanced local | Docling | Local process | Scanned, table-heavy, figure-heavy, or multi-column PDFs | Better structure extraction, but heavier install and packaging cost. |
-| Scholarly enrichment | GROBID | Local or remote HTTP service | Titles, authors, abstracts, DOIs, citations, and references | Excellent scholarly metadata, but requires a separate service. |
-| Cloud rescue | LlamaParse | External API | Difficult PDFs where local parsing fails | Sends PDF content to a third party and requires an API key. |
-| Compatibility fallback | Legacy PyMuPDF | Local process | Keeping older behavior available | Lower structure fidelity. |
+| MinerU API | `mineru` | Configured HTTP service | Higher-fidelity structure, tables, formulas, difficult layout | `mineru_base_url` and, when required by the service, `mineru_api_key` |
+| Docling local | `docling` | Local Python process | Local-first parsing without sending PDFs to a parser service | `pip install docling` or the project `pdf-advanced` extra |
 
-## Default Install
+`MinerU API` is shown as the recommended option in the UI. `Docling local` is
+the default so a fresh install stays local and does not require parser service
+credentials.
 
-The normal project install includes PyMuPDF and PyMuPDF4LLM:
+## Queue Behavior
 
-```bash
-pip install -e ".[dev]"
+`POST /api/papers/upload` validates, hashes, stores, and deduplicates the PDF,
+then queues a parse run automatically. Duplicate uploads in the same space reuse
+the existing paper and queue another parse run for that paper.
+
+`POST /api/papers/{paper_id}/parse` is now an explicit re-parse action. It
+returns `status="queued"` with the new `parse_run_id`; parsing continues in the
+background worker.
+
+Each queued run stores a parser snapshot in `parse_runs.config_json`, for
+example:
+
+```json
+{
+  "parser_backend": "mineru",
+  "mineru_base_url": "http://127.0.0.1:8000",
+  "grobid_enabled": true,
+  "worker_version": "pdf-parser-selection-v1"
+}
 ```
 
-This is enough for local parsing of digital PDFs. No external parser service is
-required.
+API keys are not stored in parse-run diagnostics. The worker reads secrets from
+`app_state` at execution time.
 
-## Advanced Local Parsing with Docling
+## Worker Pipeline
 
-Install the optional advanced parser extra:
+The worker claims one queued run atomically, avoiding two simultaneous active
+runs for the same paper. It sets the run to `running`, sets the paper to
+`parsing`, and increments `attempt_count`.
+
+For each claimed run:
+
+1. Validate that the PDF file still exists.
+2. Run the selected body parser directly:
+   `mineru` uses the MinerU HTTP backend; `docling` uses the local Docling
+   backend.
+3. Start GROBID enrichment in parallel with the body parser when GROBID is
+   configured. GROBID failures become warnings and do not fail a successful body
+   parse.
+4. Normalize the body parser output to `ParseDocument`.
+5. Chunk the document into passages.
+6. Persist document elements, tables, assets, passages, FTS rows, and passage
+   embeddings in one transaction.
+7. Mark the run `completed` and the paper `parsed`, or mark the run `failed`
+   and the paper `error` when there is no previous completed parse.
+
+Embedding generation is required for a successful parse. If embeddings fail,
+the run is marked `failed` and unembedded passages are rolled back.
+
+## Worker Recovery
+
+The API sidecar recovers stale `running` parse runs on startup. Runs whose
+`heartbeat_at` is older than `PAPER_ENGINE_PARSE_STALE_SECONDS` are requeued
+until `PAPER_ENGINE_PARSE_MAX_ATTEMPTS` is reached; after that they are marked
+`failed`.
+
+Environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PAPER_ENGINE_PARSE_WORKER_ENABLED` | `1` | Start the in-process worker loop when the API starts. |
+| `PAPER_ENGINE_PARSE_STALE_SECONDS` | `600` | Age threshold for recovering stale `running` jobs on startup. |
+| `PAPER_ENGINE_PARSE_MAX_ATTEMPTS` | `3` | Maximum claim attempts before a stale job is failed. |
+| `PAPER_ENGINE_PARSE_POLL_SECONDS` | `2` | Worker poll interval when no queued run is available. |
+
+## Parser Setup
+
+Parser settings are available from the app settings modal and through
+`/api/agent/config`.
+
+For MinerU:
+
+```bash
+curl -X PUT http://127.0.0.1:8000/api/agent/config \
+  -H "Content-Type: application/json" \
+  -d '{"pdf_parser_backend":"mineru","mineru_base_url":"http://127.0.0.1:8000","mineru_api_key":"YOUR_MINERU_API_KEY"}'
+```
+
+Then test the saved connection:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/agent/config/mineru/test
+```
+
+For Docling in development:
+
+```bash
+pip install docling
+```
+
+or install the project optional extra:
 
 ```bash
 pip install -e ".[pdf-advanced]"
 ```
 
-For development environments that also need tests and packaging tools, install
-both extras:
-
-```bash
-pip install -e ".[dev,pdf-advanced]"
-```
-
-Confirm that the optional backend is visible:
-
-```bash
-python -c "from pdf_backend_docling import DoclingBackend; print(DoclingBackend().is_available())"
-```
-
-Docling stays local, but it is a heavy dependency. Build default sidecars
-without it unless you explicitly want advanced local parsing bundled.
+If Docling is selected but unavailable, parsing fails clearly instead of
+falling back to another parser.
 
 ## GROBID Setup
 
-GROBID is configured through the `grobid_base_url` value in `app_state`. Start a
-GROBID service first:
+GROBID is optional scholarly metadata enrichment. Start a GROBID service:
 
 ```bash
 docker run --rm --init -p 8070:8070 lfoppiano/grobid:latest
@@ -99,73 +137,38 @@ sqlite3 "${PAPER_ENGINE_DATA_DIR:-app-data}/paper_engine.db" \
   "INSERT INTO app_state (key, value) VALUES ('grobid_base_url', 'http://127.0.0.1:8070') ON CONFLICT(key) DO UPDATE SET value = excluded.value;"
 ```
 
-GROBID is optional. If it is not configured, not reachable, or returns invalid
-TEI, parsing continues without scholarly metadata enrichment and records a
-warning.
-
-## LlamaParse Setup
-
-LlamaParse is disabled unless an API key is stored. The backend uses the default
-base URL `https://api.cloud.llamaindex.ai`.
-
-With this app's backend running locally, configure LlamaParse through the app
-API:
-
-```bash
-curl -X PUT http://127.0.0.1:8000/api/agent/config \
-  -H "Content-Type: application/json" \
-  -d '{"llamaparse_base_url":"https://api.cloud.llamaindex.ai","llamaparse_api_key":"YOUR_LLAMA_CLOUD_API_KEY"}'
-```
-
-Or write the values directly after the database exists:
-
-```bash
-sqlite3 "${PAPER_ENGINE_DATA_DIR:-app-data}/paper_engine.db" \
-  "INSERT INTO app_state (key, value) VALUES ('llamaparse_api_key', 'YOUR_LLAMA_CLOUD_API_KEY') ON CONFLICT(key) DO UPDATE SET value = excluded.value;"
-```
-
-LlamaParse is tried only when configured. In the default order it is a fallback
-after the preferred local backend fails or is unavailable. To make it the first
-attempt for troubleshooting, force it:
-
-```bash
-sqlite3 "${PAPER_ENGINE_DATA_DIR:-app-data}/paper_engine.db" \
-  "INSERT INTO app_state (key, value) VALUES ('pdf_forced_backend', 'llamaparse') ON CONFLICT(key) DO UPDATE SET value = excluded.value;"
-```
-
-Clear the forced backend with:
-
-```bash
-sqlite3 "${PAPER_ENGINE_DATA_DIR:-app-data}/paper_engine.db" \
-  "DELETE FROM app_state WHERE key = 'pdf_forced_backend';"
-```
+If GROBID is not configured, not reachable, or returns invalid TEI, body
+parsing still completes and records a warning.
 
 ## Privacy Implications
 
-- PyMuPDF4LLM, Docling, and legacy PyMuPDF parse PDFs in the local Python
-  process.
-- GROBID receives the PDF over HTTP at the configured `grobid_base_url`. Treat a
-  remote GROBID endpoint as third-party processing.
-- LlamaParse uploads PDF bytes to the configured cloud API. Do not configure it
-  for confidential papers unless that service is acceptable for the data.
-- Parse results, warnings, source IDs, tables, assets, chunks, and provenance are
-  stored in the local SQLite database under `PAPER_ENGINE_DATA_DIR` or
-  `app-data/` by default.
+- Docling parses PDFs in the local Python process.
+- MinerU receives the PDF at the configured `mineru_base_url`. Treat remote
+  MinerU endpoints as third-party processing.
+- GROBID receives the PDF over HTTP at the configured `grobid_base_url`.
+- Parse results, warnings, source IDs, tables, assets, chunks, embeddings, and
+  provenance are stored in the local SQLite database under
+  `PAPER_ENGINE_DATA_DIR` or `app-data/` by default.
 
 ## Troubleshooting
 
-- `router_unavailable:docling`: install `pip install -e ".[pdf-advanced]"` or
-  let the router fall back.
-- `router_grobid_unavailable:is_alive returned false`: start GROBID or update
-  `grobid_base_url`.
-- `llamaparse_api_key is not configured`: add the key or clear
-  `pdf_forced_backend` if LlamaParse was forced accidentally.
-- Empty or low-quality passages usually mean the PDF has no usable native text
-  and needs Docling or explicit cloud fallback. GROBID can improve scholarly
-  metadata and references, but it is not a replacement body-text parser.
+- `docling is not installed`: install `docling` or the project
+  `pdf-advanced` extra.
+- `MinerU 连接测试失败`: verify `mineru_base_url`, API key, and service reachability.
+- `missing_credentials`: configure `mineru_base_url` and any required API key.
+- `worker_heartbeat_timeout`: a previous worker stopped while a run was
+  `running`; restart recovery requeued or failed the job according to
+  `attempt_count`.
+- `embedding_error:*`: embeddings failed, so the parse run was not marked
+  successful.
+
+## Deprecated Compatibility Router
+
+`paper_engine.pdf.router` remains only as a deprecated compatibility module for
+tests and local migration scripts. Production upload and re-parse paths use the
+selected-parser worker and do not call the automatic fallback router.
 
 ## References
 
 - GROBID: <https://grobid.readthedocs.io/>
 - Docling: <https://docling-project.github.io/docling/>
-- LlamaParse: <https://docs.cloud.llamaindex.ai/llamaparse/getting_started>

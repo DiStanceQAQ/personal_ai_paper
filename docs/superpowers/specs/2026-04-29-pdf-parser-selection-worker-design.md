@@ -279,9 +279,8 @@ then run this conditional update inside the same transaction. If the update
 affects zero rows, another worker or another run for the same paper won the
 claim and this worker should try the next candidate later.
 
-Workers should update `heartbeat_at` periodically during long MinerU or Docling
-work. On API startup and on a periodic maintenance interval, stale active runs
-should be recovered:
+Workers should update `heartbeat_at` when a run is claimed and after the body
+parser completes. On API startup, stale active runs should be recovered:
 
 ```sql
 UPDATE parse_runs
@@ -294,7 +293,8 @@ WHERE status = 'running'
 
 The timeout should default to 10 minutes but be configurable because large
 MinerU jobs may legitimately take longer. If a run exceeds a maximum attempt
-count, the worker should mark it `failed` instead of requeueing indefinitely.
+count, startup recovery should mark it `failed` instead of requeueing
+indefinitely.
 
 ## Router Compatibility
 
@@ -400,8 +400,8 @@ Backend tests should cover:
 - Changing settings after queuing does not change the queued run's parser.
 - Job claiming is atomic and does not allow two `running` runs for the same
   paper.
-- Startup or maintenance recovery requeues stale `running` jobs and stops
-  retrying after the configured maximum attempt count.
+- Startup recovery requeues stale `running` jobs and stops retrying after the
+  configured maximum attempt count.
 - MinerU-selected runs call the MinerU adapter and persist `backend='mineru'`.
 - Docling-selected runs call the Docling adapter and persist `backend='docling'`.
 - Missing MinerU configuration fails clearly without falling back to Docling.

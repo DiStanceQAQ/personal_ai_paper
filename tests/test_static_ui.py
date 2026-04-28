@@ -104,3 +104,13 @@ def test_react_card_ui_surfaces_source_grounding() -> None:
         assert marker in card_source
 
     assert "api.listPassages" in inspector_source
+
+
+def test_heuristic_card_extraction_entrypoints_are_removed() -> None:
+    """UI code should only trigger Agent analysis, not legacy keyword extraction."""
+    html = Path("static/index.html").read_text(encoding="utf-8")
+    api_source = Path("frontend/src/api.ts").read_text(encoding="utf-8")
+
+    assert "/api/cards/extract" not in html
+    assert "extractCards" not in api_source
+    assert "/api/cards/extract" not in api_source

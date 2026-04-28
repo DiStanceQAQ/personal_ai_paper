@@ -5,7 +5,6 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
-from paper_engine.cards.extraction import extract_cards_from_passages, extract_metadata_from_passages
 from paper_engine.storage.database import get_connection
 
 router = APIRouter(prefix="/api/cards", tags=["cards"])
@@ -19,48 +18,6 @@ CARD_TYPES = [
 
 def _card_row_to_dict(row: Any) -> dict[str, Any]:
     return dict(row)
-
-
-def _persist_heuristic_card(conn: Any, card: dict[str, Any]) -> bool:
-    """Insert heuristic output without replacing user-owned or AI-owned cards."""
-    cursor = conn.execute(
-        """
-        INSERT INTO knowledge_cards (
-            id, space_id, paper_id, source_passage_id, card_type, summary,
-            confidence, user_edited, created_by, extractor_version,
-            analysis_run_id, evidence_json, quality_flags_json
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'heuristic', ?, NULL, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            source_passage_id = excluded.source_passage_id,
-            card_type = excluded.card_type,
-            summary = excluded.summary,
-            confidence = excluded.confidence,
-            user_edited = 0,
-            created_by = 'heuristic',
-            extractor_version = excluded.extractor_version,
-            analysis_run_id = NULL,
-            evidence_json = excluded.evidence_json,
-            quality_flags_json = excluded.quality_flags_json,
-            updated_at = datetime('now')
-        WHERE knowledge_cards.created_by = 'heuristic'
-          AND knowledge_cards.user_edited != 1
-        """,
-        (
-            str(card["id"]),
-            str(card["space_id"]),
-            str(card["paper_id"]),
-            card.get("source_passage_id"),
-            str(card["card_type"]),
-            str(card["summary"]),
-            min(float(card.get("confidence", 0.0)), 0.55),
-            str(card.get("extractor_version", "heuristic-v1")),
-            str(card.get("evidence_json", "{}")),
-            str(card.get("quality_flags_json", "[]")),
-        ),
-    )
-    rowcount = int(getattr(cursor, "rowcount", 0))
-    return rowcount > 0
 
 
 def _get_active_space_id() -> str:
@@ -257,67 +214,5 @@ async def delete_card(card_id: str) -> dict[str, str]:
         conn.execute("DELETE FROM knowledge_cards WHERE id = ?", (card_id,))
         conn.commit()
         return {"status": "deleted", "card_id": card_id}
-    finally:
-        conn.close()
-
-
-@router.post("/extract/{paper_id}")
-async def extract_cards(paper_id: str) -> dict[str, Any]:
-    """Run local low-confidence heuristic card extraction for a paper."""
-    space_id = _get_active_space_id()
-
-    conn = get_connection()
-    try:
-        paper_row = conn.execute(
-            "SELECT * FROM papers WHERE id = ? AND space_id = ?",
-            (paper_id, space_id),
-        ).fetchone()
-        if paper_row is None:
-            raise HTTPException(status_code=404, detail="Paper not found")
-
-        passages = conn.execute(
-            "SELECT * FROM passages WHERE paper_id = ? ORDER BY page_number, paragraph_index",
-            (paper_id,),
-        ).fetchall()
-
-        if not passages:
-            return {
-                "status": "no_passages",
-                "paper_id": paper_id,
-                "card_count": 0,
-                "skipped_card_count": 0,
-                "mode": "heuristic",
-                "review_required": False,
-                "message": "没有可抽取的原文片段。",
-            }
-
-        passage_list = [dict(p) for p in passages]
-        
-        # 1. RAG Pre-processing: Basic Title Identification
-        # Still helpful for the UI to have a title even without the Agent
-        if not paper_row["authors"] or "." in paper_row["title"]:
-            meta = extract_metadata_from_passages(passage_list)
-            if meta["title"]:
-                conn.execute(
-                    "UPDATE papers SET title = ? WHERE id = ?",
-                    (meta["title"][:500], paper_id),
-                )
-
-        cards = extract_cards_from_passages(passage_list, paper_id, space_id)
-        persisted_count = 0
-        for card in cards:
-            if _persist_heuristic_card(conn, card):
-                persisted_count += 1
-
-        conn.commit()
-        return {
-            "status": "extracted",
-            "paper_id": paper_id,
-            "card_count": persisted_count,
-            "skipped_card_count": len(cards) - persisted_count,
-            "mode": "heuristic",
-            "review_required": True,
-            "message": "启发式抽取结果置信度较低，需要人工复核后再使用。",
-        }
     finally:
         conn.close()

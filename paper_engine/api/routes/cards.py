@@ -63,8 +63,3 @@ async def update_card(
 @router.delete("/{card_id}")
 async def delete_card(card_id: str) -> dict[str, str]:
     return await service.delete_card(card_id)
-
-
-@router.post("/extract/{paper_id}")
-async def extract_cards(paper_id: str) -> dict[str, Any]:
-    return await service.extract_cards(paper_id)

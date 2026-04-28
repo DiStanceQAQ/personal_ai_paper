@@ -59,7 +59,6 @@ API_HIDDEN_IMPORTS = (
     "paper_engine.api.app",
     "paper_engine.agent.executor",
     *ANALYSIS_PIPELINE_HIDDEN_IMPORTS,
-    "paper_engine.cards.extraction",
     "paper_engine.core.config",
     "paper_engine.storage.database",
     "paper_engine.agent.llm_client",

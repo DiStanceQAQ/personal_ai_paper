@@ -101,11 +101,6 @@ export const api = {
     request<KnowledgeCard>(`/api/cards/${cardId}`, { method: 'PATCH', body: JSON.stringify(card) }),
   deleteCard: (cardId: string) =>
     request<{ status: string; card_id: string }>(`/api/cards/${cardId}`, { method: 'DELETE' }),
-  extractCards: (paperId: string) =>
-    request<{ status: string; paper_id: string; card_count: number; mode?: string; message?: string }>(
-      `/api/cards/extract/${paperId}`,
-      { method: 'POST' },
-    ),
   search: (q: string) => request<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}&limit=30`),
   agentStatus: () => request<AgentStatus>('/api/agent/status'),
   setAgentStatus: (enabled: boolean) =>

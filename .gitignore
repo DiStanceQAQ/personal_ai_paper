@@ -12,6 +12,7 @@ src-tauri/binaries/paper-engine-*
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.worktrees/
 *.sqlite
 *.sqlite3
 app-data/

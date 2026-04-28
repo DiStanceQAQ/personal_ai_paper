@@ -15,7 +15,7 @@ import paper_engine.pdf.persistence as pdf_persistence
 import paper_engine.papers.service as papers_service
 from paper_engine.storage.database import get_connection, init_db
 from paper_engine.retrieval.embeddings import EmbeddingConfig, EmbeddingProviderError
-from main import app
+from paper_engine.api.app import app
 from paper_engine.pdf.models import (
     ParseDocument,
     ParseElement,

@@ -9,7 +9,7 @@ from httpx import ASGITransport, AsyncClient
 
 from paper_engine.storage.database import get_connection
 from paper_engine.storage.database import DATABASE_PATH, init_db
-from main import app
+from paper_engine.api.app import app
 
 
 @pytest.fixture

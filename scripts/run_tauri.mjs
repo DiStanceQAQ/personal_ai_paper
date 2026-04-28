@@ -41,10 +41,25 @@ function sidecarBuildForArgs(tauriArgs) {
   return null;
 }
 
+function modelDownloadForArgs(tauriArgs) {
+  if (env.PAPER_ENGINE_SKIP_MODEL_DOWNLOAD === '1') {
+    return null;
+  }
+  if (tauriArgs[0] === 'dev' || tauriArgs[0] === 'build') {
+    return {
+      command: pythonCommand,
+      args: ['scripts/download_embedding_model.py', '--if-missing'],
+    };
+  }
+  return null;
+}
+
+const modelDownload = modelDownloadForArgs(args);
 const sidecarBuild = sidecarBuildForArgs(args);
 
 if (env.PAPER_ENGINE_TAURI_DRY_RUN === '1') {
   console.log(JSON.stringify({
+    modelDownload,
     sidecarBuild,
     tauri: {
       command,
@@ -52,6 +67,22 @@ if (env.PAPER_ENGINE_TAURI_DRY_RUN === '1') {
     },
   }));
   process.exit(0);
+}
+
+if (modelDownload) {
+  const result = spawnSync(modelDownload.command, modelDownload.args, {
+    env,
+    stdio: 'inherit',
+    shell: false,
+  });
+
+  if (result.error) {
+    console.error(`Failed to prepare embedding model: ${result.error.message}`);
+    process.exit(1);
+  }
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
 }
 
 if (sidecarBuild) {

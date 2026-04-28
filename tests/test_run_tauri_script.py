@@ -9,7 +9,7 @@ import pytest
 
 
 def test_tauri_dev_dry_run_builds_api_sidecar_before_launch() -> None:
-    """Desktop dev should not launch against a stale packaged API sidecar."""
+    """Desktop dev should prepare the local model and packaged API sidecar."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is required for launcher script validation")
@@ -29,6 +29,10 @@ def test_tauri_dev_dry_run_builds_api_sidecar_before_launch() -> None:
     dry_run = json.loads(result.stdout)
     expected_python = str(Path(".venv/bin/python")) if Path(".venv/bin/python").exists() else "python"
 
+    assert dry_run["modelDownload"] == {
+        "command": expected_python,
+        "args": ["scripts/download_embedding_model.py", "--if-missing"],
+    }
     assert dry_run["sidecarBuild"] == {
         "command": expected_python,
         "args": ["scripts/build_sidecars.py", "--target", "api"],

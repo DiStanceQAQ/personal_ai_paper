@@ -1,6 +1,7 @@
 """Tests for PyInstaller sidecar build commands."""
 
 import importlib.util
+import json
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -105,7 +106,7 @@ def test_api_sidecar_target_includes_upgraded_pdf_pipeline_modules() -> None:
     assert expected_modules.issubset(set(api_target.hidden_imports))
 
 
-def test_default_targets_exclude_uninstalled_heavy_optional_dependencies(
+def test_default_targets_collect_required_embeddings_and_exclude_uninstalled_pdf_dependencies(
     monkeypatch: Any,
 ) -> None:
     def fake_find_spec(name: str) -> object | None:
@@ -119,9 +120,9 @@ def test_default_targets_exclude_uninstalled_heavy_optional_dependencies(
 
     for target in targets:
         assert "docling" not in target.collect_submodules
-        assert "sentence_transformers" not in target.collect_submodules
+        assert "sentence_transformers" in target.collect_submodules
         assert "docling" in target.excluded_modules
-        assert "sentence_transformers" in target.excluded_modules
+        assert "sentence_transformers" not in target.excluded_modules
 
 
 def test_installed_optional_dependencies_are_collected_when_available(
@@ -156,3 +157,19 @@ def test_pyproject_uses_backend_package_discovery() -> None:
     find_config = pyproject["tool"]["setuptools"]["packages"]["find"]
     assert find_config["include"] == ["paper_engine*"]
     assert "py-modules" not in pyproject["tool"]["setuptools"]
+
+
+def test_sentence_transformers_is_a_required_dependency() -> None:
+    pyproject = tomllib.loads((build_sidecars.ROOT / "pyproject.toml").read_text())
+
+    assert "sentence-transformers>=2.7.0" in pyproject["project"]["dependencies"]
+
+
+def test_tauri_bundle_includes_local_embedding_model_resource() -> None:
+    tauri_config = json.loads((build_sidecars.ROOT / "src-tauri/tauri.conf.json").read_text())
+
+    assert tauri_config["bundle"]["resources"] == {
+        "../resources/models/intfloat-multilingual-e5-small": (
+            "models/intfloat-multilingual-e5-small"
+        )
+    }

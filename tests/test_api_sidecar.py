@@ -18,10 +18,12 @@ def test_parse_args_uses_defaults() -> None:
         host="127.0.0.1",
         port=8765,
         data_dir=None,
+        resource_dir=None,
     )
 
 
-def test_parse_args_accepts_port_and_data_dir(tmp_path: Path) -> None:
+def test_parse_args_accepts_port_data_dir_and_resource_dir(tmp_path: Path) -> None:
+    resource_dir = tmp_path / "resources"
     settings = parse_args([
         "--host",
         "127.0.0.1",
@@ -29,13 +31,16 @@ def test_parse_args_accepts_port_and_data_dir(tmp_path: Path) -> None:
         "9412",
         "--data-dir",
         str(tmp_path),
+        "--resource-dir",
+        str(resource_dir),
     ])
     assert settings.host == "127.0.0.1"
     assert settings.port == 9412
     assert settings.data_dir == tmp_path.resolve()
+    assert settings.resource_dir == resource_dir.resolve()
 
 
-def test_main_sets_data_dir_before_importing_app(
+def test_main_sets_runtime_dirs_before_importing_app(
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
@@ -44,20 +49,38 @@ def test_main_sets_data_dir_before_importing_app(
 
     def fake_import_module(name: str) -> SimpleNamespace:
         assert name == "paper_engine.api.app"
-        calls.append(os.environ.get("PAPER_ENGINE_DATA_DIR"))
+        calls.append((
+            os.environ.get("PAPER_ENGINE_DATA_DIR"),
+            os.environ.get("PAPER_ENGINE_RESOURCE_DIR"),
+        ))
         return SimpleNamespace(app=fake_app)
 
     def fake_run(app: object, host: str, port: int, log_level: str) -> None:
         calls.append((app, host, port, log_level))
 
+    monkeypatch.setattr(
+        api_sidecar.multiprocessing,
+        "freeze_support",
+        lambda: calls.append("freeze_support"),
+    )
     monkeypatch.delenv("PAPER_ENGINE_DATA_DIR", raising=False)
+    monkeypatch.delenv("PAPER_ENGINE_RESOURCE_DIR", raising=False)
     monkeypatch.setattr(importlib, "import_module", fake_import_module)
     monkeypatch.setattr(uvicorn, "run", fake_run)
 
-    api_sidecar.main(["--port", "9412", "--data-dir", str(tmp_path)])
+    resource_dir = tmp_path / "resources"
+    api_sidecar.main([
+        "--port",
+        "9412",
+        "--data-dir",
+        str(tmp_path),
+        "--resource-dir",
+        str(resource_dir),
+    ])
 
     assert calls == [
-        str(tmp_path.resolve()),
+        "freeze_support",
+        (str(tmp_path.resolve()), str(resource_dir.resolve())),
         (fake_app, "127.0.0.1", 9412, "info"),
     ]
 

@@ -31,6 +31,9 @@
       "binaries/paper-engine-api",
       "binaries/paper-engine-mcp"
     ],
+    "resources": {
+      "../resources/models/intfloat-multilingual-e5-small": "models/intfloat-multilingual-e5-small"
+    },
     "macOS": {
       "minimumSystemVersion": "11.0"
     }

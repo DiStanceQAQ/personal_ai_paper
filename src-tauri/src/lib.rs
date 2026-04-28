@@ -96,6 +96,24 @@ fn wait_for_backend(port: u16, timeout: Duration) -> Result<(), String> {
     }
 }
 
+fn sidecar_args(port: u16, data_dir: &str, resource_dir: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "--host".to_string(),
+        "127.0.0.1".to_string(),
+        "--port".to_string(),
+        port.to_string(),
+        "--data-dir".to_string(),
+        data_dir.to_string(),
+    ];
+
+    if let Some(path) = resource_dir {
+        args.push("--resource-dir".to_string());
+        args.push(path.to_string());
+    }
+
+    args
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -117,6 +135,20 @@ pub fn run() {
                 "app_data_ready",
                 &format!("data_dir={}", data_dir.display()),
             );
+            let resource_dir = app
+                .path()
+                .resource_dir()
+                .map_err(|err| format!("Unable to resolve app resource dir: {err}"))?;
+            startup_trace(
+                startup_started_at,
+                "resource_dir_ready",
+                &format!("resource_dir={}", resource_dir.display()),
+            );
+            let data_dir_arg = data_dir.to_str().ok_or("App data dir is not valid UTF-8")?;
+            let resource_dir_arg = resource_dir
+                .to_str()
+                .ok_or("App resource dir is not valid UTF-8")?;
+            let api_args = sidecar_args(port, data_dir_arg, Some(resource_dir_arg));
 
             let sidecar_spawn_started_at = Instant::now();
             startup_trace(startup_started_at, "sidecar_spawn_start", &format!("port={port}"));
@@ -125,14 +157,7 @@ pub fn run() {
                 .sidecar("paper-engine-api")
                 .map_err(|err| format!("Unable to resolve API sidecar: {err}"))?
                 .env(STARTUP_TRACE_ENV, "1")
-                .args([
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    &port.to_string(),
-                    "--data-dir",
-                    data_dir.to_str().ok_or("App data dir is not valid UTF-8")?,
-                ])
+                .args(api_args)
                 .spawn()
                 .map_err(|err| format!("Unable to start API sidecar: {err}"))?;
             startup_trace(
@@ -248,5 +273,22 @@ mod tests {
         let error = wait_for_backend(port, Duration::from_millis(25)).expect_err("closed port should time out");
 
         assert!(error.contains("Timed out waiting for API sidecar"));
+    }
+
+    #[test]
+    fn sidecar_args_include_resource_dir_when_available() {
+        assert_eq!(
+            sidecar_args(8765, "/tmp/data", Some("/tmp/resources")),
+            vec![
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8765",
+                "--data-dir",
+                "/tmp/data",
+                "--resource-dir",
+                "/tmp/resources",
+            ]
+        );
     }
 }

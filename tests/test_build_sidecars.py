@@ -31,12 +31,12 @@ def test_build_onefile_passes_hidden_imports(
 
     build_sidecars.build_onefile(
         "paper-engine-api",
-        "api_sidecar.py",
-        hidden_imports=("main",),
+        "paper_engine/sidecar/api.py",
+        hidden_imports=("paper_engine.api.app",),
     )
 
     assert "--hidden-import" in calls[0]
-    assert "main" in calls[0]
+    assert "paper_engine.api.app" in calls[0]
 
 
 def test_build_onefile_passes_excluded_modules_and_collected_submodules(
@@ -61,7 +61,7 @@ def test_build_onefile_passes_excluded_modules_and_collected_submodules(
 
     build_sidecars.build_onefile(
         "paper-engine-api",
-        "api_sidecar.py",
+        "paper_engine/sidecar/api.py",
         collect_submodules=("pymupdf4llm",),
         excluded_modules=("docling",),
     )

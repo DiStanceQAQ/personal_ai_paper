@@ -153,4 +153,4 @@ make check
 - `uvicorn: command not found`：先激活 `.venv`，并执行 `pip install -e ".[dev]"`。
 - `tauri: command not found`：先执行根目录的 `npm install`。
 - 桌面端找不到 sidecar：执行 `make build-sidecars` 后再启动。
-- 端口 `8000` 被占用：可以直接运行 `uvicorn main:app --reload --host 127.0.0.1 --port 其他端口`，前端请求地址需要同步调整。
+- 端口 `8000` 被占用：可以直接运行 `uvicorn paper_engine.api.app:app --reload --host 127.0.0.1 --port 其他端口`，前端请求地址需要同步调整。

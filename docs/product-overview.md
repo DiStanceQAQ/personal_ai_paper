@@ -186,19 +186,13 @@ pip install -e ".[dev]"
 启动 Web 应用：
 
 ```bash
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
+uvicorn paper_engine.api.app:app --reload --host 127.0.0.1 --port 8000
 ```
 
 启动 MCP Server：
 
 ```bash
 paper-engine-mcp
-```
-
-或：
-
-```bash
-python mcp_server.py
 ```
 
 ## 数据存储

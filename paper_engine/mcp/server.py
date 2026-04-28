@@ -1,6 +1,6 @@
 """Local MCP Server for the Paper Knowledge Engine.
 
-Start with: python mcp_server.py
+Start with: paper-engine-mcp
 Configure in agent's MCP settings with stdio transport.
 """
 

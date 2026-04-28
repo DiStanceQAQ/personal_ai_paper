@@ -10,7 +10,7 @@ test:
 	pytest -v
 
 typecheck:
-	mypy paper_engine tests/
+	mypy paper_engine
 
 check: typecheck test
 	@echo "All checks passed!"

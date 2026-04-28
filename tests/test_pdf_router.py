@@ -1,4 +1,4 @@
-"""Tests for routing PDFs to the best parser backend."""
+"""Compatibility tests for the deprecated automatic parser router."""
 
 from __future__ import annotations
 

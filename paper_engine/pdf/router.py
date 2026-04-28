@@ -1,4 +1,9 @@
-"""Route PDFs to the best available parser backend."""
+"""Deprecated automatic parser router.
+
+Production paper parsing uses paper_engine.pdf.worker with a parser snapshot
+from parse_runs.config_json. Keep this module only for compatibility tests and
+local scripts during migration.
+"""
 
 from __future__ import annotations
 

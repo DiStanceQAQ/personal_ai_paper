@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a paper-only PDF parsing layer whose body parser uses the configured MinerU Precision Parsing API as the primary path, extracts metadata with bounded GROBID calls, persists parse jobs and diagnostics, and falls back to local parsing only when the MinerU API is not configured or cannot produce usable output.
+**Goal:** Build a paper-only PDF parsing layer whose body parser uses the user-configured MinerU Precision Parsing API as the primary path, extracts metadata with bounded GROBID calls, persists parse jobs and diagnostics, and falls back to local parsing only when the user has not configured MinerU API or the API cannot produce usable output.
 
-**Architecture:** Keep the current `ParseDocument` -> `pdf_chunker` -> `pdf_persistence` contract as the downstream boundary. Add a durable `parse_jobs` state machine, a `ParsePlan` produced by the PyMuPDF profiler, a MinerU API client as the primary body parser, local fallback parsing when API configuration is absent or unusable, quality-gated fallback, GROBID metadata enrichment, and a worker facade that can run in-process now and move to Celery/RQ later.
+**Architecture:** Keep the current `ParseDocument` -> `pdf_chunker` -> `pdf_persistence` contract as the downstream boundary. Add user-managed parser settings persisted in `app_state`, a durable `parse_jobs` state machine, a `ParsePlan` produced by the PyMuPDF profiler, a MinerU API client as the primary body parser, local fallback parsing when user API configuration is absent or unusable, quality-gated fallback, GROBID metadata enrichment, and a worker facade that can run in-process now and move to Celery/RQ later.
 
 **Tech Stack:** Python 3.11, FastAPI, SQLite, HTTPX, PyMuPDF, PyMuPDF4LLM, optional local MinerU package, MinerU Precision Parsing API, GROBID HTTP service, pytest.
 
@@ -13,6 +13,11 @@
 ## Updated Architecture Diagram
 
 ```text
+User Settings UI -> /api/settings/parser -> app_state
+   |
+   v
+MinerU API config (base_url, endpoint, key, enabled)
+
 Upload -> validate/hash/store/reuse cached parse or create parse_job
    |
    v
@@ -25,11 +30,11 @@ Parse Worker
   |     |
   |     +-> Body parser
   |           |
-  |           +-> if MinerU Precision API configured
+  |           +-> if user MinerU Precision API config is enabled
   |           |      -> MinerU API client
   |           |      -> normalize to ParseDocument
   |           |
-  |           +-> else API not configured
+  |           +-> else user API not configured/enabled
   |                  -> local fallback:
   |                       normal -> PyMuPDF4LLM
   |                       complex/scanned -> local MinerU
@@ -54,6 +59,7 @@ Parse Worker
 - `pdf_backend_mineru_api.py`: MinerU Precision Parsing API adapter behind `PdfParserBackend`.
 - `pdf_backend_mineru_local.py`: Optional local MinerU fallback adapter behind `PdfParserBackend`.
 - `pdf_backend_raw.py`: Last-resort raw PyMuPDF text backend that preserves searchable text and marks `raw_text_only_fallback`.
+- `routes_settings.py`: User-facing parser settings API. Stores MinerU API values in `app_state` and redacts stored secrets on reads.
 - `pdf_enrichment.py`: Local academic enrichment that merges structured references, binds nearby captions, and preserves formula metadata.
 - `paper_metadata.py`: Metadata merge helpers for updating `papers` from GROBID without overwriting user-filled fields.
 - `scripts/eval_reference_papers.py`: Local evaluation runner for untracked PDFs under `reference_paper/`.
@@ -64,6 +70,7 @@ Parse Worker
 - `tests/test_pdf_backend_mineru_api.py`
 - `tests/test_pdf_backend_mineru_local.py`
 - `tests/test_pdf_backend_raw.py`
+- `tests/test_routes_settings.py`
 - `tests/test_pdf_enrichment.py`
 - `tests/test_parse_worker.py`
 - `tests/test_paper_metadata.py`
@@ -82,13 +89,21 @@ Parse Worker
 - `pdf_persistence.py`: Persist parse-plan diagnostics, stage timings, review flags, and clone reusable parse results.
 - `parser.py`: Export lazy wrappers for the new local worker entry points.
 - `routes_papers.py`: Create parse jobs on upload, expose job status/cancel endpoints, and dispatch the in-process worker.
+- `main.py`: Include the user settings router.
+- `frontend/src/api.ts`: Add parser settings API client methods and types.
+- `frontend/src/hooks/useParserSettings.ts`: Load and save user parser settings.
+- `frontend/src/components/modals/SettingsModal.tsx`: Add a parser settings section for MinerU API.
+- `frontend/src/App.tsx`: Load, edit, and save parser settings alongside existing app settings.
+- `frontend/src/components/modals/ModalsContainer.tsx`: Pass parser settings props into `SettingsModal`.
 - `pyproject.toml`: Add new modules to `py-modules`; keep parser dependencies local-first.
 - `docs/pdf-ingestion.md`: Update the parser architecture once tests pass.
 
 ## Invariants
 
 - The parser router must not call LlamaParse or any non-MinerU parser API.
-- The body parser must call the configured MinerU Precision Parsing API first.
+- The body parser must call the user-configured MinerU Precision Parsing API first.
+- MinerU API configuration must be controlled by the user through app settings and stored in local `app_state`.
+- Settings reads must never return the full MinerU API key; they return `has_mineru_api_key`.
 - Local body parsing is a fallback path, not the normal routing path.
 - `papers.parse_status` stays coarse: `pending`, `parsing`, `parsed`, `error`. Detailed statuses live in `parse_jobs.status`.
 - `completed_with_warnings` and `review_needed` parse jobs map to `papers.parse_status = 'parsed'` when searchable passages exist.
@@ -550,7 +565,496 @@ git commit -m "Add parse job repository"
 
 ---
 
-## Task 4: ParsePlan Model And Profiler Routing Rules
+## Task 4: User Parser Settings
+
+**Files:**
+- Create: `routes_settings.py`
+- Create: `tests/test_routes_settings.py`
+- Create: `frontend/src/hooks/useParserSettings.ts`
+- Modify: `main.py`
+- Modify: `pyproject.toml`
+- Modify: `frontend/src/api.ts`
+- Modify: `frontend/src/App.tsx`
+- Modify: `frontend/src/components/modals/SettingsModal.tsx`
+- Modify: `frontend/src/components/modals/ModalsContainer.tsx`
+
+- [ ] **Step 1: Write failing backend settings tests**
+
+Create `tests/test_routes_settings.py`:
+
+```python
+import tempfile
+from collections.abc import Generator
+from pathlib import Path
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from db import init_db
+from main import app
+
+
+@pytest.fixture
+def db_path() -> Generator[str, None, None]:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_file = str(Path(tmpdir) / "test.db")
+        init_db(database_path=Path(db_file))
+        yield db_file
+
+
+@pytest.fixture
+def client(db_path: str) -> Generator[AsyncClient, None, None]:
+    import db as db_module
+
+    original_db_path = db_module.DATABASE_PATH
+    db_module.DATABASE_PATH = Path(db_path)
+    transport = ASGITransport(app=app)
+    test_client = AsyncClient(transport=transport, base_url="http://test")
+
+    yield test_client
+
+    db_module.DATABASE_PATH = original_db_path
+
+
+@pytest.mark.asyncio
+async def test_parser_settings_defaults_are_user_safe(client: AsyncClient) -> None:
+    response = await client.get("/api/settings/parser")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "mineru_api_base_url": "",
+        "mineru_api_endpoint": "/api/v1/pdf/parse",
+        "mineru_api_enabled": True,
+        "has_mineru_api_key": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_parser_settings_store_and_redact_mineru_key(client: AsyncClient) -> None:
+    response = await client.put(
+        "/api/settings/parser",
+        json={
+            "mineru_api_base_url": "https://mineru.example",
+            "mineru_api_endpoint": "/api/v1/pdf/parse",
+            "mineru_api_enabled": True,
+            "mineru_api_key": "secret-key",
+        },
+    )
+    assert response.status_code == 200
+
+    read_response = await client.get("/api/settings/parser")
+    assert read_response.json() == {
+        "mineru_api_base_url": "https://mineru.example",
+        "mineru_api_endpoint": "/api/v1/pdf/parse",
+        "mineru_api_enabled": True,
+        "has_mineru_api_key": True,
+    }
+    assert "secret-key" not in read_response.text
+
+
+@pytest.mark.asyncio
+async def test_parser_settings_blank_key_preserves_existing_key(client: AsyncClient) -> None:
+    await client.put(
+        "/api/settings/parser",
+        json={
+            "mineru_api_base_url": "https://mineru.example",
+            "mineru_api_endpoint": "/api/v1/pdf/parse",
+            "mineru_api_enabled": True,
+            "mineru_api_key": "secret-key",
+        },
+    )
+
+    response = await client.put(
+        "/api/settings/parser",
+        json={
+            "mineru_api_base_url": "https://mineru2.example",
+            "mineru_api_endpoint": "/parse",
+            "mineru_api_enabled": False,
+            "mineru_api_key": "",
+        },
+    )
+    assert response.status_code == 200
+
+    read_response = await client.get("/api/settings/parser")
+    assert read_response.json()["mineru_api_base_url"] == "https://mineru2.example"
+    assert read_response.json()["mineru_api_endpoint"] == "/parse"
+    assert read_response.json()["mineru_api_enabled"] is False
+    assert read_response.json()["has_mineru_api_key"] is True
+
+
+@pytest.mark.asyncio
+async def test_parser_settings_can_clear_mineru_key(client: AsyncClient) -> None:
+    await client.put(
+        "/api/settings/parser",
+        json={
+            "mineru_api_base_url": "https://mineru.example",
+            "mineru_api_endpoint": "/api/v1/pdf/parse",
+            "mineru_api_enabled": True,
+            "mineru_api_key": "secret-key",
+        },
+    )
+
+    response = await client.put(
+        "/api/settings/parser",
+        json={"clear_mineru_api_key": True},
+    )
+    assert response.status_code == 200
+
+    read_response = await client.get("/api/settings/parser")
+    assert read_response.json()["has_mineru_api_key"] is False
+```
+
+- [ ] **Step 2: Run backend settings tests and verify failure**
+
+```bash
+.venv/bin/pytest -q tests/test_routes_settings.py
+```
+
+Expected: FAIL because `routes_settings.py` and `/api/settings/parser` do not exist.
+
+- [ ] **Step 3: Implement user parser settings route**
+
+Create `routes_settings.py`:
+
+```python
+"""User-facing application settings routes."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter
+from pydantic import BaseModel
+
+from db import get_connection
+
+router = APIRouter(prefix="/api/settings", tags=["settings"])
+
+DEFAULT_MINERU_API_ENDPOINT = "/api/v1/pdf/parse"
+PARSER_SETTING_KEYS = (
+    "mineru_api_base_url",
+    "mineru_api_endpoint",
+    "mineru_api_enabled",
+    "mineru_api_key",
+)
+
+
+class ParserSettingsUpdate(BaseModel):
+    mineru_api_base_url: str | None = None
+    mineru_api_endpoint: str | None = None
+    mineru_api_enabled: bool | None = None
+    mineru_api_key: str | None = None
+    clear_mineru_api_key: bool = False
+
+
+def _load_parser_settings() -> dict[str, str]:
+    placeholders = ",".join("?" for _ in PARSER_SETTING_KEYS)
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"SELECT key, value FROM app_state WHERE key IN ({placeholders})",
+            PARSER_SETTING_KEYS,
+        ).fetchall()
+        return {str(row["key"]): str(row["value"]) for row in rows}
+    finally:
+        conn.close()
+
+
+def _upsert_app_state(conn: Any, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO app_state (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (key, value),
+    )
+
+
+@router.get("/parser")
+async def get_parser_settings() -> dict[str, Any]:
+    settings = _load_parser_settings()
+    return {
+        "mineru_api_base_url": settings.get("mineru_api_base_url", ""),
+        "mineru_api_endpoint": settings.get(
+            "mineru_api_endpoint",
+            DEFAULT_MINERU_API_ENDPOINT,
+        ),
+        "mineru_api_enabled": settings.get("mineru_api_enabled", "true") != "false",
+        "has_mineru_api_key": bool(settings.get("mineru_api_key", "")),
+    }
+
+
+@router.put("/parser")
+async def update_parser_settings(update: ParserSettingsUpdate) -> dict[str, str]:
+    data = update.model_dump(exclude_unset=True)
+    conn = get_connection()
+    try:
+        if "mineru_api_base_url" in data:
+            _upsert_app_state(conn, "mineru_api_base_url", str(update.mineru_api_base_url or "").strip())
+        if "mineru_api_endpoint" in data:
+            endpoint = str(update.mineru_api_endpoint or DEFAULT_MINERU_API_ENDPOINT).strip()
+            _upsert_app_state(conn, "mineru_api_endpoint", endpoint or DEFAULT_MINERU_API_ENDPOINT)
+        if "mineru_api_enabled" in data:
+            _upsert_app_state(conn, "mineru_api_enabled", "true" if update.mineru_api_enabled else "false")
+        if update.clear_mineru_api_key:
+            conn.execute("DELETE FROM app_state WHERE key = ?", ("mineru_api_key",))
+        elif update.mineru_api_key:
+            _upsert_app_state(conn, "mineru_api_key", update.mineru_api_key)
+        conn.commit()
+        return {"status": "success"}
+    finally:
+        conn.close()
+```
+
+Modify `main.py` to include the router:
+
+```python
+import routes_settings
+
+app.include_router(routes_settings.router)
+```
+
+Add `routes_settings` to `pyproject.toml` under `py-modules`.
+
+- [ ] **Step 4: Wire the MinerU API backend to user settings only**
+
+In Task 9's router implementation, `_load_mineru_api_settings()` must read only user-saved `app_state` values:
+
+```python
+def _load_mineru_api_settings() -> dict[str, str]:
+    keys = ("mineru_api_base_url", "mineru_api_endpoint", "mineru_api_enabled", "mineru_api_key")
+    placeholders = ",".join("?" for _ in keys)
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"SELECT key, value FROM app_state WHERE key IN ({placeholders})",
+            keys,
+        ).fetchall()
+    finally:
+        conn.close()
+    return {str(row["key"]): str(row["value"]) for row in rows}
+```
+
+In Task 8's `get_configured_mineru_api_backend()` implementation, require the user-enabled flag:
+
+```python
+def get_configured_mineru_api_backend(settings: Mapping[str, str]) -> MinerUApiBackend | None:
+    if settings.get("mineru_api_enabled", "true") == "false":
+        return None
+    base_url = str(settings.get("mineru_api_base_url", "") or "").strip()
+    api_key = str(settings.get("mineru_api_key", "") or "").strip()
+    endpoint = str(settings.get("mineru_api_endpoint", "/api/v1/pdf/parse") or "/api/v1/pdf/parse").strip()
+    if not base_url or not api_key:
+        return None
+    return MinerUApiBackend(
+        MinerUApiConfig(base_url=base_url, api_key=api_key, parse_endpoint=endpoint)
+    )
+```
+
+- [ ] **Step 5: Run backend settings tests**
+
+```bash
+.venv/bin/pytest -q tests/test_routes_settings.py
+```
+
+Expected: PASS.
+
+- [ ] **Step 6: Add frontend parser settings API and hook**
+
+In `frontend/src/api.ts`, add types and methods:
+
+```ts
+export interface ParserSettings {
+  mineru_api_base_url: string;
+  mineru_api_endpoint: string;
+  mineru_api_enabled: boolean;
+  has_mineru_api_key: boolean;
+  mineru_api_key?: string;
+  clear_mineru_api_key?: boolean;
+}
+```
+
+Add to the exported `api` object:
+
+```ts
+getParserSettings: () => request<ParserSettings>('/api/settings/parser'),
+updateParserSettings: (settings: Partial<ParserSettings>) =>
+  request<{ status: string }>('/api/settings/parser', {
+    method: 'PUT',
+    body: JSON.stringify(settings),
+  }),
+```
+
+Create `frontend/src/hooks/useParserSettings.ts`:
+
+```ts
+import { useCallback, useState } from 'react';
+import { api, ParserSettings } from '../api';
+
+const DEFAULT_PARSER_SETTINGS: ParserSettings = {
+  mineru_api_base_url: '',
+  mineru_api_endpoint: '/api/v1/pdf/parse',
+  mineru_api_enabled: true,
+  has_mineru_api_key: false,
+  mineru_api_key: '',
+};
+
+export function useParserSettings(setNotice: (n: { message: string; type: 'success' | 'error' } | null) => void) {
+  const [parserSettings, setParserSettings] = useState<ParserSettings>(DEFAULT_PARSER_SETTINGS);
+
+  const loadParserSettings = useCallback(async () => {
+    try {
+      const settings = await api.getParserSettings();
+      setParserSettings({ ...settings, mineru_api_key: '' });
+    } catch {
+      console.warn('无法加载解析配置。');
+    }
+  }, []);
+
+  const saveParserSettings = async () => {
+    try {
+      await api.updateParserSettings(parserSettings);
+      setNotice({ message: '解析配置保存成功。', type: 'success' });
+      await loadParserSettings();
+      return true;
+    } catch {
+      setNotice({ message: '保存解析配置失败。', type: 'error' });
+      return false;
+    }
+  };
+
+  return { parserSettings, setParserSettings, loadParserSettings, saveParserSettings };
+}
+```
+
+- [ ] **Step 7: Add MinerU API controls to SettingsModal**
+
+Extend `SettingsModalProps`:
+
+```ts
+  parserSettings: {
+    mineru_api_base_url: string;
+    mineru_api_endpoint: string;
+    mineru_api_enabled: boolean;
+    mineru_api_key?: string;
+    has_mineru_api_key: boolean;
+    clear_mineru_api_key?: boolean;
+  };
+  setParserSettings: (config: any) => void;
+```
+
+Add this section below the existing LLM API key group:
+
+```tsx
+<div className="form-section-title">论文解析配置</div>
+
+<label className="checkbox-row">
+  <input
+    type="checkbox"
+    checked={parserSettings.mineru_api_enabled}
+    onChange={(e) => setParserSettings({ ...parserSettings, mineru_api_enabled: e.target.checked })}
+  />
+  启用 MinerU 精准解析 API
+</label>
+
+<div className="form-group">
+  <label>MinerU API Base URL</label>
+  <input
+    value={parserSettings.mineru_api_base_url}
+    onChange={(e) => setParserSettings({ ...parserSettings, mineru_api_base_url: e.target.value })}
+    placeholder="例如：https://mineru.example.com"
+  />
+</div>
+
+<div className="form-group">
+  <label>MinerU Parse Endpoint</label>
+  <input
+    value={parserSettings.mineru_api_endpoint}
+    onChange={(e) => setParserSettings({ ...parserSettings, mineru_api_endpoint: e.target.value })}
+    placeholder="/api/v1/pdf/parse"
+  />
+</div>
+
+<div className="form-group">
+  <label>
+    MinerU API Key {parserSettings.has_mineru_api_key && <span className="secure-tag">已保存</span>}
+  </label>
+  <input
+    type="password"
+    value={parserSettings.mineru_api_key || ''}
+    onChange={(e) => setParserSettings({ ...parserSettings, mineru_api_key: e.target.value })}
+    placeholder="输入 MinerU API 密钥..."
+  />
+</div>
+```
+
+- [ ] **Step 8: Load and save parser settings from App**
+
+In `frontend/src/App.tsx`, import and use the hook:
+
+```ts
+import { useParserSettings } from './hooks/useParserSettings';
+```
+
+Inside `App()`:
+
+```ts
+const {
+  parserSettings,
+  setParserSettings,
+  loadParserSettings,
+  saveParserSettings,
+} = useParserSettings(setNotice);
+```
+
+Update initial load:
+
+```ts
+await Promise.all([loadSpaces(), loadLlmConfig(), loadParserSettings()]);
+```
+
+Pass props into `ModalsContainer`:
+
+```tsx
+parserSettings={parserSettings}
+setParserSettings={setParserSettings}
+saveParserSettings={saveParserSettings}
+```
+
+Update `frontend/src/components/modals/ModalsContainer.tsx` props and pass through to `SettingsModal`.
+
+In `SettingsModal`, make the save button call both saves from the parent by changing `saveLlmConfig` to a combined handler in `App`:
+
+```ts
+const saveSettings = async () => {
+  const llmSaved = await saveLlmConfig();
+  const parserSaved = await saveParserSettings();
+  return llmSaved && parserSaved;
+};
+```
+
+Pass `saveSettings` to `ModalsContainer` as the existing `saveLlmConfig` prop to keep the modal call site small.
+
+- [ ] **Step 9: Run settings tests and frontend build**
+
+```bash
+.venv/bin/pytest -q tests/test_routes_settings.py
+npm run build
+```
+
+Expected: PASS.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add routes_settings.py tests/test_routes_settings.py main.py pyproject.toml frontend/src/api.ts frontend/src/hooks/useParserSettings.ts frontend/src/App.tsx frontend/src/components/modals/SettingsModal.tsx frontend/src/components/modals/ModalsContainer.tsx
+git commit -m "Add user-configured parser settings"
+```
+
+---
+
+## Task 5: ParsePlan Model And Profiler Routing Rules
 
 **Files:**
 - Create: `pdf_parse_plan.py`
@@ -761,7 +1265,7 @@ git commit -m "Add local PDF parse planning"
 
 ---
 
-## Task 5: Quality Gate
+## Task 6: Quality Gate
 
 **Files:**
 - Create: `pdf_quality_gate.py`
@@ -918,7 +1422,7 @@ git commit -m "Add local parse quality gate"
 
 ---
 
-## Task 6: Raw PyMuPDF Text Fallback
+## Task 7: Raw PyMuPDF Text Fallback
 
 **Files:**
 - Create: `pdf_backend_raw.py`
@@ -1125,7 +1629,7 @@ git commit -m "Add raw PyMuPDF fallback backend"
 
 ---
 
-## Task 7: MinerU API Backend And Local Fallback Adapter
+## Task 8: MinerU API Backend And Local Fallback Adapter
 
 **Files:**
 - Create: `pdf_backend_mineru_api.py`
@@ -1198,11 +1702,29 @@ def test_unconfigured_mineru_api_backend_is_unavailable() -> None:
 
 def test_configured_mineru_api_backend_is_available() -> None:
     backend = get_configured_mineru_api_backend(
-        {"mineru_api_base_url": "https://mineru.test", "mineru_api_key": "token-1"}
+        {
+            "mineru_api_base_url": "https://mineru.test",
+            "mineru_api_endpoint": "/custom/parse",
+            "mineru_api_enabled": "true",
+            "mineru_api_key": "token-1",
+        }
     )
 
     assert backend is not None
     assert backend.is_available() is True
+    assert backend.config.parse_endpoint == "/custom/parse"
+
+
+def test_disabled_mineru_api_backend_is_unavailable() -> None:
+    backend = get_configured_mineru_api_backend(
+        {
+            "mineru_api_base_url": "https://mineru.test",
+            "mineru_api_enabled": "false",
+            "mineru_api_key": "token-1",
+        }
+    )
+
+    assert backend is None
 ```
 
 Create `tests/test_pdf_backend_mineru_local.py`:
@@ -1414,11 +1936,16 @@ def _payload_to_document(
 
 
 def get_configured_mineru_api_backend(settings: Mapping[str, str]) -> MinerUApiBackend | None:
+    if settings.get("mineru_api_enabled", "true") == "false":
+        return None
     base_url = str(settings.get("mineru_api_base_url", "") or "").strip()
     api_key = str(settings.get("mineru_api_key", "") or "").strip()
+    endpoint = str(settings.get("mineru_api_endpoint", "/api/v1/pdf/parse") or "/api/v1/pdf/parse").strip()
     if not base_url or not api_key:
         return None
-    return MinerUApiBackend(MinerUApiConfig(base_url=base_url, api_key=api_key))
+    return MinerUApiBackend(
+        MinerUApiConfig(base_url=base_url, api_key=api_key, parse_endpoint=endpoint)
+    )
 ```
 
 - [ ] **Step 4: Implement local MinerU fallback gate**
@@ -1552,7 +2079,7 @@ git commit -m "Add MinerU API parser backend"
 
 ---
 
-## Task 8: MinerU API-First Body Router
+## Task 9: MinerU API-First Body Router
 
 **Files:**
 - Modify: `pdf_router.py`
@@ -1660,8 +2187,6 @@ Expected: FAIL because `PdfBackendRouter` still has LlamaParse routing and no Mi
 In `pdf_router.py`, replace the default backend imports with the API backend and local fallback backends:
 
 ```python
-import os
-
 from db import get_connection
 from pdf_backend_mineru_api import get_configured_mineru_api_backend
 from pdf_backend_mineru_local import MinerULocalBackend
@@ -1674,21 +2199,17 @@ Add settings loader in `pdf_router.py`:
 
 ```python
 def _load_mineru_api_settings() -> dict[str, str]:
+    keys = ("mineru_api_base_url", "mineru_api_endpoint", "mineru_api_enabled", "mineru_api_key")
+    placeholders = ",".join("?" for _ in keys)
     conn = get_connection()
     try:
         rows = conn.execute(
-            """
-            SELECT key, value
-            FROM app_state
-            WHERE key IN ('mineru_api_base_url', 'mineru_api_key')
-            """
+            f"SELECT key, value FROM app_state WHERE key IN ({placeholders})",
+            keys,
         ).fetchall()
     finally:
         conn.close()
-    settings = {str(row["key"]): str(row["value"]) for row in rows}
-    settings.setdefault("mineru_api_base_url", os.environ.get("MINERU_API_BASE_URL", ""))
-    settings.setdefault("mineru_api_key", os.environ.get("MINERU_API_KEY", ""))
-    return settings
+    return {str(row["key"]): str(row["value"]) for row in rows}
 ```
 
 Change the router constructor shape:
@@ -1775,7 +2296,7 @@ git commit -m "Route body parsing through MinerU API first"
 
 ---
 
-## Task 9: Bounded GROBID Calls
+## Task 10: Bounded GROBID Calls
 
 **Files:**
 - Modify: `pdf_backend_grobid.py`
@@ -1889,7 +2410,7 @@ git commit -m "Bound GROBID metadata calls"
 
 ---
 
-## Task 10: Paper Metadata Merge
+## Task 11: Paper Metadata Merge
 
 **Files:**
 - Create: `paper_metadata.py`
@@ -2048,7 +2569,7 @@ git commit -m "Merge extracted paper metadata"
 
 ---
 
-## Task 11: Academic Enrichment Without Citation-Mention Linking
+## Task 12: Academic Enrichment Without Citation-Mention Linking
 
 **Files:**
 - Create: `pdf_enrichment.py`
@@ -2215,7 +2736,7 @@ git commit -m "Add local academic enrichment"
 
 ---
 
-## Task 12: Parse Persistence Diagnostics And Parse Result Reuse
+## Task 13: Parse Persistence Diagnostics And Parse Result Reuse
 
 **Files:**
 - Modify: `pdf_persistence.py`
@@ -2585,7 +3106,7 @@ git commit -m "Persist parser diagnostics and parse reuse clones"
 
 ---
 
-## Task 13: Parse Worker Orchestration
+## Task 14: Parse Worker Orchestration
 
 **Files:**
 - Create: `parse_worker.py`
@@ -3135,7 +3656,7 @@ git commit -m "Add local parse worker"
 
 ---
 
-## Task 14: Upload, Job API, Cancellation, And Parse Reuse
+## Task 15: Upload, Job API, Cancellation, And Parse Reuse
 
 **Files:**
 - Modify: `routes_papers.py`
@@ -3378,7 +3899,7 @@ git commit -m "Wire paper parsing through parse jobs"
 
 ---
 
-## Task 15: Reference Paper Evaluation
+## Task 16: Reference Paper Evaluation
 
 **Files:**
 - Create: `scripts/eval_reference_papers.py`
@@ -3539,7 +4060,7 @@ git commit -m "Add reference paper parser evaluation"
 
 ---
 
-## Task 16: Documentation And Full Verification
+## Task 17: Documentation And Full Verification
 
 **Files:**
 - Modify: `docs/pdf-ingestion.md`

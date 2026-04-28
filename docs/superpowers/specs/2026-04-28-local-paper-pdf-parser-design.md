@@ -2,7 +2,7 @@
 
 ## Goal
 
-Build a paper-specific PDF parsing layer whose body parser uses the configured MinerU Precision Parsing API as the primary parser. The parser should quickly show scholarly metadata, produce source-grounded document elements for retrieval, and degrade to local parsing or usable raw text instead of failing silently.
+Build a paper-specific PDF parsing layer whose body parser uses the user-configured MinerU Precision Parsing API as the primary parser. The parser should quickly show scholarly metadata, produce source-grounded document elements for retrieval, and degrade to local parsing or usable raw text instead of failing silently.
 
 ## Non-Goals
 
@@ -23,8 +23,8 @@ Parse Worker
   -> parallel:
        GROBID metadata + references
        Body parser:
-         configured MinerU API -> MinerU Precision Parsing API
-         no API config -> local fallback
+         user-configured MinerU API -> MinerU Precision Parsing API
+         no user API config -> local fallback
            normal -> PyMuPDF4LLM
            complex/scanned -> local MinerU when available
            last resort -> raw PyMuPDF
@@ -130,9 +130,24 @@ References from GROBID are inputs to academic enrichment, not just paper metadat
 
 GROBID calls must have bounded runtime. V1 uses a total timeout of 60 seconds and one retry. If GROBID still fails, the job records a warning and continues with regex metadata fallback and body parsing. GROBID failure must never block or fail the parse job.
 
+### User Parser Settings
+
+MinerU API configuration is user-controlled from the application settings UI. The backend stores the values in `app_state` and the parser router reads them at parse time.
+
+V1 settings fields:
+
+- `mineru_api_base_url`
+- `mineru_api_key`
+- `mineru_api_endpoint`, default `/api/v1/pdf/parse`
+- `mineru_api_enabled`, default `true` when base URL and key are present
+
+The settings API must not return the full API key. It should return `has_mineru_api_key` and preserve the stored key when the update request leaves `mineru_api_key` empty. Clearing the key should be an explicit action.
+
+Environment variables are not the product configuration path, and the V1 parser router must not read MinerU credentials from environment variables. Parser routing is driven by user-saved settings.
+
 ### Body Parsers
 
-Use the MinerU Precision Parsing API as the primary body parser when `mineru_api_base_url` and `mineru_api_key` are configured.
+Use the MinerU Precision Parsing API as the primary body parser when the user has configured and enabled `mineru_api_base_url` and `mineru_api_key`.
 
 Use `PyMuPDF4LLM` only as the fast normal-PDF local fallback. Use raw PyMuPDF only for profiling and last-resort text fallback.
 
@@ -140,7 +155,7 @@ Use local `MinerU` only as the advanced local fallback for scanned or complex ac
 
 Remove LlamaParse from the parser router. This parser layer does not include a non-MinerU parser API path.
 
-If MinerU API is not configured, route directly to local fallback. If MinerU API fails quality checks, route to local fallback. If local fallback fails or times out, fall back to raw PyMuPDF text extraction when possible. That fallback is intentionally incomplete: it only provides searchable text and limited page provenance. The parse must be marked `completed_with_warnings` with a clear diagnostic such as `raw_text_only_fallback`; it must not silently appear equivalent to a structured parse.
+If MinerU API is not configured or is disabled by the user, route directly to local fallback. If MinerU API fails quality checks, route to local fallback. If local fallback fails or times out, fall back to raw PyMuPDF text extraction when possible. That fallback is intentionally incomplete: it only provides searchable text and limited page provenance. The parse must be marked `completed_with_warnings` with a clear diagnostic such as `raw_text_only_fallback`; it must not silently appear equivalent to a structured parse.
 
 ### Normalization
 
@@ -292,6 +307,7 @@ Add unit tests for:
 - GROBID timeout/retry fallback
 - cancellation before expensive parser stages
 - content-hash parse reuse
+- user parser settings persistence with redacted MinerU API key reads
 
 Add an evaluation script for `reference_paper/` that can run locally and write a JSON report. Keep it opt-in so normal CI does not depend on large local PDFs.
 
@@ -309,5 +325,5 @@ Add an evaluation script for `reference_paper/` that can run locally and write a
 
 - Use an in-process background worker for the first implementation.
 - Keep `papers.parse_status` compatible with the existing enum. Store `review_needed` on `parse_jobs.status`, `parse_runs.status`, and parse diagnostics. A paper with searchable fallback text can still show `parsed` at the paper row level.
-- Configure MinerU API with `mineru_api_base_url` and `mineru_api_key` in `app_state`, or `MINERU_API_BASE_URL` and `MINERU_API_KEY` in the environment; if either value is missing, skip the API path and use local fallback.
+- Configure MinerU API through user settings stored in `app_state`; if the user has not configured or has disabled the API, skip the API path and use local fallback.
 - Configure GROBID as a local service URL. Do not bundle or auto-install GROBID in this implementation.

@@ -220,6 +220,32 @@ def _insert_parse_run(
     )
 
 
+def _update_existing_parse_run(
+    conn: sqlite3.Connection,
+    parse_run_id: str,
+    parse_document: ParseDocument,
+) -> None:
+    conn.execute(
+        """
+        UPDATE parse_runs
+        SET backend = ?,
+            extraction_method = ?,
+            quality_score = ?,
+            warnings_json = ?,
+            metadata_json = ?
+        WHERE id = ?
+        """,
+        (
+            parse_document.backend,
+            parse_document.extraction_method,
+            parse_document.quality.quality_score,
+            _json(parse_document.quality.warnings),
+            _json(parse_document.metadata),
+            parse_run_id,
+        ),
+    )
+
+
 def _insert_element(
     conn: sqlite3.Connection,
     parse_run_id: str,
@@ -506,7 +532,11 @@ def embed_passages_for_parse_run(
 
 
 def _delete_old_generated_rows(
-    conn: sqlite3.Connection, paper_id: str, space_id: str, old_passage_ids: Sequence[str]
+    conn: sqlite3.Connection,
+    paper_id: str,
+    space_id: str,
+    old_passage_ids: Sequence[str],
+    preserve_parse_run_id: str | None = None,
 ) -> None:
     if old_passage_ids:
         conn.executemany(
@@ -522,10 +552,21 @@ def _delete_old_generated_rows(
         """,
         (paper_id, space_id),
     )
-    conn.execute(
-        "DELETE FROM parse_runs WHERE paper_id = ? AND space_id = ?",
-        (paper_id, space_id),
-    )
+    if preserve_parse_run_id is None:
+        conn.execute(
+            "DELETE FROM parse_runs WHERE paper_id = ? AND space_id = ?",
+            (paper_id, space_id),
+        )
+    else:
+        conn.execute(
+            """
+            DELETE FROM parse_runs
+            WHERE paper_id = ?
+              AND space_id = ?
+              AND id != ?
+            """,
+            (paper_id, space_id, preserve_parse_run_id),
+        )
 
 
 def _remap_card_sources(
@@ -556,22 +597,24 @@ def persist_parse_result(
     space_id: str,
     parse_document: ParseDocument,
     passages: Sequence[PassageRecord],
+    *,
+    parse_run_id: str | None = None,
 ) -> str:
     """Persist a structured parse result and return the generated parse run id."""
     _validate_inputs(paper_id, space_id, parse_document, passages)
 
-    parse_run_id = f"parse-run-{uuid.uuid4()}"
+    storage_parse_run_id = parse_run_id or f"parse-run-{uuid.uuid4()}"
     savepoint = _savepoint_name()
     conn.execute(f"SAVEPOINT {savepoint}")
     try:
         old_passage_hashes = _load_old_generated_passages(conn, paper_id, space_id)
         old_generated_passage_ids = set(old_passage_hashes)
         element_id_map = {
-            element.id: _storage_id(parse_run_id, element.id)
+            element.id: _storage_id(storage_parse_run_id, element.id)
             for element in parse_document.elements
         }
         passage_id_map = {
-            passage.id: _storage_id(parse_run_id, passage.id)
+            passage.id: _storage_id(storage_parse_run_id, passage.id)
             for passage in passages
         }
         _validate_existing_db_conflicts(
@@ -605,13 +648,28 @@ def persist_parse_result(
                 (paper_id, space_id, paper_id, space_id),
             )
 
-        _delete_old_generated_rows(conn, paper_id, space_id, list(old_passage_hashes))
-        _insert_parse_run(conn, parse_run_id, paper_id, space_id, parse_document)
+        _delete_old_generated_rows(
+            conn,
+            paper_id,
+            space_id,
+            list(old_passage_hashes),
+            preserve_parse_run_id=parse_run_id,
+        )
+        if parse_run_id is None:
+            _insert_parse_run(
+                conn,
+                storage_parse_run_id,
+                paper_id,
+                space_id,
+                parse_document,
+            )
+        else:
+            _update_existing_parse_run(conn, storage_parse_run_id, parse_document)
 
         for element in parse_document.elements:
             _insert_element(
                 conn,
-                parse_run_id,
+                storage_parse_run_id,
                 paper_id,
                 space_id,
                 element,
@@ -620,21 +678,21 @@ def persist_parse_result(
         for table in parse_document.tables:
             _insert_table(
                 conn,
-                parse_run_id,
+                storage_parse_run_id,
                 paper_id,
                 space_id,
                 table,
-                _storage_id(parse_run_id, table.id),
+                _storage_id(storage_parse_run_id, table.id),
                 element_id_map.get(table.element_id) if table.element_id else None,
             )
         for asset in parse_document.assets:
             _insert_asset(
                 conn,
-                parse_run_id,
+                storage_parse_run_id,
                 paper_id,
                 space_id,
                 asset,
-                _storage_id(parse_run_id, asset.id),
+                _storage_id(storage_parse_run_id, asset.id),
                 element_id_map.get(asset.element_id) if asset.element_id else None,
             )
 
@@ -642,7 +700,7 @@ def persist_parse_result(
         for passage in passages:
             persisted = _insert_passage(
                 conn,
-                parse_run_id,
+                storage_parse_run_id,
                 passage,
                 passage_id_map[passage.id],
                 [element_id_map[element_id] for element_id in passage.element_ids],
@@ -662,4 +720,4 @@ def persist_parse_result(
         conn.execute(f"RELEASE SAVEPOINT {savepoint}")
         raise
 
-    return parse_run_id
+    return storage_parse_run_id

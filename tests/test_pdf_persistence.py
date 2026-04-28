@@ -231,6 +231,55 @@ def test_persist_parse_result_inserts_structured_rows_and_fts() -> None:
     ]
 
 
+def test_persist_parse_result_can_use_existing_queued_parse_run() -> None:
+    conn = _test_conn()
+    _seed_space_and_paper(conn)
+    conn.execute(
+        """
+        INSERT INTO parse_runs (id, paper_id, space_id, backend, status, config_json)
+        VALUES (
+            'queued-run-1',
+            'paper-1',
+            'space-1',
+            'docling',
+            'running',
+            '{"parser_backend":"docling"}'
+        )
+        """
+    )
+    conn.commit()
+
+    document = _document()
+    passages = [_passage("passage-1", "hash-1")]
+
+    parse_run_id = persist_parse_result(
+        conn,
+        "paper-1",
+        "space-1",
+        document,
+        passages,
+        parse_run_id="queued-run-1",
+    )
+
+    assert parse_run_id == "queued-run-1"
+    run = conn.execute("SELECT * FROM parse_runs WHERE id = 'queued-run-1'").fetchone()
+    assert run["backend"] == document.backend
+    assert run["status"] == "running"
+    assert json.loads(run["config_json"]) == {"parser_backend": "docling"}
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM document_elements WHERE parse_run_id = 'queued-run-1'"
+        ).fetchone()[0]
+        == len(document.elements)
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM passages WHERE parse_run_id = 'queued-run-1'"
+        ).fetchone()[0]
+        == len(passages)
+    )
+
+
 def test_persist_parse_result_namespaces_local_ids_across_papers() -> None:
     conn = _test_conn()
     _seed_space_and_paper(conn, paper_id="paper-1")

@@ -9,7 +9,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Literal, TypeAlias
 
-from db import get_connection
+from paper_engine.storage.database import get_connection
 from embeddings import EmbeddingProvider, get_embedding_config, get_embedding_provider
 
 SearchMode: TypeAlias = Literal["fts", "hybrid"]

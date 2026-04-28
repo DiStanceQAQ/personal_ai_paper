@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from db import DATABASE_PATH, get_connection, init_db
+from paper_engine.storage.database import DATABASE_PATH, get_connection, init_db
 from main import app
 
 
@@ -24,7 +24,7 @@ def db_path() -> Generator[str, None, None]:
 def client(db_path: str) -> Generator[AsyncClient, None, None]:
     """Create a test client with the temporary database."""
     # Override the database path for the app
-    import db as db_module
+    import paper_engine.storage.database as db_module
 
     original_path = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)

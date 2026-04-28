@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from db import DATABASE_PATH, get_connection, init_db
+from paper_engine.storage.database import DATABASE_PATH, get_connection, init_db
 from main import app
 from search import ensure_fts_index, rebuild_fts_index, search_passages
 
@@ -23,8 +23,8 @@ def db_path() -> Generator[str, None, None]:
 
 @pytest.fixture
 def client(db_path: str) -> Generator[AsyncClient, None, None]:
-    import db as db_module
-    import config as config_module
+    import paper_engine.storage.database as db_module
+    import paper_engine.core.config as config_module
 
     with tempfile.TemporaryDirectory() as spaces_tmpdir:
         original_db_path = db_module.DATABASE_PATH

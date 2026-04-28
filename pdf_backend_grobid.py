@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 
 import httpx
 
-from db import get_connection
+from paper_engine.storage.database import get_connection
 
 
 DEFAULT_TIMEOUT = 30.0

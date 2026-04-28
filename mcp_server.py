@@ -10,7 +10,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from db import get_connection, init_db
+from paper_engine.storage.database import get_connection, init_db
 from search import search_passages
 
 mcp = FastMCP("paper-knowledge-engine")

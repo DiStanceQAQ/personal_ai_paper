@@ -4,7 +4,12 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-from db import SCHEMA_SQL, get_connection, get_table_names, init_db
+from paper_engine.storage.database import (
+    SCHEMA_SQL,
+    get_connection,
+    get_table_names,
+    init_db,
+)
 
 
 def test_init_db_creates_tables() -> None:

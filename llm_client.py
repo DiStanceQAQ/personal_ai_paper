@@ -5,7 +5,7 @@ import json
 import re
 from typing import Any, Literal, overload, cast
 import httpx
-from db import get_connection
+from paper_engine.storage.database import get_connection
 
 STRUCTURED_OUTPUT_MAX_ATTEMPTS = 3
 

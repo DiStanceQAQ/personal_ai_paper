@@ -1,6 +1,6 @@
 """Configuration behavior tests."""
 
-from config import APP_DATA_DIR, DATABASE_PATH, SPACES_DIR
+from paper_engine.core.config import APP_DATA_DIR, DATABASE_PATH, SPACES_DIR
 
 
 def test_default_data_paths_are_absolute() -> None:

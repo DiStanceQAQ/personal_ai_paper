@@ -28,7 +28,7 @@ from analysis_verifier import (
     SourceVerificationResult,
     verify_extraction_batch_sources,
 )
-from db import get_connection
+from paper_engine.storage.database import get_connection
 from llm_client import LLMStructuredOutputError, call_llm_schema
 from pdf_chunker import count_text_tokens
 

@@ -7,14 +7,14 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from db import DATABASE_PATH, get_connection, init_db
+from paper_engine.storage.database import DATABASE_PATH, get_connection, init_db
 from main import app
 
 
 @pytest.fixture
 def client() -> Generator[AsyncClient, None, None]:
-    import db as db_module
-    import config as config_module
+    import paper_engine.storage.database as db_module
+    import paper_engine.core.config as config_module
 
     original_db_path = db_module.DATABASE_PATH
     original_spaces_dir = config_module.SPACES_DIR
@@ -159,7 +159,7 @@ async def test_agent_config_empty_llamaparse_key_does_not_overwrite(
     assert data["llamaparse_base_url"] == "https://second.example/api"
     assert data["has_llamaparse_api_key"] is True
 
-    import db as db_module
+    import paper_engine.storage.database as db_module
 
     conn = db_module.get_connection()
     try:
@@ -212,7 +212,7 @@ async def test_analyze_route_returns_pipeline_run_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The analyze endpoint keeps the legacy status while exposing pipeline run counts."""
-    import db as db_module
+    import paper_engine.storage.database as db_module
     import routes_agent
 
     conn = db_module.get_connection()
@@ -267,7 +267,7 @@ async def test_analyze_route_returns_pipeline_run_metadata(
 
 def test_mcp_tool_blocked_when_disabled(db_path: str) -> None:
     """MCP tools return error when agent_access is disabled."""
-    import db as db_module
+    import paper_engine.storage.database as db_module
     orig = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)
 
@@ -306,7 +306,7 @@ def test_mcp_tool_blocked_when_disabled(db_path: str) -> None:
 
 def test_mcp_tool_works_when_enabled(db_path: str) -> None:
     """MCP tools succeed when agent_access is enabled."""
-    import db as db_module
+    import paper_engine.storage.database as db_module
     orig = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)
 
@@ -331,7 +331,7 @@ def test_mcp_tool_works_when_enabled(db_path: str) -> None:
 
 def test_mcp_space_isolation_papers(db_path: str) -> None:
     """MCP tools never return papers from other spaces."""
-    import db as db_module
+    import paper_engine.storage.database as db_module
     orig = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)
 
@@ -361,7 +361,7 @@ def test_mcp_space_isolation_papers(db_path: str) -> None:
 
 def test_mcp_space_isolation_cards(db_path: str) -> None:
     """MCP tools never return cards from other spaces."""
-    import db as db_module
+    import paper_engine.storage.database as db_module
     orig = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)
 
@@ -392,7 +392,7 @@ def test_mcp_space_isolation_cards(db_path: str) -> None:
 
 def test_mcp_space_isolation_search(db_path: str) -> None:
     """MCP search never returns passages from other spaces."""
-    import db as db_module
+    import paper_engine.storage.database as db_module
     orig = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)
 
@@ -429,7 +429,7 @@ def test_mcp_space_isolation_search(db_path: str) -> None:
 
 def test_mcp_space_isolation_single_paper_tools(db_path: str) -> None:
     """Single-paper MCP tools should reject papers outside the active space."""
-    import db as db_module
+    import paper_engine.storage.database as db_module
     orig = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)
 
@@ -457,7 +457,7 @@ def test_mcp_space_isolation_single_paper_tools(db_path: str) -> None:
 
 def test_mcp_list_spaces_only_returns_active_space(db_path: str) -> None:
     """Agent access exposes only the active space, not the whole project list."""
-    import db as db_module
+    import paper_engine.storage.database as db_module
     orig = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)
 
@@ -481,7 +481,7 @@ def test_mcp_list_spaces_only_returns_active_space(db_path: str) -> None:
 
 def test_agent_results_have_source_info(db_path: str) -> None:
     """Every agent-visible result includes source information."""
-    import db as db_module
+    import paper_engine.storage.database as db_module
     orig = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)
 
@@ -548,7 +548,7 @@ def test_agent_results_have_source_info(db_path: str) -> None:
 
 def test_no_source_less_results(db_path: str) -> None:
     """Verify that results without paper_id or passage_id are not present."""
-    import db as db_module
+    import paper_engine.storage.database as db_module
     orig = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)
 
@@ -578,7 +578,7 @@ def test_no_source_less_results(db_path: str) -> None:
 
 def test_mcp_add_knowledge_card_creates_card_in_active_space(db_path: str) -> None:
     """MCP card creation should create a card bound to the active space."""
-    import db as db_module
+    import paper_engine.storage.database as db_module
 
     orig = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)
@@ -619,7 +619,7 @@ def test_mcp_add_knowledge_card_creates_card_in_active_space(db_path: str) -> No
 
 def test_mcp_add_knowledge_card_rejects_cross_space_paper(db_path: str) -> None:
     """MCP card creation must not write to a paper outside the active space."""
-    import db as db_module
+    import paper_engine.storage.database as db_module
 
     orig = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)
@@ -650,7 +650,7 @@ def test_mcp_add_knowledge_card_rejects_cross_space_paper(db_path: str) -> None:
 
 def test_mcp_add_knowledge_card_rejects_foreign_source_passage(db_path: str) -> None:
     """MCP card source passages must belong to the target paper and active space."""
-    import db as db_module
+    import paper_engine.storage.database as db_module
 
     orig = db_module.DATABASE_PATH
     db_module.DATABASE_PATH = Path(db_path)

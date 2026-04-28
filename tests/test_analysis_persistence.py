@@ -13,7 +13,7 @@ from analysis_models import (
     PaperMetadataExtraction,
 )
 from analysis_pipeline import persist_analysis_result
-from db import init_db
+from paper_engine.storage.database import init_db
 
 
 def _test_conn() -> sqlite3.Connection:

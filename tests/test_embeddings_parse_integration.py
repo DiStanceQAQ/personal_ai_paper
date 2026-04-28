@@ -13,7 +13,7 @@ from httpx import ASGITransport, AsyncClient
 
 import pdf_persistence
 import routes_papers
-from db import get_connection, init_db
+from paper_engine.storage.database import get_connection, init_db
 from embeddings import EmbeddingConfig, EmbeddingProviderError
 from main import app
 from pdf_models import (
@@ -36,8 +36,8 @@ def db_path() -> Generator[str, None, None]:
 @pytest.fixture
 def client(db_path: str) -> Generator[AsyncClient, None, None]:
     """Create a test client with isolated database and spaces directory."""
-    import config as config_module
-    import db as db_module
+    import paper_engine.core.config as config_module
+    import paper_engine.storage.database as db_module
 
     with tempfile.TemporaryDirectory() as spaces_tmpdir:
         original_db_path = db_module.DATABASE_PATH
@@ -168,7 +168,7 @@ async def _upload_and_parse(client: AsyncClient) -> dict[str, Any]:
 
 
 def _set_app_state(values: dict[str, str]) -> None:
-    import db as db_module
+    import paper_engine.storage.database as db_module
 
     conn = get_connection(db_module.DATABASE_PATH)
     try:
@@ -187,7 +187,7 @@ def _set_app_state(values: dict[str, str]) -> None:
 
 
 def _fetch_embedding_rows() -> list[dict[str, Any]]:
-    import db as db_module
+    import paper_engine.storage.database as db_module
 
     conn = get_connection(db_module.DATABASE_PATH)
     try:
@@ -293,7 +293,7 @@ async def test_parse_embedding_failure_adds_warning_without_failing_parse(
     assert data["warnings"] == ["embedding_error:vector service unavailable"]
     assert _fetch_embedding_rows() == []
 
-    import db as db_module
+    import paper_engine.storage.database as db_module
 
     conn = get_connection(db_module.DATABASE_PATH)
     try:

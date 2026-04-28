@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException
 
 from card_extractor import extract_cards_from_passages, extract_metadata_from_passages
-from db import get_connection
+from paper_engine.storage.database import get_connection
 
 router = APIRouter(prefix="/api/cards", tags=["cards"])
 

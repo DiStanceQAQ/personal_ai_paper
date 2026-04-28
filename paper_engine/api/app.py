@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from db import init_db
+from paper_engine.storage.database import init_db
 from paper_engine.core.startup import StartupTracer
 from routes_agent import router as agent_router
 from routes_cards import router as cards_router

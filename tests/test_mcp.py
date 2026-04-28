@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from db import DATABASE_PATH, init_db, get_connection
+from paper_engine.storage.database import DATABASE_PATH, init_db, get_connection
 
 
 @pytest.fixture
@@ -15,7 +15,7 @@ def db_path() -> Generator[str, None, None]:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_file = str(Path(tmpdir) / "test.db")
         init_db(database_path=Path(db_file))
-        import db as db_module
+        import paper_engine.storage.database as db_module
         orig = db_module.DATABASE_PATH
         db_module.DATABASE_PATH = Path(db_file)
         yield db_file

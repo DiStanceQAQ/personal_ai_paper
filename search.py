@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from db import get_connection
+from paper_engine.storage.database import get_connection
 from hybrid_search import (
     SearchMode,
     has_semantic_embeddings,

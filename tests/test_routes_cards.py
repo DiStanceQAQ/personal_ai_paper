@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from db import DATABASE_PATH, get_connection, init_db
+from paper_engine.storage.database import DATABASE_PATH, get_connection, init_db
 from main import app
 
 
@@ -74,8 +74,8 @@ def db_path() -> Generator[str, None, None]:
 
 @pytest.fixture
 def client(db_path: str) -> Generator[AsyncClient, None, None]:
-    import db as db_module
-    import config as config_module
+    import paper_engine.storage.database as db_module
+    import paper_engine.core.config as config_module
     with tempfile.TemporaryDirectory() as spaces_tmpdir:
         odb = db_module.DATABASE_PATH; osp = config_module.SPACES_DIR
         db_module.DATABASE_PATH = Path(db_path)

@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from db import init_db
+from paper_engine.storage.database import init_db
 from hybrid_search import reciprocal_rank_fusion
 from search import rebuild_fts_index, search_passages
 

@@ -3,7 +3,7 @@
 from typing import Any
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
-from db import get_connection
+from paper_engine.storage.database import get_connection
 from agent_executor import analyze_paper_with_llm
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])

@@ -3,8 +3,8 @@
 import sqlite3
 from pathlib import Path
 
-from config import APP_DATA_DIR, DATABASE_PATH
-from db_migrations import apply_migrations
+from paper_engine.core.config import APP_DATA_DIR, DATABASE_PATH
+from paper_engine.storage.migrations import apply_migrations
 
 __all__ = [
     "SCHEMA_SQL",

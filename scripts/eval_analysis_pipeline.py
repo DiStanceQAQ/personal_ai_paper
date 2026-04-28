@@ -28,7 +28,7 @@ from analysis_models import (
     MergedAnalysisResult,
     PaperMetadataExtraction,
 )
-from db import init_db
+from paper_engine.storage.database import init_db
 
 EXPECTED_METRIC_KEYS = {
     "schema_validity_rate",

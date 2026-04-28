@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from db import init_db
+from paper_engine.storage.database import init_db
 from pdf_models import (
     ParseAsset,
     ParseDocument,

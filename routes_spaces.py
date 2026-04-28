@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
-from db import get_connection
+from paper_engine.storage.database import get_connection
 
 router = APIRouter(prefix="/api/spaces", tags=["spaces"])
 

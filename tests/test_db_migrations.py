@@ -6,9 +6,18 @@ from pathlib import Path
 
 import pytest
 
-import db_migrations
-from db import SCHEMA_SQL, get_connection, get_table_names, init_db
-from db_migrations import apply_migrations, get_schema_version, set_schema_version
+import paper_engine.storage.migrations as db_migrations
+from paper_engine.storage.database import (
+    SCHEMA_SQL,
+    get_connection,
+    get_table_names,
+    init_db,
+)
+from paper_engine.storage.migrations import (
+    apply_migrations,
+    get_schema_version,
+    set_schema_version,
+)
 
 
 SCHEMA_VERSION_KEY = "schema_version"

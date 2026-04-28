@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from db import init_db
+from paper_engine.storage.database import init_db
 from routes_spaces import router as spaces_router
 from routes_papers import router as papers_router
 from routes_search import router as search_router

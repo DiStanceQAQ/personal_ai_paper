@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 import httpx
 
-from db import get_connection
+from paper_engine.storage.database import get_connection
 from pdf_backend_base import ParserBackendError, ParserBackendUnavailable
 from pdf_models import (
     BBox,

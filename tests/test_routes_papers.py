@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from db import get_connection
-from db import DATABASE_PATH, init_db
+from paper_engine.storage.database import get_connection
+from paper_engine.storage.database import DATABASE_PATH, init_db
 from main import app
 
 
@@ -24,8 +24,8 @@ def db_path() -> Generator[str, None, None]:
 @pytest.fixture
 def client(db_path: str) -> Generator[AsyncClient, None, None]:
     """Create a test client with a temporary database + temp spaces dir."""
-    import db as db_module
-    import config as config_module
+    import paper_engine.storage.database as db_module
+    import paper_engine.core.config as config_module
 
     with tempfile.TemporaryDirectory() as spaces_tmpdir:
         original_db_path = db_module.DATABASE_PATH
@@ -381,7 +381,7 @@ async def test_parse_invalid_pdf_returns_compatible_error_response(
     assert paper_resp.status_code == 200
     assert paper_resp.json()["parse_status"] == "error"
 
-    import db as db_module
+    import paper_engine.storage.database as db_module
 
     conn = get_connection(db_module.DATABASE_PATH)
     try:
@@ -503,7 +503,7 @@ def _insert_parse_diagnostic_rows(
     parse_run_id: str = "run-1",
 ) -> None:
     """Insert structured parse rows for diagnostics route tests."""
-    import db as db_module
+    import paper_engine.storage.database as db_module
 
     conn = get_connection(db_module.DATABASE_PATH)
     try:
@@ -587,7 +587,7 @@ async def test_list_parse_runs_ordered_and_scoped_to_active_space(
         paper_id=paper_id, space_id=space_id, parse_run_id="run-older"
     )
 
-    import db as db_module
+    import paper_engine.storage.database as db_module
 
     conn = get_connection(db_module.DATABASE_PATH)
     try:
@@ -715,7 +715,7 @@ async def test_delete_paper_removes_database_rows_fts_index_and_pdf(
     )
     assert card_resp.status_code == 200
 
-    import db as db_module
+    import paper_engine.storage.database as db_module
 
     conn = get_connection(db_module.DATABASE_PATH)
     try:

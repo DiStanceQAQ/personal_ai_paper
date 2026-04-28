@@ -11,7 +11,7 @@ from typing import Any, Protocol, cast
 
 import httpx
 
-from db import get_connection
+from paper_engine.storage.database import get_connection
 
 DEFAULT_PROVIDER = "none"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"

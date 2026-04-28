@@ -7,7 +7,7 @@ from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, Final, cast
 
-from db import get_connection
+from paper_engine.storage.database import get_connection
 from pdf_backend_base import (
     ParserBackendError,
     ParserBackendUnavailable,

@@ -86,7 +86,7 @@ def _make_text_pdf(text: str) -> bytes:
 
 @pytest.mark.asyncio
 async def test_upload_pdf_to_active_space(client: AsyncClient) -> None:
-    """Test uploading a PDF to the active space."""
+    """Uploading a PDF stores the paper and queues a parse run."""
     await _create_and_activate_space(client)
 
     resp = await client.post(
@@ -98,6 +98,12 @@ async def test_upload_pdf_to_active_space(client: AsyncClient) -> None:
     assert data["parse_status"] == "pending"
     assert data["file_hash"]
     assert "paper" in data["file_path"] or data["file_path"].endswith(".pdf")
+    assert data["queued_parse_run_id"]
+
+    runs = await client.get(f"/api/papers/{data['id']}/parse-runs")
+    assert runs.status_code == 200
+    assert runs.json()[0]["status"] == "queued"
+    assert runs.json()[0]["backend"] in {"docling", "mineru"}
 
 
 @pytest.mark.asyncio
@@ -155,8 +161,10 @@ async def test_upload_rejects_archived_active_space(client: AsyncClient) -> None
 
 
 @pytest.mark.asyncio
-async def test_duplicate_detection_same_space(client: AsyncClient) -> None:
-    """Test that duplicate PDFs in the same space are detected."""
+async def test_duplicate_upload_reuses_existing_paper_and_queues_parse(
+    client: AsyncClient,
+) -> None:
+    """Duplicate PDFs in one space reuse the paper and queue another parse."""
     await _create_and_activate_space(client)
 
     pdf = _make_minimal_pdf()
@@ -168,13 +176,13 @@ async def test_duplicate_detection_same_space(client: AsyncClient) -> None:
     )
     assert resp1.status_code == 200
 
-    # Second upload of same content
     resp2 = await client.post(
         "/api/papers/upload",
         files={"file": ("test2.pdf", pdf, "application/pdf")},
     )
-    assert resp2.status_code == 409
-    assert "Duplicate" in resp2.json()["detail"]
+    assert resp2.status_code == 200
+    assert resp2.json()["id"] == resp1.json()["id"]
+    assert resp2.json()["queued_parse_run_id"] != resp1.json()["queued_parse_run_id"]
 
 
 @pytest.mark.asyncio
@@ -301,7 +309,7 @@ async def test_update_paper_partial(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_parse_paper(client: AsyncClient) -> None:
-    """Test parsing a paper into passages."""
+    """The parse endpoint queues a re-parse run."""
     await _create_and_activate_space(client)
 
     resp = await client.post(
@@ -311,11 +319,10 @@ async def test_parse_paper(client: AsyncClient) -> None:
     paper_id = resp.json()["id"]
 
     resp = await client.post(f"/api/papers/{paper_id}/parse")
-    # Minimal PDF may produce no text, so status could be 'error' or 'parsed'
     assert resp.status_code == 200
     data = resp.json()
     assert data["paper_id"] == paper_id
-    assert data["status"] in ("parsed", "error")
+    assert data["status"] == "queued"
     assert set(data) >= {
         "status",
         "paper_id",
@@ -326,14 +333,15 @@ async def test_parse_paper(client: AsyncClient) -> None:
         "warnings",
     }
     assert isinstance(data["warnings"], list)
-    if data["status"] == "parsed":
-        assert data["parse_run_id"]
-        assert data["backend"]
+    assert data["passage_count"] == 0
+    assert data["parse_run_id"]
+    assert data["backend"] in {"docling", "mineru"}
+    assert data["quality_score"] is None
 
 
 @pytest.mark.asyncio
 async def test_parse_preserves_error_status(client: AsyncClient) -> None:
-    """Test that parse failure preserves paper record with error status."""
+    """Queueing a parse keeps the paper available while the worker is pending."""
     await _create_and_activate_space(client)
 
     resp = await client.post(
@@ -347,15 +355,14 @@ async def test_parse_preserves_error_status(client: AsyncClient) -> None:
     # Paper should still exist
     resp = await client.get(f"/api/papers/{paper_id}")
     assert resp.status_code == 200
-    # parse_status should be terminal after the parse request completes.
-    assert resp.json()["parse_status"] in ("parsed", "error")
+    assert resp.json()["parse_status"] == "pending"
 
 
 @pytest.mark.asyncio
-async def test_parse_invalid_pdf_returns_compatible_error_response(
+async def test_parse_invalid_pdf_queues_worker_validation(
     client: AsyncClient,
 ) -> None:
-    """Invalid PDFs should preserve the parse endpoint's legacy error contract."""
+    """Invalid PDF bytes are queued; worker validation owns parse failure."""
     await _create_and_activate_space(client)
 
     resp = await client.post(
@@ -368,18 +375,18 @@ async def test_parse_invalid_pdf_returns_compatible_error_response(
     parse_resp = await client.post(f"/api/papers/{paper_id}/parse")
     assert parse_resp.status_code == 200
     data = parse_resp.json()
-    assert data["status"] == "error"
+    assert data["status"] == "queued"
     assert data["paper_id"] == paper_id
     assert data["passage_count"] == 0
-    assert data["parse_run_id"] is None
-    assert "backend" in data
-    assert "quality_score" in data
+    assert data["parse_run_id"]
+    assert data["backend"] in {"docling", "mineru"}
+    assert data["quality_score"] is None
     assert isinstance(data["warnings"], list)
-    assert data["warnings"]
+    assert data["warnings"] == []
 
     paper_resp = await client.get(f"/api/papers/{paper_id}")
     assert paper_resp.status_code == 200
-    assert paper_resp.json()["parse_status"] == "error"
+    assert paper_resp.json()["parse_status"] == "pending"
 
     import paper_engine.storage.database as db_module
 
@@ -432,10 +439,10 @@ async def test_list_passages_nonexistent_paper(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_reparsing_replaces_existing_passages_and_fts_rows(
+async def test_reparsing_queues_distinct_parse_runs(
     client: AsyncClient,
 ) -> None:
-    """Re-running parse on a paper should not duplicate passages or search results."""
+    """Re-running parse queues distinct runs without synchronously parsing."""
     await _create_and_activate_space(client)
 
     resp = await client.post(
@@ -449,51 +456,27 @@ async def test_reparsing_replaces_existing_passages_and_fts_rows(
         },
     )
     paper_id = resp.json()["id"]
+    upload_run_id = resp.json()["queued_parse_run_id"]
 
     first_parse = await client.post(f"/api/papers/{paper_id}/parse")
     assert first_parse.status_code == 200
     first_parse_data = first_parse.json()
-    assert first_parse_data["status"] == "parsed"
+    assert first_parse_data["status"] == "queued"
     assert first_parse_data["parse_run_id"]
+    assert first_parse_data["parse_run_id"] != upload_run_id
     assert first_parse_data["backend"]
-    assert "quality_score" in first_parse_data
-    assert isinstance(first_parse_data["warnings"], list)
-
-    first_passages = await client.get(f"/api/papers/{paper_id}/passages")
-    assert first_passages.status_code == 200
-    first_passages_data = first_passages.json()
-    first_count = len(first_passages_data)
-    assert first_count > 0
-    first_passage = first_passages_data[0]
-    assert first_passage["parse_run_id"] == first_parse_data["parse_run_id"]
-    assert first_passage["element_ids_json"] != "[]"
-    assert first_passage["heading_path_json"] is not None
-    assert first_passage["token_count"] is not None
-    assert first_passage["char_count"] is not None
-    assert first_passage["content_hash"]
-    assert first_passage["parser_backend"] == first_parse_data["backend"]
-    assert first_passage["extraction_method"]
-    assert first_passage["quality_flags_json"] is not None
-
-    first_search = await client.get("/api/search", params={"q": "transformer"})
-    assert first_search.status_code == 200
-    first_search_count = len(first_search.json())
-    assert first_search_count > 0
 
     second_parse = await client.post(f"/api/papers/{paper_id}/parse")
     assert second_parse.status_code == 200
     second_parse_data = second_parse.json()
-    assert second_parse_data["status"] == "parsed"
+    assert second_parse_data["status"] == "queued"
     assert second_parse_data["parse_run_id"]
     assert second_parse_data["parse_run_id"] != first_parse_data["parse_run_id"]
 
-    second_passages = await client.get(f"/api/papers/{paper_id}/passages")
-    assert second_passages.status_code == 200
-    assert len(second_passages.json()) == first_count
-
-    second_search = await client.get("/api/search", params={"q": "transformer"})
-    assert second_search.status_code == 200
-    assert len(second_search.json()) == first_search_count
+    runs = await client.get(f"/api/papers/{paper_id}/parse-runs")
+    assert runs.status_code == 200
+    run_ids = {run["id"] for run in runs.json()}
+    assert {upload_run_id, first_parse_data["parse_run_id"], second_parse_data["parse_run_id"]}.issubset(run_ids)
 
 
 def _insert_parse_diagnostic_rows(
@@ -583,11 +566,18 @@ async def test_list_parse_runs_ordered_and_scoped_to_active_space(
         files={"file": ("test.pdf", _make_text_pdf("diagnostics"), "application/pdf")},
     )
     paper_id = upload.json()["id"]
+    import paper_engine.storage.database as db_module
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        conn.execute("DELETE FROM parse_runs WHERE paper_id = ?", (paper_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
     _insert_parse_diagnostic_rows(
         paper_id=paper_id, space_id=space_id, parse_run_id="run-older"
     )
-
-    import paper_engine.storage.database as db_module
 
     conn = get_connection(db_module.DATABASE_PATH)
     try:
@@ -707,7 +697,7 @@ async def test_delete_paper_removes_database_rows_fts_index_and_pdf(
 
     parse_resp = await client.post(f"/api/papers/{paper_id}/parse")
     assert parse_resp.status_code == 200
-    assert parse_resp.json()["status"] == "parsed"
+    assert parse_resp.json()["status"] == "queued"
 
     card_resp = await client.post(
         "/api/cards",
@@ -719,6 +709,25 @@ async def test_delete_paper_removes_database_rows_fts_index_and_pdf(
 
     conn = get_connection(db_module.DATABASE_PATH)
     try:
+        conn.execute(
+            """
+            INSERT INTO passages (
+                id, paper_id, space_id, original_text, parser_backend,
+                extraction_method
+            )
+            VALUES ('passage-1', ?, ?, 'method transformer attention mechanism', 'test', 'native_text')
+            """,
+            (paper_id, space_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO passages_fts (
+                passage_id, paper_id, space_id, section, original_text
+            )
+            VALUES ('passage-1', ?, ?, '', 'method transformer attention mechanism')
+            """,
+            (paper_id, space_id),
+        )
         conn.execute(
             """INSERT INTO notes (id, space_id, paper_id, content)
                VALUES ('note-1', ?, ?, 'keep deletion referentially clean')""",

@@ -108,6 +108,7 @@ class ParseWorker:
                 if not passages:
                     raise RuntimeError("parsed document produced no passages")
 
+                conn.execute("BEGIN")
                 storage_run_id = self.persist_parse_result(
                     conn,
                     job.paper_id,

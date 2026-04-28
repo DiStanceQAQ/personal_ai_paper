@@ -12,7 +12,6 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 import paper_engine.pdf.persistence as pdf_persistence
-import paper_engine.papers.service as papers_service
 from paper_engine.storage.database import get_connection, init_db
 from paper_engine.retrieval.embeddings import EmbeddingConfig, EmbeddingProviderError
 from paper_engine.api.app import app
@@ -22,6 +21,7 @@ from paper_engine.pdf.models import (
     PassageRecord,
     PdfQualityReport,
 )
+from paper_engine.pdf.worker import ParseWorker, ParserFactory
 
 
 @pytest.fixture
@@ -90,84 +90,168 @@ async def _create_and_activate_space(client: AsyncClient) -> str:
     return space_id
 
 
-def _install_fake_parser(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    passage_texts: list[str] | None = None,
-) -> None:
-    quality = PdfQualityReport(page_count=1, native_text_pages=1, quality_score=0.98)
+class FakeParserBackend:
+    """Selected parser backend used by the worker integration tests."""
 
-    def fake_route_parse(
+    def __init__(self, passage_texts: list[str] | None = None) -> None:
+        self.passage_texts = passage_texts or ["alpha method", "beta result"]
+        self.calls: list[Path] = []
+
+    def is_available(self) -> bool:
+        return True
+
+    def parse(
+        self,
         file_path: Path,
         paper_id: str,
         space_id: str,
         quality_report: PdfQualityReport,
     ) -> ParseDocument:
         assert file_path.exists()
-        assert quality_report == quality
+        self.calls.append(file_path)
         return ParseDocument(
             paper_id=paper_id,
             space_id=space_id,
             backend="test-parser",
             extraction_method="native_text",
-            quality=quality,
+            quality=quality_report,
             elements=[
                 ParseElement(
                     id="element-1",
                     element_index=0,
                     element_type="paragraph",
-                    text=" ".join(passage_texts or ["alpha method", "beta result"]),
+                    text=" ".join(self.passage_texts),
                     page_number=1,
                     extraction_method="native_text",
+                    metadata={"passage_texts": self.passage_texts},
                 )
             ],
         )
 
-    def fake_chunk_parse_document(document: ParseDocument) -> list[PassageRecord]:
-        texts = passage_texts or ["alpha method", "beta result"]
-        return [
-            PassageRecord(
-                id=f"passage-{index + 1}",
-                paper_id=document.paper_id,
-                space_id=document.space_id,
-                section="Body",
-                page_number=1,
-                paragraph_index=index,
-                original_text=text,
-                parse_confidence=0.99,
-                passage_type="body",
-                element_ids=["element-1"],
-                heading_path=[],
-                token_count=len(text.split()),
-                char_count=len(text),
-                content_hash=f"hash-{index + 1}",
-                parser_backend=document.backend,
-                extraction_method="native_text",
-                quality_flags=[],
-            )
-            for index, text in enumerate(texts)
-        ]
 
-    monkeypatch.setattr(papers_service, "inspect_pdf", lambda file_path: quality)
-    monkeypatch.setattr(papers_service, "route_parse", fake_route_parse)
-    monkeypatch.setattr(papers_service, "chunk_parse_document", fake_chunk_parse_document)
+def _fake_chunk_parse_document(document: ParseDocument) -> list[PassageRecord]:
+    texts = document.elements[0].metadata.get("passage_texts", [document.elements[0].text])
+    assert isinstance(texts, list)
+    return [
+        PassageRecord(
+            id=f"passage-{index + 1}",
+            paper_id=document.paper_id,
+            space_id=document.space_id,
+            section="Body",
+            page_number=1,
+            paragraph_index=index,
+            original_text=str(text),
+            parse_confidence=0.99,
+            passage_type="body",
+            element_ids=["element-1"],
+            heading_path=[],
+            token_count=len(str(text).split()),
+            char_count=len(str(text)),
+            content_hash=f"hash-{index + 1}",
+            parser_backend=document.backend,
+            extraction_method="native_text",
+            quality_flags=[],
+        )
+        for index, text in enumerate(texts)
+    ]
 
 
-async def _upload_paper(client: AsyncClient) -> str:
+def _build_parse_worker(
+    *,
+    backend: FakeParserBackend,
+) -> ParseWorker:
+    import paper_engine.storage.database as db_module
+
+    quality = PdfQualityReport(page_count=1, native_text_pages=1, quality_score=0.98)
+
+    return ParseWorker(
+        conn_factory=lambda: get_connection(db_module.DATABASE_PATH),
+        worker_id="embedding-test-worker",
+        parser_factory=ParserFactory(
+            mineru=lambda config: backend,
+            docling=lambda config: backend,
+        ),
+        inspect_pdf=lambda file_path: quality,
+        chunk_parse_document=_fake_chunk_parse_document,
+        grobid_enricher=lambda file_path: None,
+    )
+
+
+async def _upload_paper(client: AsyncClient) -> tuple[str, str]:
     await _create_and_activate_space(client)
     upload = await client.post(
         "/api/papers/upload",
         files={"file": ("paper.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")},
     )
     assert upload.status_code == 200
-    return str(upload.json()["id"])
+    payload = upload.json()
+    return str(payload["id"]), str(payload["queued_parse_run_id"])
 
 
-async def _upload_and_parse(client: AsyncClient) -> dict[str, Any]:
-    paper_id = await _upload_paper(client)
-    parse = await client.post(f"/api/papers/{paper_id}/parse")
-    assert parse.status_code == 200
-    return parse.json()
+async def _upload_and_run_worker(
+    client: AsyncClient,
+    *,
+    passage_texts: list[str] | None = None,
+) -> dict[str, Any]:
+    backend = FakeParserBackend(passage_texts)
+    paper_id, parse_run_id = await _upload_paper(client)
+    worker = _build_parse_worker(backend=backend)
+
+    assert worker.run_once() is True
+    assert backend.calls
+
+    row = _fetch_parse_run(parse_run_id)
+    assert row["status"] == "completed"
+    return {
+        "paper_id": paper_id,
+        "parse_run_id": parse_run_id,
+        "backend": backend,
+        "parse_run": row,
+    }
+
+
+def _fetch_parse_run(parse_run_id: str) -> dict[str, Any]:
+    import paper_engine.storage.database as db_module
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        row = conn.execute(
+            """
+            SELECT id, status, backend, warnings_json, last_error
+            FROM parse_runs
+            WHERE id = ?
+            """,
+            (parse_run_id,),
+        ).fetchone()
+        assert row is not None
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def _fetch_paper_parse_status(paper_id: str) -> str:
+    import paper_engine.storage.database as db_module
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        row = conn.execute(
+            "SELECT parse_status FROM papers WHERE id = ?",
+            (paper_id,),
+        ).fetchone()
+        assert row is not None
+        return str(row["parse_status"])
+    finally:
+        conn.close()
+
+
+def _count_rows(table: str) -> int:
+    import paper_engine.storage.database as db_module
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+    finally:
+        conn.close()
 
 
 def _set_app_state(values: dict[str, str]) -> None:
@@ -212,7 +296,6 @@ async def test_parse_with_default_local_e5_provider_stores_passage_embeddings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The default local E5 provider is used during PDF parsing."""
-    _install_fake_parser(monkeypatch)
     provider = RecordingEmbeddingProvider(
         [[0.1, 0.2], [0.3, 0.4]],
         model="intfloat/multilingual-e5-small",
@@ -231,10 +314,11 @@ async def test_parse_with_default_local_e5_provider_stores_passage_embeddings(
         fake_get_embedding_provider,
     )
 
-    data = await _upload_and_parse(client)
+    data = await _upload_and_run_worker(client)
 
-    assert data["status"] == "parsed"
-    assert data["warnings"] == []
+    assert data["parse_run"]["status"] == "completed"
+    assert json.loads(data["parse_run"]["warnings_json"]) == []
+    assert _fetch_paper_parse_status(data["paper_id"]) == "parsed"
     assert provider.calls == [["passage: alpha method", "passage: beta result"]]
     assert len(_fetch_embedding_rows()) == 2
 
@@ -245,7 +329,6 @@ async def test_parse_with_configured_embedding_provider_stores_passage_embedding
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Configured embeddings are generated for persisted passages."""
-    _install_fake_parser(monkeypatch)
     _set_app_state(
         {
             "embedding_provider": "openai",
@@ -268,10 +351,11 @@ async def test_parse_with_configured_embedding_provider_stores_passage_embedding
         fake_get_embedding_provider,
     )
 
-    data = await _upload_and_parse(client)
+    data = await _upload_and_run_worker(client)
 
-    assert data["status"] == "parsed"
-    assert data["warnings"] == []
+    assert data["parse_run"]["status"] == "completed"
+    assert json.loads(data["parse_run"]["warnings_json"]) == []
+    assert _fetch_paper_parse_status(data["paper_id"]) == "parsed"
     assert provider.calls == [["alpha method", "beta result"]]
 
     rows = _fetch_embedding_rows()
@@ -292,7 +376,6 @@ async def test_parse_embedding_failure_marks_parse_as_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A paper is not considered parsed unless passage embeddings are stored."""
-    _install_fake_parser(monkeypatch)
     _set_app_state(
         {
             "embedding_provider": "openai",
@@ -307,30 +390,19 @@ async def test_parse_embedding_failure_marks_parse_as_error(
         lambda config: provider,
     )
 
-    paper_id = await _upload_paper(client)
-    parse = await client.post(f"/api/papers/{paper_id}/parse")
+    backend = FakeParserBackend()
+    paper_id, parse_run_id = await _upload_paper(client)
+    worker = _build_parse_worker(backend=backend)
 
-    assert parse.status_code == 200
-    data = parse.json()
-    assert data["status"] == "error"
-    assert data["passage_count"] == 0
-    assert data["parse_run_id"] is None
-    assert data["warnings"] == ["embedding_error:vector service unavailable"]
+    assert worker.run_once() is True
+
+    run = _fetch_parse_run(parse_run_id)
+    assert run["status"] == "failed"
+    assert run["last_error"] == "embedding_error:vector service unavailable"
+    assert json.loads(run["warnings_json"]) == [
+        "embedding_error:vector service unavailable"
+    ]
+    assert _fetch_paper_parse_status(paper_id) == "error"
     assert _fetch_embedding_rows() == []
-
-    import paper_engine.storage.database as db_module
-
-    conn = get_connection(db_module.DATABASE_PATH)
-    try:
-        paper = conn.execute(
-            "SELECT parse_status FROM papers WHERE id = ?",
-            (paper_id,),
-        ).fetchone()
-        parse_run_count = conn.execute("SELECT COUNT(*) FROM parse_runs").fetchone()[0]
-        passage_count = conn.execute("SELECT COUNT(*) FROM passages").fetchone()[0]
-    finally:
-        conn.close()
-
-    assert paper["parse_status"] == "error"
-    assert parse_run_count == 0
-    assert passage_count == 0
+    assert _count_rows("parse_runs") == 1
+    assert _count_rows("passages") == 0

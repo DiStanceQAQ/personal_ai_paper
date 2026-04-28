@@ -10,14 +10,8 @@ from fastapi import APIRouter, Body, HTTPException, Query, UploadFile
 
 from paper_engine.core import config
 from paper_engine.storage.database import get_connection
-from paper_engine.pdf.backends.base import ParserBackendError
-from paper_engine.pdf.persistence import PassageEmbeddingError, embed_passages_for_parse_run
-from paper_engine.pdf.compat import (
-    chunk_parse_document,
-    inspect_pdf,
-    persist_parse_result,
-    route_parse,
-)
+from paper_engine.pdf.jobs import queue_parse_run
+from paper_engine.pdf.settings import get_parser_settings
 from paper_engine.retrieval.lexical import FTS_TABLE
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
@@ -96,15 +90,33 @@ def _parse_response(
     }
 
 
-def _parser_error_warnings(
-    warnings: list[str] | None,
-    exc: BaseException,
-) -> list[str]:
-    merged = list(warnings or [])
-    error_detail = " ".join(str(exc).split())
-    if error_detail:
-        merged.append(f"parser_error:{error_detail}")
-    return merged
+def _get_setting_value(conn: Any, key: str) -> str:
+    row = conn.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
+    return "" if row is None else str(row["value"])
+
+
+def _queue_parse_for_paper(
+    conn: Any,
+    *,
+    paper_id: str,
+    space_id: str,
+) -> tuple[str, str]:
+    settings = get_parser_settings(conn)
+    parser_config = {
+        "parser_backend": settings.pdf_parser_backend,
+        "mineru_base_url": settings.mineru_base_url,
+        "grobid_enabled": bool(_get_setting_value(conn, "grobid_base_url")),
+        "worker_version": "pdf-parser-selection-v1",
+    }
+    parse_run_id = queue_parse_run(
+        conn,
+        paper_id=paper_id,
+        space_id=space_id,
+        parser_backend=settings.pdf_parser_backend,
+        parser_config=parser_config,
+        commit=False,
+    )
+    return parse_run_id, settings.pdf_parser_backend
 
 
 @router.post("/upload")
@@ -140,16 +152,30 @@ async def upload_paper(file: UploadFile) -> dict[str, Any]:
         if existing is not None:
             # Remove the just-saved duplicate file
             dest_path.unlink()
-            raise HTTPException(
-                status_code=409,
-                detail=f"Duplicate PDF detected (paper id: {existing['id']}). "
-                       "This PDF has already been imported in this space.",
+            parse_run_id, _backend = _queue_parse_for_paper(
+                conn,
+                paper_id=str(existing["id"]),
+                space_id=space_id,
             )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM papers WHERE id = ?", (existing["id"],)
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=500, detail="Failed to load paper")
+            result = _paper_row_to_dict(row)
+            result["queued_parse_run_id"] = parse_run_id
+            return result
 
         conn.execute(
             """INSERT INTO papers (id, space_id, file_path, file_hash, parse_status)
                VALUES (?, ?, ?, ?, 'pending')""",
             (paper_id, space_id, str(dest_path), file_hash),
+        )
+        parse_run_id, _backend = _queue_parse_for_paper(
+            conn,
+            paper_id=paper_id,
+            space_id=space_id,
         )
         conn.commit()
 
@@ -159,6 +185,7 @@ async def upload_paper(file: UploadFile) -> dict[str, Any]:
         if row is None:
             raise HTTPException(status_code=500, detail="Failed to create paper record")
         result = _paper_row_to_dict(row)
+        result["queued_parse_run_id"] = parse_run_id
     finally:
         conn.close()
 
@@ -370,94 +397,21 @@ async def parse_paper(paper_id: str) -> dict[str, Any]:
                 status_code=400, detail="PDF file not found on disk"
             )
 
-        # Set status to parsing
-        conn.execute(
-            "UPDATE papers SET parse_status = 'parsing' WHERE id = ?",
-            (paper_id,),
-        )
-        conn.commit()
-
         space_id = str(row["space_id"])
-        quality = inspect_pdf(file_path)
-        try:
-            document = route_parse(file_path, paper_id, space_id, quality)
-        except ParserBackendError as exc:
-            conn.rollback()
-            conn.execute(
-                "UPDATE papers SET parse_status = 'error' WHERE id = ?",
-                (paper_id,),
-            )
-            conn.commit()
-            return _parse_response(
-                status="error",
-                paper_id=paper_id,
-                passage_count=0,
-                parse_run_id=None,
-                backend=None,
-                quality_score=quality.quality_score,
-                warnings=_parser_error_warnings(quality.warnings, exc),
-            )
-
-        passages = chunk_parse_document(document)
-
-        if not passages:
-            conn.rollback()
-            conn.execute(
-                "UPDATE papers SET parse_status = 'error' WHERE id = ?",
-                (paper_id,),
-            )
-            conn.commit()
-            return _parse_response(
-                status="error",
-                paper_id=paper_id,
-                passage_count=0,
-                parse_run_id=None,
-                backend=document.backend,
-                quality_score=document.quality.quality_score,
-                warnings=document.quality.warnings,
-            )
-
-        conn.execute("BEGIN")
-        parse_run_id = persist_parse_result(
+        parse_run_id, backend = _queue_parse_for_paper(
             conn,
-            paper_id,
-            space_id,
-            document,
-            passages,
-        )
-        try:
-            embedding_warnings = embed_passages_for_parse_run(conn, parse_run_id)
-        except PassageEmbeddingError as exc:
-            conn.rollback()
-            conn.execute(
-                "UPDATE papers SET parse_status = 'error' WHERE id = ?",
-                (paper_id,),
-            )
-            conn.commit()
-            return _parse_response(
-                status="error",
-                paper_id=paper_id,
-                passage_count=0,
-                parse_run_id=None,
-                backend=document.backend,
-                quality_score=document.quality.quality_score,
-                warnings=[*document.quality.warnings, *exc.warnings],
-            )
-
-        conn.execute(
-            "UPDATE papers SET parse_status = 'parsed' WHERE id = ?",
-            (paper_id,),
+            paper_id=paper_id,
+            space_id=space_id,
         )
         conn.commit()
-
         return _parse_response(
-            status="parsed",
+            status="queued",
             paper_id=paper_id,
-            passage_count=len(passages),
+            passage_count=0,
             parse_run_id=parse_run_id,
-            backend=document.backend,
-            quality_score=document.quality.quality_score,
-            warnings=[*document.quality.warnings, *embedding_warnings],
+            backend=backend,
+            quality_score=None,
+            warnings=[],
         )
     except HTTPException:
         raise

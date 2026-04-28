@@ -1,6 +1,6 @@
 export type SpaceStatus = 'active' | 'archived' | 'deleted';
 export type ParseStatus = 'pending' | 'parsing' | 'parsed' | 'error';
-export type ParsePaperStatus = Extract<ParseStatus, 'parsed' | 'error'>;
+export type ParsePaperStatus = 'queued' | Extract<ParseStatus, 'parsed' | 'error'>;
 export type KnowledgeCardOrigin = 'user' | 'heuristic' | 'ai';
 export type DocumentElementType =
   | 'title'
@@ -61,6 +61,7 @@ export interface Paper {
   file_hash: string;
   imported_at: string;
   parse_status: ParseStatus;
+  queued_parse_run_id?: string;
   parse_diagnostics?: PaperParseDiagnostics;
 }
 

@@ -213,7 +213,7 @@ async def test_analyze_route_returns_pipeline_run_metadata(
 ) -> None:
     """The analyze endpoint keeps the legacy status while exposing pipeline run counts."""
     import paper_engine.storage.database as db_module
-    import routes_agent
+    import paper_engine.api.routes.agent as routes_agent
 
     conn = db_module.get_connection()
     try:

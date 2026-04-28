@@ -12,7 +12,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 import pdf_persistence
-import routes_papers
+import paper_engine.api.routes.papers as routes_papers
 from paper_engine.storage.database import get_connection, init_db
 from embeddings import EmbeddingConfig, EmbeddingProviderError
 from main import app

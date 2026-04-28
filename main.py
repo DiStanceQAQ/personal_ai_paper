@@ -13,11 +13,11 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from paper_engine.storage.database import init_db
-from routes_spaces import router as spaces_router
-from routes_papers import router as papers_router
-from routes_search import router as search_router
-from routes_cards import router as cards_router
-from routes_agent import router as agent_router
+from paper_engine.api.routes.spaces import router as spaces_router
+from paper_engine.api.routes.papers import router as papers_router
+from paper_engine.api.routes.search import router as search_router
+from paper_engine.api.routes.cards import router as cards_router
+from paper_engine.api.routes.agent import router as agent_router
 
 APP_IMPORTED_AT = time.perf_counter()
 STARTUP_TRACE_ENV = "PAPER_ENGINE_STARTUP_TRACE"

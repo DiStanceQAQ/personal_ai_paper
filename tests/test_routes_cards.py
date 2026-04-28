@@ -325,7 +325,10 @@ async def test_extract_cards_does_not_replace_user_or_ai_cards_on_id_conflict(
             {**base, "id": "new-heuristic-card", "summary": "New heuristic"},
         ]
 
-    monkeypatch.setattr("routes_cards.extract_cards_from_passages", fake_extract_cards)
+    monkeypatch.setattr(
+        "paper_engine.api.routes.cards.extract_cards_from_passages",
+        fake_extract_cards,
+    )
 
     resp = await client.post(f"/api/cards/extract/{paper_id}")
 

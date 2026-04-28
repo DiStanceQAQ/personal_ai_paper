@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from routes_cards import CARD_TYPES as ROUTE_CARD_TYPES
+from paper_engine.api.routes.cards import CARD_TYPES as ROUTE_CARD_TYPES
 
 from analysis_models import (
     CARD_TYPES,

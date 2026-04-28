@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any, Literal, TypeAlias
 
 from paper_engine.storage.database import get_connection
-from paper_engine.retrieval.embeddings import EmbeddingProvider, get_embedding_config, get_embedding_provider
+from paper_engine.retrieval.embeddings import (
+    EmbeddingProvider,
+    format_embedding_texts,
+    get_embedding_config,
+    get_embedding_provider,
+)
 
 SearchMode: TypeAlias = Literal["fts", "hybrid"]
 
@@ -121,7 +126,9 @@ def _semantic_vector_search_with_connection(
         provider = get_embedding_provider(config)
         if not provider.is_configured():
             return []
-        query_vectors = provider.embed_texts([query])
+        query_vectors = provider.embed_texts(
+            format_embedding_texts([query], model=provider.model, input_type="query")
+        )
     except Exception:
         return []
     finally:

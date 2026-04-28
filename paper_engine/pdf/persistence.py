@@ -10,6 +10,8 @@ from typing import Any
 
 from paper_engine.retrieval.embeddings import (
     EmbeddingProvider,
+    EmbeddingProviderUnavailable,
+    format_embedding_texts,
     get_embedding_config,
     get_embedding_provider,
     serialize_embedding_vector,
@@ -17,7 +19,19 @@ from paper_engine.retrieval.embeddings import (
 from paper_engine.pdf.models import ParseAsset, ParseDocument, ParseElement, ParseTable, PassageRecord
 from paper_engine.retrieval.lexical import FTS_TABLE
 
-__all__ = ["embed_passages_for_parse_run", "persist_parse_result"]
+__all__ = [
+    "PassageEmbeddingError",
+    "embed_passages_for_parse_run",
+    "persist_parse_result",
+]
+
+
+class PassageEmbeddingError(RuntimeError):
+    """Raised when required passage embeddings cannot be generated."""
+
+    def __init__(self, warnings: Sequence[str]) -> None:
+        super().__init__("; ".join(warnings))
+        self.warnings = list(warnings)
 
 
 def _json(value: Any) -> str:
@@ -411,10 +425,10 @@ def embed_passages_for_parse_run(
     conn: sqlite3.Connection,
     parse_run_id: str,
 ) -> list[str]:
-    """Generate embeddings for persisted passages when a provider is configured.
+    """Generate embeddings for persisted passages.
 
-    Returns warnings appended to the parse run. Embedding failures are isolated from
-    parse persistence so parsing can still complete successfully.
+    Embeddings are required for parsed papers. Failures are appended to the
+    parse run and raised so the caller can roll back parse persistence.
     """
     try:
         config = get_embedding_config(conn)
@@ -422,11 +436,15 @@ def embed_passages_for_parse_run(
     except Exception as exc:
         warning = _embedding_warning(exc)
         _append_parse_run_warnings(conn, parse_run_id, [warning])
-        return [warning]
+        raise PassageEmbeddingError([warning]) from exc
 
     try:
         if not provider.is_configured():
-            return []
+            warning = _embedding_warning(
+                EmbeddingProviderUnavailable("Embedding provider is not configured.")
+            )
+            _append_parse_run_warnings(conn, parse_run_id, [warning])
+            raise PassageEmbeddingError([warning])
 
         rows = conn.execute(
             """
@@ -440,7 +458,11 @@ def embed_passages_for_parse_run(
         if not rows:
             return []
 
-        texts = [str(row["original_text"]) for row in rows]
+        texts = format_embedding_texts(
+            [str(row["original_text"]) for row in rows],
+            model=provider.model,
+            input_type="passage",
+        )
         savepoint = _embedding_savepoint_name()
         conn.execute(f"SAVEPOINT {savepoint}")
         try:
@@ -476,7 +498,7 @@ def embed_passages_for_parse_run(
             conn.execute(f"RELEASE SAVEPOINT {savepoint}")
             warning = _embedding_warning(exc)
             _append_parse_run_warnings(conn, parse_run_id, [warning])
-            return [warning]
+            raise PassageEmbeddingError([warning]) from exc
     finally:
         _close_provider(provider)
 

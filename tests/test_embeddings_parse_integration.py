@@ -1,4 +1,4 @@
-"""Integration tests for optional embeddings after PDF parsing."""
+"""Integration tests for required embeddings after PDF parsing."""
 
 from __future__ import annotations
 
@@ -59,10 +59,10 @@ class RecordingEmbeddingProvider:
     """Configured test embedding provider that records input texts."""
 
     provider = "test-provider"
-    model = "test-model"
 
-    def __init__(self, vectors: list[list[float]]) -> None:
+    def __init__(self, vectors: list[list[float]], *, model: str = "test-model") -> None:
         self.vectors = vectors
+        self.model = model
         self.calls: list[list[str]] = []
 
     def is_configured(self) -> bool:
@@ -153,15 +153,18 @@ def _install_fake_parser(
     monkeypatch.setattr(papers_service, "chunk_parse_document", fake_chunk_parse_document)
 
 
-async def _upload_and_parse(client: AsyncClient) -> dict[str, Any]:
+async def _upload_paper(client: AsyncClient) -> str:
     await _create_and_activate_space(client)
     upload = await client.post(
         "/api/papers/upload",
         files={"file": ("paper.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")},
     )
     assert upload.status_code == 200
-    paper_id = upload.json()["id"]
+    return str(upload.json()["id"])
 
+
+async def _upload_and_parse(client: AsyncClient) -> dict[str, Any]:
+    paper_id = await _upload_paper(client)
     parse = await client.post(f"/api/papers/{paper_id}/parse")
     assert parse.status_code == 200
     return parse.json()
@@ -204,18 +207,36 @@ def _fetch_embedding_rows() -> list[dict[str, Any]]:
 
 
 @pytest.mark.asyncio
-async def test_parse_with_default_embedding_provider_stores_no_embeddings(
+async def test_parse_with_default_local_e5_provider_stores_passage_embeddings(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Disabled embeddings keep parse behavior unchanged."""
+    """The default local E5 provider is used during PDF parsing."""
     _install_fake_parser(monkeypatch)
+    provider = RecordingEmbeddingProvider(
+        [[0.1, 0.2], [0.3, 0.4]],
+        model="intfloat/multilingual-e5-small",
+    )
+
+    def fake_get_embedding_provider(
+        config: EmbeddingConfig,
+    ) -> RecordingEmbeddingProvider:
+        assert config.provider == "local"
+        assert config.model == "intfloat/multilingual-e5-small"
+        return provider
+
+    monkeypatch.setattr(
+        pdf_persistence,
+        "get_embedding_provider",
+        fake_get_embedding_provider,
+    )
 
     data = await _upload_and_parse(client)
 
     assert data["status"] == "parsed"
     assert data["warnings"] == []
-    assert _fetch_embedding_rows() == []
+    assert provider.calls == [["passage: alpha method", "passage: beta result"]]
+    assert len(_fetch_embedding_rows()) == 2
 
 
 @pytest.mark.asyncio
@@ -266,11 +287,11 @@ async def test_parse_with_configured_embedding_provider_stores_passage_embedding
 
 
 @pytest.mark.asyncio
-async def test_parse_embedding_failure_adds_warning_without_failing_parse(
+async def test_parse_embedding_failure_marks_parse_as_error(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Embedding provider failures are stored as parse warnings."""
+    """A paper is not considered parsed unless passage embeddings are stored."""
     _install_fake_parser(monkeypatch)
     _set_app_state(
         {
@@ -286,10 +307,14 @@ async def test_parse_embedding_failure_adds_warning_without_failing_parse(
         lambda config: provider,
     )
 
-    data = await _upload_and_parse(client)
+    paper_id = await _upload_paper(client)
+    parse = await client.post(f"/api/papers/{paper_id}/parse")
 
-    assert data["status"] == "parsed"
-    assert data["passage_count"] == 2
+    assert parse.status_code == 200
+    data = parse.json()
+    assert data["status"] == "error"
+    assert data["passage_count"] == 0
+    assert data["parse_run_id"] is None
     assert data["warnings"] == ["embedding_error:vector service unavailable"]
     assert _fetch_embedding_rows() == []
 
@@ -299,16 +324,13 @@ async def test_parse_embedding_failure_adds_warning_without_failing_parse(
     try:
         paper = conn.execute(
             "SELECT parse_status FROM papers WHERE id = ?",
-            (data["paper_id"],),
+            (paper_id,),
         ).fetchone()
-        run = conn.execute(
-            "SELECT warnings_json FROM parse_runs WHERE id = ?",
-            (data["parse_run_id"],),
-        ).fetchone()
+        parse_run_count = conn.execute("SELECT COUNT(*) FROM parse_runs").fetchone()[0]
+        passage_count = conn.execute("SELECT COUNT(*) FROM passages").fetchone()[0]
     finally:
         conn.close()
 
-    assert paper["parse_status"] == "parsed"
-    assert json.loads(run["warnings_json"]) == [
-        "embedding_error:vector service unavailable"
-    ]
+    assert paper["parse_status"] == "error"
+    assert parse_run_count == 0
+    assert passage_count == 0

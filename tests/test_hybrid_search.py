@@ -14,15 +14,17 @@ from paper_engine.storage.database import init_db
 from paper_engine.retrieval.hybrid import reciprocal_rank_fusion
 from paper_engine.retrieval.lexical import rebuild_fts_index, search_passages
 
+E5_MODEL = "intfloat/multilingual-e5-small"
+
 
 class QueryEmbeddingProvider:
     """Deterministic query embedding provider for hybrid search tests."""
 
     provider = "openai"
-    model = "test-model"
 
-    def __init__(self, query_vector: list[float]) -> None:
+    def __init__(self, query_vector: list[float], *, model: str = "test-model") -> None:
         self.query_vector = query_vector
+        self.model = model
         self.calls: list[list[str]] = []
 
     def is_configured(self) -> bool:
@@ -70,7 +72,7 @@ def _seed_search_rows(db_path: Path, *, with_embeddings: bool) -> None:
                 conn,
                 {
                     "embedding_provider": "openai",
-                    "embedding_model": "test-model",
+                    "embedding_model": E5_MODEL,
                     "embedding_api_key": "test-key",
                 },
             )
@@ -80,10 +82,15 @@ def _seed_search_rows(db_path: Path, *, with_embeddings: bool) -> None:
                     passage_id, provider, model, dimension, embedding_json
                 )
                 VALUES
-                  ('passage-1', 'openai', 'test-model', 2, ?),
-                  ('passage-2', 'openai', 'test-model', 2, ?)
+                  ('passage-1', 'openai', ?, 2, ?),
+                  ('passage-2', 'openai', ?, 2, ?)
                 """,
-                (json.dumps([0.0, 1.0]), json.dumps([1.0, 0.0])),
+                (
+                    E5_MODEL,
+                    json.dumps([0.0, 1.0]),
+                    E5_MODEL,
+                    json.dumps([1.0, 0.0]),
+                ),
             )
         conn.commit()
     finally:
@@ -143,7 +150,7 @@ def test_search_defaults_to_hybrid_when_embeddings_exist(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Auto mode should include semantic-only matches when embeddings exist."""
-    provider = QueryEmbeddingProvider([1.0, 0.0])
+    provider = QueryEmbeddingProvider([1.0, 0.0], model=E5_MODEL)
     monkeypatch.setattr("paper_engine.retrieval.hybrid.get_embedding_provider", lambda config: provider)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -166,4 +173,4 @@ def test_search_defaults_to_hybrid_when_embeddings_exist(
 
     assert "passage-2" in [row["passage_id"] for row in hybrid_results]
     assert [row["passage_id"] for row in fts_results] == ["passage-1"]
-    assert provider.calls == [["transformer"]]
+    assert provider.calls == [["query: transformer"]]

@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TAURI_BINARIES = ROOT / "src-tauri" / "binaries"
 PDF_OPTIONAL_PACKAGES = ("docling",)
-EMBEDDING_OPTIONAL_PACKAGES = ("sentence_transformers",)
+EMBEDDING_REQUIRED_PACKAGES = ("sentence_transformers",)
 
 
 @dataclass(frozen=True)
@@ -152,13 +152,14 @@ def copy_for_tauri(binary: Path, sidecar_name: str, target_triple: str) -> Path:
 
 
 def build_targets(target: str) -> list[SidecarTarget]:
-    api_collections, api_exclusions = _optional_dependency_args(
-        (*PDF_OPTIONAL_PACKAGES, *EMBEDDING_OPTIONAL_PACKAGES)
+    api_optional_collections, api_exclusions = _optional_dependency_args(
+        PDF_OPTIONAL_PACKAGES
     )
-    mcp_collections, mcp_exclusions = _optional_dependency_args(
-        EMBEDDING_OPTIONAL_PACKAGES
+    api_collections = _dedupe(
+        (*api_optional_collections, *EMBEDDING_REQUIRED_PACKAGES)
     )
-    mcp_exclusions = _dedupe((*mcp_exclusions, *PDF_OPTIONAL_PACKAGES))
+    mcp_collections = EMBEDDING_REQUIRED_PACKAGES
+    mcp_exclusions = PDF_OPTIONAL_PACKAGES
 
     targets: list[SidecarTarget] = []
     if target in {"api", "all"}:

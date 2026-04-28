@@ -1,8 +1,9 @@
-"""Tests for optional passage embedding providers."""
+"""Tests for required passage embedding providers."""
 
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -19,19 +20,104 @@ def create_app_state_connection() -> sqlite3.Connection:
     return conn
 
 
-def test_default_config_uses_disabled_noop_provider() -> None:
-    """Embeddings are disabled by default and no-op without affecting FTS."""
+def create_sentence_transformer_dir(path: Path) -> Path:
+    path.mkdir(parents=True)
+    (path / "modules.json").write_text("[]")
+    return path
+
+
+def test_default_config_uses_local_multilingual_e5_provider() -> None:
+    """Embeddings default to the bundled local multilingual E5 model."""
     conn = create_app_state_connection()
 
     config = embeddings.get_embedding_config(conn)
-    provider = embeddings.get_embedding_provider(config)
 
-    assert config.provider == "none"
-    assert provider.provider == "none"
-    assert not provider.is_configured()
-    assert provider.embed_texts(["alpha", "beta"]) == []
+    assert config.provider == "local"
+    assert config.model == "intfloat/multilingual-e5-small"
+
+    class FakeSentenceTransformer:
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            return [[1, 2, 3] for _ in texts]
+
+    provider = embeddings.get_embedding_provider(
+        config,
+        sentence_transformer_model=FakeSentenceTransformer(),
+    )
+
+    assert provider.provider == "sentence_transformer"
+    assert provider.model == "intfloat/multilingual-e5-small"
+    assert provider.is_configured()
+    assert provider.embed_texts(["alpha", "beta"]) == [
+        [1.0, 2.0, 3.0],
+        [1.0, 2.0, 3.0],
+    ]
 
     conn.close()
+
+
+def test_local_provider_loads_packaged_model_from_resource_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Tauri-packaged resources should be preferred over remote model IDs."""
+    resource_dir = tmp_path / "tauri-resources"
+    model_dir = create_sentence_transformer_dir(
+        resource_dir / "models" / "intfloat-multilingual-e5-small"
+    )
+    loaded_targets: list[str] = []
+
+    class FakeSentenceTransformer:
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            return [[1, 2, 3] for _ in texts]
+
+    def fake_load_sentence_transformer(model_name: str) -> FakeSentenceTransformer:
+        loaded_targets.append(model_name)
+        return FakeSentenceTransformer()
+
+    monkeypatch.delenv(embeddings.EMBEDDING_MODEL_DIR_ENV, raising=False)
+    monkeypatch.setenv(embeddings.RESOURCE_DIR_ENV, str(resource_dir))
+    monkeypatch.setattr(
+        embeddings,
+        "_load_sentence_transformer",
+        fake_load_sentence_transformer,
+    )
+
+    provider = embeddings.get_embedding_provider(
+        embeddings.EmbeddingConfig(provider="local")
+    )
+
+    assert loaded_targets == [str(model_dir)]
+    assert provider.provider == "sentence_transformer"
+    assert provider.model == "intfloat/multilingual-e5-small"
+
+
+def test_local_provider_requires_packaged_model_when_not_injected(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Runtime local embeddings should fail clearly instead of downloading."""
+    monkeypatch.setenv(
+        embeddings.EMBEDDING_MODEL_DIR_ENV,
+        str(tmp_path / "missing-model"),
+    )
+    monkeypatch.delenv(embeddings.RESOURCE_DIR_ENV, raising=False)
+
+    with pytest.raises(embeddings.EmbeddingProviderUnavailable, match="Bundled"):
+        embeddings.get_embedding_provider(embeddings.EmbeddingConfig(provider="local"))
+
+
+def test_multilingual_e5_inputs_are_prefixed_by_role() -> None:
+    """E5 models require different prefixes for query and passage texts."""
+    assert embeddings.format_embedding_texts(
+        ["  transformer retrieval  "],
+        model="intfloat/multilingual-e5-small",
+        input_type="query",
+    ) == ["query: transformer retrieval"]
+    assert embeddings.format_embedding_texts(
+        ["alpha method", "beta result"],
+        model="intfloat/multilingual-e5-small",
+        input_type="passage",
+    ) == ["passage: alpha method", "passage: beta result"]
 
 
 def test_embedding_config_reads_app_state_values() -> None:

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, UploadFile
 from paper_engine.core import config
 from paper_engine.storage.database import get_connection
 from paper_engine.pdf.backends.base import ParserBackendError
-from paper_engine.pdf.persistence import embed_passages_for_parse_run
+from paper_engine.pdf.persistence import PassageEmbeddingError, embed_passages_for_parse_run
 from paper_engine.pdf.compat import (
     chunk_parse_document,
     inspect_pdf,
@@ -417,6 +417,7 @@ async def parse_paper(paper_id: str) -> dict[str, Any]:
                 warnings=document.quality.warnings,
             )
 
+        conn.execute("BEGIN")
         parse_run_id = persist_parse_result(
             conn,
             paper_id,
@@ -424,7 +425,24 @@ async def parse_paper(paper_id: str) -> dict[str, Any]:
             document,
             passages,
         )
-        embedding_warnings = embed_passages_for_parse_run(conn, parse_run_id)
+        try:
+            embedding_warnings = embed_passages_for_parse_run(conn, parse_run_id)
+        except PassageEmbeddingError as exc:
+            conn.rollback()
+            conn.execute(
+                "UPDATE papers SET parse_status = 'error' WHERE id = ?",
+                (paper_id,),
+            )
+            conn.commit()
+            return _parse_response(
+                status="error",
+                paper_id=paper_id,
+                passage_count=0,
+                parse_run_id=None,
+                backend=document.backend,
+                quality_score=document.quality.quality_score,
+                warnings=[*document.quality.warnings, *exc.warnings],
+            )
 
         conn.execute(
             "UPDATE papers SET parse_status = 'parsed' WHERE id = ?",

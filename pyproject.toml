@@ -13,6 +13,7 @@ dependencies = [
     "mcp>=1.0.0",
     "httpx>=0.27.0",
     "tiktoken>=0.7.0",
+    "sentence-transformers>=2.7.0",
 ]
 
 [project.scripts]
@@ -27,7 +28,6 @@ dev = [
     "pyinstaller>=6.0",
 ]
 pdf-advanced = ["docling>=2.0.0"]
-embeddings = ["sentence-transformers>=2.7.0"]
 
 [tool.setuptools.packages.find]
 include = ["paper_engine*"]

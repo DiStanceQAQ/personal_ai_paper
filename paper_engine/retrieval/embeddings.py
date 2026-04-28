@@ -1,4 +1,4 @@
-"""Optional passage embedding providers and serialization helpers."""
+"""Passage embedding providers and serialization helpers."""
 
 from __future__ import annotations
 
@@ -6,17 +6,23 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 import importlib
 import json
+import os
+from pathlib import Path
 import sqlite3
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, TypeAlias, cast
 
 import httpx
 
 from paper_engine.storage.database import get_connection
 
-DEFAULT_PROVIDER = "none"
+DEFAULT_PROVIDER = "local"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "text-embedding-3-small"
-DEFAULT_SENTENCE_TRANSFORMER_MODEL = "all-MiniLM-L6-v2"
+DEFAULT_SENTENCE_TRANSFORMER_MODEL = "intfloat/multilingual-e5-small"
+DEFAULT_LOCAL_MODEL_DIRNAME = "intfloat-multilingual-e5-small"
+EMBEDDING_MODEL_DIR_ENV = "PAPER_ENGINE_EMBEDDING_MODEL_DIR"
+RESOURCE_DIR_ENV = "PAPER_ENGINE_RESOURCE_DIR"
+EmbeddingInputType: TypeAlias = Literal["query", "passage"]
 
 _CONFIG_KEYS = (
     "embedding_provider",
@@ -25,6 +31,7 @@ _CONFIG_KEYS = (
     "embedding_model",
     "embedding_dimension",
 )
+_REQUIRED_SENTENCE_TRANSFORMER_FILES = ("modules.json",)
 
 
 class EmbeddingProviderError(RuntimeError):
@@ -36,7 +43,7 @@ class EmbeddingProviderUnavailable(EmbeddingProviderError):
 
 
 class EmbeddingProvider(Protocol):
-    """Common interface for optional embedding backends."""
+    """Common interface for embedding backends."""
 
     provider: str
     model: str
@@ -67,19 +74,6 @@ class SerializedEmbedding:
     dimension: int
 
 
-class NoEmbeddingProvider:
-    """Disabled provider used by default so FTS-only search remains unchanged."""
-
-    provider = DEFAULT_PROVIDER
-    model = ""
-
-    def is_configured(self) -> bool:
-        return False
-
-    def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
-        return []
-
-
 class OpenAICompatibleEmbeddingProvider:
     """Embedding provider for OpenAI-compatible `/embeddings` APIs."""
 
@@ -102,7 +96,11 @@ class OpenAICompatibleEmbeddingProvider:
         self._client = http_client or httpx.Client(timeout=60.0)
 
     def is_configured(self) -> bool:
-        return bool(self.model and self.base_url and (self.api_key or _is_local_url(self.base_url)))
+        return bool(
+            self.model
+            and self.base_url
+            and (self.api_key or _is_local_url(self.base_url))
+        )
 
     def close(self) -> None:
         """Close the owned HTTP client."""
@@ -143,9 +141,16 @@ class SentenceTransformerEmbeddingProvider:
 
     provider = "sentence_transformer"
 
-    def __init__(self, *, model_name: str = DEFAULT_SENTENCE_TRANSFORMER_MODEL, model: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model_name: str = DEFAULT_SENTENCE_TRANSFORMER_MODEL,
+        model_path: str | Path | None = None,
+        model: Any | None = None,
+    ) -> None:
         self.model = model_name.strip() or DEFAULT_SENTENCE_TRANSFORMER_MODEL
-        self._model = model if model is not None else _load_sentence_transformer(self.model)
+        load_target = str(model_path) if model_path is not None else self.model
+        self._model = model if model is not None else _load_sentence_transformer(load_target)
 
     def is_configured(self) -> bool:
         return self._model is not None
@@ -159,7 +164,7 @@ class SentenceTransformerEmbeddingProvider:
 
 
 def get_embedding_config(conn: sqlite3.Connection | None = None) -> EmbeddingConfig:
-    """Return stored embedding configuration, defaulting to disabled."""
+    """Return stored embedding configuration, defaulting to local E5."""
     owns_connection = conn is None
     connection = conn or get_connection()
     try:
@@ -173,12 +178,16 @@ def get_embedding_config(conn: sqlite3.Connection | None = None) -> EmbeddingCon
             connection.close()
 
     values = {str(row["key"]): str(row["value"]).strip() for row in rows}
+    provider = values.get("embedding_provider", DEFAULT_PROVIDER) or DEFAULT_PROVIDER
+    model = values.get("embedding_model", "")
+    if not model and _uses_sentence_transformer_provider(provider):
+        model = DEFAULT_SENTENCE_TRANSFORMER_MODEL
     return EmbeddingConfig(
-        provider=values.get("embedding_provider", DEFAULT_PROVIDER) or DEFAULT_PROVIDER,
+        provider=provider,
         api_key=values.get("embedding_api_key", ""),
         base_url=values.get("embedding_base_url", DEFAULT_OPENAI_BASE_URL)
         or DEFAULT_OPENAI_BASE_URL,
-        model=values.get("embedding_model", ""),
+        model=model,
         dimension=_parse_dimension(values.get("embedding_dimension", "")),
     )
 
@@ -194,7 +203,9 @@ def get_embedding_provider(
     provider_name = _normalize_provider_name(resolved.provider)
 
     if provider_name in {"", "none", "disabled", "off"}:
-        return NoEmbeddingProvider()
+        raise EmbeddingProviderUnavailable(
+            "Embeddings are required; embedding_provider cannot be disabled."
+        )
     if provider_name in {"openai", "openai_compatible", "openai_compatible_embeddings"}:
         return OpenAICompatibleEmbeddingProvider(
             api_key=resolved.api_key,
@@ -204,12 +215,21 @@ def get_embedding_provider(
             http_client=http_client,
         )
     if provider_name in {"sentence_transformer", "sentence_transformers", "local"}:
+        model_name = resolved.model or DEFAULT_SENTENCE_TRANSFORMER_MODEL
+        model_path = (
+            None
+            if sentence_transformer_model is not None
+            else resolve_local_embedding_model_path(model_name)
+        )
         return SentenceTransformerEmbeddingProvider(
-            model_name=resolved.model or DEFAULT_SENTENCE_TRANSFORMER_MODEL,
+            model_name=model_name,
+            model_path=model_path,
             model=sentence_transformer_model,
         )
 
-    raise EmbeddingProviderUnavailable(f"Unsupported embedding provider: {resolved.provider}")
+    raise EmbeddingProviderUnavailable(
+        f"Unsupported embedding provider: {resolved.provider}"
+    )
 
 
 def serialize_embedding_vector(vector: Sequence[float]) -> SerializedEmbedding:
@@ -220,6 +240,51 @@ def serialize_embedding_vector(vector: Sequence[float]) -> SerializedEmbedding:
     return SerializedEmbedding(
         embedding_json=json.dumps(coerced, separators=(",", ":")),
         dimension=len(coerced),
+    )
+
+
+def format_embedding_texts(
+    texts: Sequence[str],
+    *,
+    model: str,
+    input_type: EmbeddingInputType,
+) -> list[str]:
+    """Apply model-specific query/passage formatting before embedding."""
+    clean_texts = [" ".join(str(text).split()) for text in texts]
+    if not _is_e5_model(model):
+        return clean_texts
+
+    prefix = f"{input_type}: "
+    return [
+        text if text.lower().startswith(prefix) else f"{prefix}{text}"
+        for text in clean_texts
+    ]
+
+
+def resolve_local_embedding_model_path(
+    model_name: str = DEFAULT_SENTENCE_TRANSFORMER_MODEL,
+) -> Path:
+    """Resolve the packaged sentence-transformer model directory."""
+    model_dirname = _model_resource_dirname(model_name)
+    explicit_model_dir = os.environ.get(EMBEDDING_MODEL_DIR_ENV, "").strip()
+    if explicit_model_dir:
+        path = Path(explicit_model_dir).expanduser()
+        if _is_sentence_transformer_model_dir(path):
+            return path
+        raise EmbeddingProviderUnavailable(
+            "Bundled embedding model is missing or incomplete at "
+            f"{EMBEDDING_MODEL_DIR_ENV}={path}. "
+            "Run `python scripts/download_embedding_model.py` before starting the app."
+        )
+
+    for candidate in _local_model_dir_candidates(model_dirname):
+        if _is_sentence_transformer_model_dir(candidate):
+            return candidate
+
+    raise EmbeddingProviderUnavailable(
+        "Bundled embedding model is missing. Expected "
+        f"{model_dirname} under {RESOURCE_DIR_ENV}/models or resources/models. "
+        "Run `python scripts/download_embedding_model.py` before starting the app."
     )
 
 
@@ -237,6 +302,48 @@ def _parse_dimension(value: str) -> int | None:
 
 def _normalize_provider_name(provider: str) -> str:
     return provider.strip().lower().replace("-", "_")
+
+
+def _uses_sentence_transformer_provider(provider: str) -> bool:
+    return _normalize_provider_name(provider) in {
+        "sentence_transformer",
+        "sentence_transformers",
+        "local",
+    }
+
+
+def _is_e5_model(model: str) -> bool:
+    return "e5" in model.strip().lower()
+
+
+def _model_resource_dirname(model_name: str) -> str:
+    normalized = model_name.strip() or DEFAULT_SENTENCE_TRANSFORMER_MODEL
+    if normalized == DEFAULT_SENTENCE_TRANSFORMER_MODEL:
+        return DEFAULT_LOCAL_MODEL_DIRNAME
+    return normalized.replace("/", "-")
+
+
+def _local_model_dir_candidates(model_dirname: str) -> list[Path]:
+    candidates: list[Path] = []
+    resource_dir = os.environ.get(RESOURCE_DIR_ENV, "").strip()
+    if resource_dir:
+        resource_root = Path(resource_dir).expanduser()
+        candidates.extend([
+            resource_root / "models" / model_dirname,
+            resource_root / "resources" / "models" / model_dirname,
+            resource_root / model_dirname,
+        ])
+
+    project_root = Path(__file__).resolve().parents[2]
+    candidates.append(project_root / "resources" / "models" / model_dirname)
+    return candidates
+
+
+def _is_sentence_transformer_model_dir(path: Path) -> bool:
+    return path.is_dir() and all(
+        (path / filename).is_file()
+        for filename in _REQUIRED_SENTENCE_TRANSFORMER_FILES
+    )
 
 
 def _is_local_url(base_url: str) -> bool:
@@ -283,7 +390,7 @@ def _load_sentence_transformer(model_name: str) -> Any:
         module = importlib.import_module("sentence_transformers")
     except ImportError as exc:
         raise EmbeddingProviderUnavailable(
-            "sentence-transformers is not installed; install the embeddings extra to use local embeddings."
+            "sentence-transformers is required to use local embeddings."
         ) from exc
 
     sentence_transformer = getattr(module, "SentenceTransformer", None)

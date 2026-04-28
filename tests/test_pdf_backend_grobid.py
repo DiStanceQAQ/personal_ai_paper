@@ -413,3 +413,23 @@ def test_get_configured_grobid_client_uses_optional_app_state(
 
     assert isinstance(configured, GrobidClient)
     assert configured.base_url == "http://grobid.test"
+
+
+def test_get_configured_grobid_client_treats_missing_app_state_as_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pdf_backend_grobid
+    from pdf_backend_grobid import get_configured_grobid_client
+
+    def connection_without_app_state() -> sqlite3.Connection:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    monkeypatch.setattr(
+        pdf_backend_grobid,
+        "get_connection",
+        connection_without_app_state,
+    )
+
+    assert get_configured_grobid_client() is None

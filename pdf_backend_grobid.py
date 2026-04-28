@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 import re
+import sqlite3
 from typing import Iterable
 import xml.etree.ElementTree as ET
 
@@ -113,10 +114,15 @@ def get_configured_grobid_client() -> GrobidClient | None:
     """Return a configured optional client, or None when no base URL is stored."""
     conn = get_connection()
     try:
-        row = conn.execute(
-            "SELECT value FROM app_state WHERE key = ?",
-            ("grobid_base_url",),
-        ).fetchone()
+        try:
+            row = conn.execute(
+                "SELECT value FROM app_state WHERE key = ?",
+                ("grobid_base_url",),
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            if "no such table: app_state" in str(exc):
+                return None
+            raise
     finally:
         conn.close()
 

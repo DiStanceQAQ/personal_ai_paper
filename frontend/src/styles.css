@@ -847,3 +847,257 @@ button {
 
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+
+/* Inspector Styles */
+.inspector {
+  width: var(--inspector-width);
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  position: relative;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 5;
+}
+
+.inspector.collapsed {
+  width: 0;
+  overflow: hidden;
+  border-left: none;
+}
+
+.inspector-toggle {
+  position: absolute;
+  left: -24px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 48px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  color: var(--text-tertiary);
+  z-index: 6;
+  box-shadow: -2px 0 4px rgba(0,0,0,0.05);
+}
+
+.inspector-toggle:hover {
+  color: var(--accent);
+}
+
+.inspector-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.inspector-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.inspector-header h2 {
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+
+.paper-status-tag {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 4px 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: var(--radius-full);
+  text-transform: uppercase;
+}
+
+.paper-authors {
+  font-size: 14px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.inspector-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.section-title {
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.meta-pills-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.meta-pill {
+  background: var(--bg-main);
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.meta-pill label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+}
+
+.meta-pill span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-add-inline {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  transition: all 0.2s;
+}
+
+.btn-add-inline:hover {
+  background: var(--accent);
+  color: white;
+}
+
+.manual-card-form {
+  background: var(--bg-main);
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.manual-card-form textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  resize: vertical;
+  background: white;
+}
+
+.form-actions-inline {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.form-actions-inline button {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+}
+
+.card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+/* Select Components */
+.select-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.custom-select {
+  appearance: none;
+  width: 100%;
+  padding: 12px 40px 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.custom-select:focus {
+  background: white;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.custom-select.error {
+  border-color: var(--error);
+}
+
+.select-arrow {
+  position: absolute;
+  right: 14px;
+  pointer-events: none;
+  color: var(--text-tertiary);
+}
+
+.error-message {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--error);
+  font-weight: 600;
+}
+
+/* Loading Overlay */
+.processing-card {
+  background: white;
+  padding: 32px 48px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  animation: fadeIn 0.3s ease-out;
+}
+
+.processing-card p {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* Danger Button */
+.btn-danger {
+  background: var(--error);
+  color: white;
+}
+
+.btn-danger:hover {
+  background: #dc2626;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.2);
+}

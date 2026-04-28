@@ -1,86 +1,13 @@
-"""API routes for knowledge cards."""
+"""HTTP routes for knowledge cards."""
 
-import uuid
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body
 
-from paper_engine.cards.extraction import extract_cards_from_passages, extract_metadata_from_passages
-from paper_engine.storage.database import get_connection
+from paper_engine.cards import service
 
 router = APIRouter(prefix="/api/cards", tags=["cards"])
-
-CARD_TYPES = [
-    "Problem", "Claim", "Evidence", "Method",
-    "Object", "Variable", "Metric", "Result",
-    "Failure Mode", "Interpretation", "Limitation", "Practical Tip",
-]
-
-
-def _card_row_to_dict(row: Any) -> dict[str, Any]:
-    return dict(row)
-
-
-def _persist_heuristic_card(conn: Any, card: dict[str, Any]) -> bool:
-    """Insert heuristic output without replacing user-owned or AI-owned cards."""
-    cursor = conn.execute(
-        """
-        INSERT INTO knowledge_cards (
-            id, space_id, paper_id, source_passage_id, card_type, summary,
-            confidence, user_edited, created_by, extractor_version,
-            analysis_run_id, evidence_json, quality_flags_json
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'heuristic', ?, NULL, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            source_passage_id = excluded.source_passage_id,
-            card_type = excluded.card_type,
-            summary = excluded.summary,
-            confidence = excluded.confidence,
-            user_edited = 0,
-            created_by = 'heuristic',
-            extractor_version = excluded.extractor_version,
-            analysis_run_id = NULL,
-            evidence_json = excluded.evidence_json,
-            quality_flags_json = excluded.quality_flags_json,
-            updated_at = datetime('now')
-        WHERE knowledge_cards.created_by = 'heuristic'
-          AND knowledge_cards.user_edited != 1
-        """,
-        (
-            str(card["id"]),
-            str(card["space_id"]),
-            str(card["paper_id"]),
-            card.get("source_passage_id"),
-            str(card["card_type"]),
-            str(card["summary"]),
-            min(float(card.get("confidence", 0.0)), 0.55),
-            str(card.get("extractor_version", "heuristic-v1")),
-            str(card.get("evidence_json", "{}")),
-            str(card.get("quality_flags_json", "[]")),
-        ),
-    )
-    rowcount = int(getattr(cursor, "rowcount", 0))
-    return rowcount > 0
-
-
-def _get_active_space_id() -> str:
-    conn = get_connection()
-    try:
-        row = conn.execute(
-            """SELECT s.id
-               FROM spaces s
-               JOIN app_state a ON a.value = s.id
-               WHERE a.key = ? AND s.status = 'active'""",
-            ("active_space",),
-        ).fetchone()
-        if row is None:
-            raise HTTPException(
-                status_code=400,
-                detail="No active space selected.",
-            )
-        return str(row["id"])
-    finally:
-        conn.close()
+CARD_TYPES = service.CARD_TYPES
 
 
 @router.post("")
@@ -91,63 +18,13 @@ async def create_card(
     source_passage_id: str | None = Body(None),
     confidence: float = Body(1.0),
 ) -> dict[str, Any]:
-    """Create a new knowledge card."""
-    if card_type not in CARD_TYPES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid card type. Must be one of: {', '.join(CARD_TYPES)}",
-        )
-
-    space_id = _get_active_space_id()
-    card_id = str(uuid.uuid4())
-
-    conn = get_connection()
-    try:
-        # Verify paper exists in the space
-        paper = conn.execute(
-            "SELECT id FROM papers WHERE id = ? AND space_id = ?",
-            (paper_id, space_id),
-        ).fetchone()
-        if paper is None:
-            raise HTTPException(status_code=404, detail="Paper not found in active space")
-
-        if source_passage_id is not None:
-            source = conn.execute(
-                """SELECT id FROM passages
-                   WHERE id = ? AND paper_id = ? AND space_id = ?""",
-                (source_passage_id, paper_id, space_id),
-            ).fetchone()
-            if source is None:
-                raise HTTPException(
-                    status_code=422,
-                    detail="source_passage_id must belong to the same paper and active space",
-                )
-
-        conn.execute(
-            """INSERT INTO knowledge_cards
-               (id, space_id, paper_id, source_passage_id, card_type, summary,
-                confidence, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'user')""",
-            (
-                card_id,
-                space_id,
-                paper_id,
-                source_passage_id,
-                card_type,
-                summary,
-                confidence,
-            ),
-        )
-        conn.commit()
-
-        row = conn.execute(
-            "SELECT * FROM knowledge_cards WHERE id = ?", (card_id,)
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=500, detail="Failed to create card")
-        return _card_row_to_dict(row)
-    finally:
-        conn.close()
+    return await service.create_card(
+        paper_id=paper_id,
+        card_type=card_type,
+        summary=summary,
+        source_passage_id=source_passage_id,
+        confidence=confidence,
+    )
 
 
 @router.get("")
@@ -156,43 +33,16 @@ async def list_cards(
     card_type: str | None = None,
     space_id_override: str | None = None,
 ) -> list[dict[str, Any]]:
-    """List knowledge cards in the active space, optionally filtered."""
-    if space_id_override is None:
-        space_id_override = _get_active_space_id()
-
-    query = "SELECT * FROM knowledge_cards WHERE space_id = ?"
-    params: list[Any] = [space_id_override]
-
-    if paper_id:
-        query += " AND paper_id = ?"
-        params.append(paper_id)
-    if card_type:
-        query += " AND card_type = ?"
-        params.append(card_type)
-
-    query += " ORDER BY created_at DESC"
-
-    conn = get_connection()
-    try:
-        rows = conn.execute(query, params).fetchall()
-        return [_card_row_to_dict(r) for r in rows]
-    finally:
-        conn.close()
+    return await service.list_cards(
+        paper_id=paper_id,
+        card_type=card_type,
+        space_id_override=space_id_override,
+    )
 
 
 @router.get("/{card_id}")
 async def get_card(card_id: str) -> dict[str, Any]:
-    """Get a single knowledge card by ID."""
-    conn = get_connection()
-    try:
-        row = conn.execute(
-            "SELECT * FROM knowledge_cards WHERE id = ?", (card_id,)
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Card not found")
-        return _card_row_to_dict(row)
-    finally:
-        conn.close()
+    return await service.get_card(card_id)
 
 
 @router.patch("/{card_id}")
@@ -202,122 +52,19 @@ async def update_card(
     card_type: str | None = Body(None),
     confidence: float | None = Body(None),
 ) -> dict[str, Any]:
-    """Update a knowledge card."""
-    if card_type is not None and card_type not in CARD_TYPES:
-        raise HTTPException(status_code=422, detail=f"Invalid card type: {card_type}")
-
-    conn = get_connection()
-    try:
-        row = conn.execute(
-            "SELECT * FROM knowledge_cards WHERE id = ?", (card_id,)
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Card not found")
-
-        updates: list[str] = []
-        params: list[Any] = []
-
-        if summary is not None:
-            updates.append("summary = ?")
-            params.append(summary)
-        if card_type is not None:
-            updates.append("card_type = ?")
-            params.append(card_type)
-        if confidence is not None:
-            updates.append("confidence = ?")
-            params.append(confidence)
-
-        if updates:
-            updates.append("user_edited = 1")
-            updates.append("created_by = 'user'")
-            updates.append("updated_at = datetime('now')")
-            params.append(card_id)
-            conn.execute(
-                f"UPDATE knowledge_cards SET {', '.join(updates)} WHERE id = ?",
-                params,
-            )
-            conn.commit()
-    finally:
-        conn.close()
-
-    return await get_card(card_id)
+    return await service.update_card(
+        card_id=card_id,
+        summary=summary,
+        card_type=card_type,
+        confidence=confidence,
+    )
 
 
 @router.delete("/{card_id}")
 async def delete_card(card_id: str) -> dict[str, str]:
-    """Delete a knowledge card."""
-    conn = get_connection()
-    try:
-        row = conn.execute(
-            "SELECT id FROM knowledge_cards WHERE id = ?", (card_id,)
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Card not found")
-
-        conn.execute("DELETE FROM knowledge_cards WHERE id = ?", (card_id,))
-        conn.commit()
-        return {"status": "deleted", "card_id": card_id}
-    finally:
-        conn.close()
+    return await service.delete_card(card_id)
 
 
 @router.post("/extract/{paper_id}")
 async def extract_cards(paper_id: str) -> dict[str, Any]:
-    """Run local low-confidence heuristic card extraction for a paper."""
-    space_id = _get_active_space_id()
-
-    conn = get_connection()
-    try:
-        paper_row = conn.execute(
-            "SELECT * FROM papers WHERE id = ? AND space_id = ?",
-            (paper_id, space_id),
-        ).fetchone()
-        if paper_row is None:
-            raise HTTPException(status_code=404, detail="Paper not found")
-
-        passages = conn.execute(
-            "SELECT * FROM passages WHERE paper_id = ? ORDER BY page_number, paragraph_index",
-            (paper_id,),
-        ).fetchall()
-
-        if not passages:
-            return {
-                "status": "no_passages",
-                "paper_id": paper_id,
-                "card_count": 0,
-                "skipped_card_count": 0,
-                "mode": "heuristic",
-                "review_required": False,
-                "message": "没有可抽取的原文片段。",
-            }
-
-        passage_list = [dict(p) for p in passages]
-        
-        # 1. RAG Pre-processing: Basic Title Identification
-        # Still helpful for the UI to have a title even without the Agent
-        if not paper_row["authors"] or "." in paper_row["title"]:
-            meta = extract_metadata_from_passages(passage_list)
-            if meta["title"]:
-                conn.execute(
-                    "UPDATE papers SET title = ? WHERE id = ?",
-                    (meta["title"][:500], paper_id),
-                )
-
-        cards = extract_cards_from_passages(passage_list, paper_id, space_id)
-        persisted_count = 0
-        for card in cards:
-            if _persist_heuristic_card(conn, card):
-                persisted_count += 1
-
-        conn.commit()
-        return {
-            "status": "extracted",
-            "paper_id": paper_id,
-            "card_count": persisted_count,
-            "skipped_card_count": len(cards) - persisted_count,
-            "mode": "heuristic",
-            "review_required": True,
-            "message": "启发式抽取结果置信度较低，需要人工复核后再使用。",
-        }
-    finally:
-        conn.close()
+    return await service.extract_cards(paper_id)

@@ -12,7 +12,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 import paper_engine.pdf.persistence as pdf_persistence
-import paper_engine.api.routes.papers as routes_papers
+import paper_engine.papers.service as papers_service
 from paper_engine.storage.database import get_connection, init_db
 from paper_engine.retrieval.embeddings import EmbeddingConfig, EmbeddingProviderError
 from main import app
@@ -148,9 +148,9 @@ def _install_fake_parser(
             for index, text in enumerate(texts)
         ]
 
-    monkeypatch.setattr(routes_papers, "inspect_pdf", lambda file_path: quality)
-    monkeypatch.setattr(routes_papers, "route_parse", fake_route_parse)
-    monkeypatch.setattr(routes_papers, "chunk_parse_document", fake_chunk_parse_document)
+    monkeypatch.setattr(papers_service, "inspect_pdf", lambda file_path: quality)
+    monkeypatch.setattr(papers_service, "route_parse", fake_route_parse)
+    monkeypatch.setattr(papers_service, "chunk_parse_document", fake_chunk_parse_document)
 
 
 async def _upload_and_parse(client: AsyncClient) -> dict[str, Any]:

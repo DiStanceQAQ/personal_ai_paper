@@ -227,7 +227,7 @@ async def test_search_api_passes_mode_to_search(
         return [{"passage_id": "passage-1"}]
 
     monkeypatch.setattr(
-        "paper_engine.api.routes.search.search_passages",
+        "paper_engine.retrieval.service.search_passages",
         fake_search_passages,
     )
 

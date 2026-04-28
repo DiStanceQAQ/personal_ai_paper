@@ -213,7 +213,7 @@ async def test_analyze_route_returns_pipeline_run_metadata(
 ) -> None:
     """The analyze endpoint keeps the legacy status while exposing pipeline run counts."""
     import paper_engine.storage.database as db_module
-    import paper_engine.api.routes.agent as routes_agent
+    import paper_engine.agent.service as agent_service
 
     conn = db_module.get_connection()
     try:
@@ -243,7 +243,7 @@ async def test_analyze_route_returns_pipeline_run_metadata(
         }
 
     monkeypatch.setattr(
-        routes_agent,
+        agent_service,
         "analyze_paper_with_llm",
         fake_analyze_paper_with_llm,
     )

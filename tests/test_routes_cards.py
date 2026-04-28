@@ -326,7 +326,7 @@ async def test_extract_cards_does_not_replace_user_or_ai_cards_on_id_conflict(
         ]
 
     monkeypatch.setattr(
-        "paper_engine.api.routes.cards.extract_cards_from_passages",
+        "paper_engine.cards.service.extract_cards_from_passages",
         fake_extract_cards,
     )
 

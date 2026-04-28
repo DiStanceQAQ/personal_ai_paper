@@ -270,7 +270,8 @@ button {
   transition: opacity 0.2s;
 }
 
-.paper-card-wrapper:hover .paper-card-actions { opacity: 1; }
+.paper-card-wrapper:hover .paper-card-actions,
+.paper-card-wrapper:focus-within .paper-card-actions { opacity: 1; }
 
 .btn-icon-danger {
   width: 28px;
@@ -1100,4 +1101,6 @@ button {
   background: #dc2626;
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(220, 38, 38, 0.2);
+}
+ 0.2);
 }

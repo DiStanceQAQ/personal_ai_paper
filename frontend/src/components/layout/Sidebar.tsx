@@ -43,17 +43,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div
             key={space.id}
             className={space.id === activeSpace?.id ? 'space-item-wrapper active' : 'space-item-wrapper'}
-            onClick={() => onSelectSpace(space)}
           >
-            <div className="space-item-main">
-              <FolderOpen size={16} />
-              <span>{space.name}</span>
-            </div>
+            <button 
+              className="space-item-main-btn" 
+              onClick={() => onSelectSpace(space)}
+              aria-current={space.id === activeSpace?.id ? 'page' : undefined}
+            >
+              <div className="space-item-main">
+                <FolderOpen size={16} />
+                <span>{space.name}</span>
+              </div>
+            </button>
             <div className="space-item-actions">
-              <button onClick={(e) => onOpenEditModal(e, space)}>
+              <button onClick={(e) => { e.stopPropagation(); onOpenEditModal(e, space); }} aria-label={`编辑 ${space.name}`}>
                 <Edit2 size={12} />
               </button>
-              <button onClick={(e) => onOpenDeleteConfirm(e, space.id)}>
+              <button onClick={(e) => { e.stopPropagation(); onOpenDeleteConfirm(e, space.id); }} aria-label={`删除 ${space.name}`}>
                 <Trash2 size={12} />
               </button>
             </div>

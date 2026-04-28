@@ -3,6 +3,7 @@ export type ParseStatus = 'pending' | 'parsing' | 'parsed' | 'error';
 export type ParsePaperStatus = 'queued' | Extract<ParseStatus, 'parsed' | 'error'>;
 export type PdfParserBackend = 'mineru' | 'docling';
 export type KnowledgeCardOrigin = 'user' | 'heuristic' | 'ai';
+export type SearchStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 export type DocumentElementType =
   | 'title'
   | 'heading'

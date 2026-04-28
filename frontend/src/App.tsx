@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
-import type { Paper } from './types';
+import type { Paper, SearchResult, SearchStatus } from './types';
 
 // Layout Components
 import { Sidebar } from './components/layout/Sidebar';
@@ -51,7 +51,9 @@ export default function App(): JSX.Element {
   const [isInspectorOpen, setIsInspectorOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<(typeof cardTabs)[number]>('Method');
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<any[]>([]);
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [searchStatus, setSearchStatus] = useState<SearchStatus>('idle');
+  const [searchError, setSearchError] = useState('');
 
   // --- Custom Hooks (Logic Logic) ---
   const modals = useModals();
@@ -109,12 +111,37 @@ export default function App(): JSX.Element {
   };
 
   const handleSearch = async () => {
-    if (!query.trim()) return;
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) {
+      setResults([]);
+      setSearchError('');
+      setSearchStatus('idle');
+      return;
+    }
+
+    setActiveView('search');
+    setSearchStatus('loading');
+    setSearchError('');
+
     try {
-      const searchResults = await api.search(query.trim());
+      const searchResults = await api.search(trimmedQuery);
       setResults(searchResults);
-      setActiveView('search');
-    } catch { setNotice({ message: '搜索请求失败。', type: 'error' }); }
+      setSearchStatus(searchResults.length > 0 ? 'success' : 'empty');
+    } catch {
+      setResults([]);
+      setSearchError('检索请求失败，请检查本地服务后重试。');
+      setSearchStatus('error');
+      setNotice({ message: '搜索请求失败。', type: 'error' });
+    }
+  };
+
+  const handleQueryChange = (nextQuery: string) => {
+    setQuery(nextQuery);
+    if (!nextQuery.trim()) {
+      setResults([]);
+      setSearchError('');
+      setSearchStatus('idle');
+    }
   };
 
   const handleUpdatePaper = async (paperId: string, data: Partial<Paper>) => {
@@ -201,9 +228,11 @@ export default function App(): JSX.Element {
           onDeletePaper={(e, id) => { e.stopPropagation(); modals.openModal('deletePaper', { paperToDelete: id }); }}
           onUpload={uploadPaper}
           query={query}
-          setQuery={setQuery}
+          setQuery={handleQueryChange}
           onSearch={handleSearch}
           results={results}
+          searchStatus={searchStatus}
+          searchError={searchError}
           parseLabel={parseLabel}
         />
 

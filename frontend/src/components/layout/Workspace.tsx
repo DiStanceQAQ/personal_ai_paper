@@ -1,7 +1,7 @@
 import React from 'react';
 import { UploadCloud, Search, FileText, FolderOpen, Zap, Info } from 'lucide-react';
 import DOMPurify from 'dompurify';
-import type { Paper, SearchResult, Space, AgentStatus } from '../../types';
+import type { AgentStatus, Paper, SearchResult, SearchStatus, Space } from '../../types';
 import { PaperCard } from '../ui/PaperCard';
 
 interface WorkspaceProps {
@@ -20,6 +20,8 @@ interface WorkspaceProps {
   setQuery: (query: string) => void;
   onSearch: () => void;
   results: SearchResult[];
+  searchStatus: SearchStatus;
+  searchError: string;
   parseLabel: (status: string) => string;
 }
 
@@ -39,8 +41,12 @@ export const Workspace: React.FC<WorkspaceProps> = ({
   setQuery,
   onSearch,
   results,
+  searchStatus,
+  searchError,
   parseLabel,
 }) => {
+  const canSearch = query.trim().length > 0 && searchStatus !== 'loading';
+
   return (
     <section className="workspace">
       <header className="topbar">
@@ -131,31 +137,65 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                   <input
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && onSearch()}
+                    onKeyDown={(e) => e.key === 'Enter' && canSearch && onSearch()}
                     placeholder="在海量论文中深度检索知识..."
                   />
-                  <button className="btn-search-main" onClick={onSearch}>
-                    <span>立即检索</span>
+                  <button className="btn-search-main" onClick={onSearch} disabled={!canSearch}>
+                    <span>{searchStatus === 'loading' ? '检索中' : '立即检索'}</span>
                   </button>
                 </div>
               </div>
               <div className="search-results-list">
-                {results.map((result) => (
-                  <article key={result.passage_id} className="search-result-card">
-                    <div className="result-source">
-                      <FileText size={16} />
-                      <span>{result.paper_title || result.paper_id}</span>
-                    </div>
+                {searchStatus === 'idle' && (
+                  <div className="search-state">
+                    <Search size={22} />
+                    <h3>输入关键词开始检索</h3>
+                    <p>支持按方法、指标、结论或论文片段查找当前空间中的内容。</p>
+                  </div>
+                )}
 
-                    <p dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(result.snippet) }} />
+                {searchStatus === 'loading' && (
+                  <div className="search-state">
+                    <div className="spinner" aria-hidden="true" />
+                    <h3>正在检索</h3>
+                    <p>正在匹配论文片段和相关上下文。</p>
+                  </div>
+                )}
 
-                    <div className="result-meta">
-                      <span className="result-section-badge">{result.section || '正文'}</span>
-                      <span className="dot">·</span>
-                      <span>第 {result.page_number} 页</span>
-                    </div>
-                  </article>
-                ))}
+                {searchStatus === 'empty' && (
+                  <div className="search-state">
+                    <Search size={22} />
+                    <h3>没有匹配结果</h3>
+                    <p>换一个更具体的术语，或先导入并解析更多论文。</p>
+                  </div>
+                )}
+
+                {searchStatus === 'error' && (
+                  <div className="search-state search-state-error">
+                    <Search size={22} />
+                    <h3>检索失败</h3>
+                    <p>{searchError || '检索请求失败，请稍后重试。'}</p>
+                  </div>
+                )}
+
+                {searchStatus === 'success' && (
+                  results.map((result) => (
+                    <article key={result.passage_id} className="search-result-card">
+                      <div className="result-source">
+                        <FileText size={16} />
+                        <span>{result.paper_title || result.paper_id}</span>
+                      </div>
+
+                      <p dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(result.snippet) }} />
+
+                      <div className="result-meta">
+                        <span className="result-section-badge">{result.section || '正文'}</span>
+                        <span className="dot">·</span>
+                        <span>第 {result.page_number} 页</span>
+                      </div>
+                    </article>
+                  ))
+                )}
               </div>
             </div>
           )}

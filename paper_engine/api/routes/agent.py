@@ -20,6 +20,11 @@ async def update_agent_config(config: LLMConfig) -> dict[str, str]:
     return await service.update_agent_config(config)
 
 
+@router.post("/config/mineru/test")
+async def test_mineru_config() -> dict[str, str]:
+    return await service.test_mineru_config()
+
+
 @router.post("/analyze/{paper_id}")
 async def run_deep_analysis(paper_id: str) -> dict[str, Any]:
     return await service.run_deep_analysis(paper_id)

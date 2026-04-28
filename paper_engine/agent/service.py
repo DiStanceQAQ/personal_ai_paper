@@ -1,10 +1,16 @@
 """API routes for internal Agent and LLM configuration."""
 
-from typing import Any
+from typing import Any, Literal
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
 from paper_engine.storage.database import get_connection
 from paper_engine.agent.executor import analyze_paper_with_llm
+from paper_engine.pdf.settings import (
+    ParserSettingsUpdate,
+    get_parser_settings,
+    save_parser_settings,
+    test_mineru_connection,
+)
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -23,6 +29,9 @@ class LLMConfig(BaseModel):
     llm_api_key: str | None = None
     llamaparse_base_url: str = DEFAULT_LLAMAPARSE_BASE_URL
     llamaparse_api_key: str | None = None
+    pdf_parser_backend: Literal["mineru", "docling"] | None = None
+    mineru_base_url: str | None = None
+    mineru_api_key: str | None = None
 
 
 def _get_agent_access_value() -> str:
@@ -80,6 +89,7 @@ async def get_agent_config() -> dict[str, Any]:
             "SELECT key, value FROM app_state WHERE key LIKE 'llm_%' OR key LIKE 'llamaparse_%'"
         ).fetchall()
         config = {row["key"]: row["value"] for row in rows}
+        parser_settings = get_parser_settings(conn)
         return {
             "llm_provider": config.get("llm_provider", "openai"),
             "llm_base_url": config.get("llm_base_url", "https://api.openai.com/v1"),
@@ -90,6 +100,7 @@ async def get_agent_config() -> dict[str, Any]:
                 DEFAULT_LLAMAPARSE_BASE_URL,
             ),
             "has_llamaparse_api_key": bool(config.get("llamaparse_api_key")),
+            **parser_settings.model_dump(),
         }
     finally:
         conn.close()
@@ -100,6 +111,12 @@ async def update_agent_config(config: LLMConfig) -> dict[str, str]:
     conn = get_connection()
     try:
         data = config.model_dump(exclude_unset=True)
+        parser_update = ParserSettingsUpdate(
+            pdf_parser_backend=data.pop("pdf_parser_backend", None),
+            mineru_base_url=data.pop("mineru_base_url", None),
+            mineru_api_key=data.pop("mineru_api_key", None),
+        )
+        save_parser_settings(conn, parser_update)
         
         # Logic: If api_key is empty string or None, don't overwrite the existing one in DB
         if not data.get("llm_api_key"):
@@ -115,6 +132,15 @@ async def update_agent_config(config: LLMConfig) -> dict[str, str]:
                 )
         conn.commit()
         return {"status": "success"}
+    finally:
+        conn.close()
+
+
+async def test_mineru_config() -> dict[str, str]:
+    """Test configured MinerU connectivity without returning credentials."""
+    conn = get_connection()
+    try:
+        return dict(test_mineru_connection(conn))
     finally:
         conn.close()
 

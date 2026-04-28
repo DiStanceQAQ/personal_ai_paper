@@ -171,6 +171,7 @@ def test_extract_passages_keeps_invalid_pdf_compatibility(tmp_path: Path) -> Non
 
 def test_pyproject_packages_legacy_backend() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text())
-    modules: list[Any] = pyproject["tool"]["setuptools"]["py-modules"]
 
-    assert "pdf_backend_legacy" in modules
+    assert pyproject["tool"]["setuptools"]["packages"]["find"]["include"] == [
+        "paper_engine*"
+    ]

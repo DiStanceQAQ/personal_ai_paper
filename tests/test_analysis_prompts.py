@@ -42,7 +42,9 @@ def test_analysis_prompts_is_in_packaged_runtime_modules() -> None:
     """Prompt builders should ship with packaged runtime modules."""
     pyproject = tomllib.loads(Path("pyproject.toml").read_text())
 
-    assert "analysis_prompts" in pyproject["tool"]["setuptools"]["py-modules"]
+    assert pyproject["tool"]["setuptools"]["packages"]["find"]["include"] == [
+        "paper_engine*"
+    ]
 
 
 def test_metadata_prompt_lists_source_ids_pages_and_grounding_rules() -> None:

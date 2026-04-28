@@ -278,7 +278,7 @@ def test_mcp_tool_blocked_when_disabled(db_path: str) -> None:
     conn.commit()
     conn.close()
 
-    from mcp_server import list_spaces, get_active_space, search_literature, get_paper_summary, get_methods, get_evidence_for_claim
+    from paper_engine.mcp.server import list_spaces, get_active_space, search_literature, get_paper_summary, get_methods, get_evidence_for_claim
 
     # All tools should return error
     r1 = list_spaces()
@@ -317,7 +317,7 @@ def test_mcp_tool_works_when_enabled(db_path: str) -> None:
     conn.commit()
     conn.close()
 
-    from mcp_server import list_spaces
+    from paper_engine.mcp.server import list_spaces
 
     result = list_spaces()
     assert len(result) >= 1
@@ -343,7 +343,7 @@ def test_mcp_space_isolation_papers(db_path: str) -> None:
     conn.commit()
     conn.close()
 
-    from mcp_server import list_papers
+    from paper_engine.mcp.server import list_papers
 
     # Only space-1 papers should be returned
     papers = list_papers(space_id="space-1")
@@ -374,7 +374,7 @@ def test_mcp_space_isolation_cards(db_path: str) -> None:
     conn.commit()
     conn.close()
 
-    from mcp_server import get_methods
+    from paper_engine.mcp.server import get_methods
 
     # Only space-1 cards should be returned
     cards = get_methods(space_id="space-1")
@@ -413,7 +413,7 @@ def test_mcp_space_isolation_search(db_path: str) -> None:
 
     rebuild_fts_index(database_path=Path(db_path))
 
-    from mcp_server import search_literature
+    from paper_engine.mcp.server import search_literature
 
     results = search_literature("transformer", space_id="space-1")
     passage_ids = {r["passage_id"] for r in results}
@@ -445,7 +445,7 @@ def test_mcp_space_isolation_single_paper_tools(db_path: str) -> None:
     conn.commit()
     conn.close()
 
-    from mcp_server import get_citation, get_paper_summary
+    from paper_engine.mcp.server import get_citation, get_paper_summary
 
     assert get_paper_summary("p1")["paper"]["id"] == "p1"
     assert "error" in get_paper_summary("p2")
@@ -468,7 +468,7 @@ def test_mcp_list_spaces_only_returns_active_space(db_path: str) -> None:
     conn.commit()
     conn.close()
 
-    from mcp_server import list_spaces
+    from paper_engine.mcp.server import list_spaces
 
     spaces = list_spaces()
     assert [s["id"] for s in spaces] == ["space-1"]
@@ -499,7 +499,7 @@ def test_agent_results_have_source_info(db_path: str) -> None:
 
     rebuild_fts_index(database_path=Path(db_path))
 
-    from mcp_server import (
+    from paper_engine.mcp.server import (
         list_papers, search_literature, get_paper_summary,
         get_citation, get_methods, get_evidence_for_claim,
     )
@@ -565,7 +565,7 @@ def test_no_source_less_results(db_path: str) -> None:
 
     rebuild_fts_index(database_path=Path(db_path))
 
-    from mcp_server import search_literature
+    from paper_engine.mcp.server import search_literature
 
     results = search_literature("transformer")
     # Every result must have paper_id and passage_id
@@ -596,7 +596,7 @@ def test_mcp_add_knowledge_card_creates_card_in_active_space(db_path: str) -> No
     conn.close()
 
     try:
-        from mcp_server import add_knowledge_card
+        from paper_engine.mcp.server import add_knowledge_card
 
         result = add_knowledge_card("p1", "Method", "MCP-created method", "pass1")
 
@@ -633,7 +633,7 @@ def test_mcp_add_knowledge_card_rejects_cross_space_paper(db_path: str) -> None:
     conn.close()
 
     try:
-        from mcp_server import add_knowledge_card
+        from paper_engine.mcp.server import add_knowledge_card
 
         result = add_knowledge_card("p2", "Method", "Should not be written")
 
@@ -670,7 +670,7 @@ def test_mcp_add_knowledge_card_rejects_foreign_source_passage(db_path: str) -> 
     conn.close()
 
     try:
-        from mcp_server import add_knowledge_card
+        from paper_engine.mcp.server import add_knowledge_card
 
         result = add_knowledge_card("p1", "Method", "Should not be written", "foreign-pass")
 

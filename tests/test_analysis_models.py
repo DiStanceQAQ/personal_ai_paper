@@ -36,7 +36,9 @@ def test_analysis_models_is_in_packaged_runtime_modules() -> None:
     """The analysis schema module should be included in packaged builds."""
     pyproject = tomllib.loads(Path("pyproject.toml").read_text())
 
-    assert "analysis_models" in pyproject["tool"]["setuptools"]["py-modules"]
+    assert pyproject["tool"]["setuptools"]["packages"]["find"]["include"] == [
+        "paper_engine*"
+    ]
 
 
 def test_card_type_vocabulary_matches_card_api_vocabulary() -> None:

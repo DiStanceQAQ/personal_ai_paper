@@ -26,18 +26,18 @@ class SidecarTarget:
 
 
 PDF_PIPELINE_HIDDEN_IMPORTS = (
-    "db_migrations",
-    "pdf_backend_base",
-    "pdf_backend_docling",
-    "pdf_backend_grobid",
-    "pdf_backend_legacy",
-    "pdf_backend_llamaparse",
-    "pdf_backend_pymupdf4llm",
-    "pdf_chunker",
-    "pdf_models",
-    "pdf_persistence",
-    "pdf_profile",
-    "pdf_router",
+    "paper_engine.storage.migrations",
+    "paper_engine.pdf.backends.base",
+    "paper_engine.pdf.backends.docling",
+    "paper_engine.pdf.backends.grobid",
+    "paper_engine.pdf.backends.legacy",
+    "paper_engine.pdf.backends.llamaparse",
+    "paper_engine.pdf.backends.pymupdf4llm",
+    "paper_engine.pdf.chunking",
+    "paper_engine.pdf.models",
+    "paper_engine.pdf.persistence",
+    "paper_engine.pdf.profile",
+    "paper_engine.pdf.router",
     "pymupdf",
     "pymupdf4llm",
     "tiktoken",
@@ -45,37 +45,37 @@ PDF_PIPELINE_HIDDEN_IMPORTS = (
     "tiktoken_ext.openai_public",
 )
 ANALYSIS_PIPELINE_HIDDEN_IMPORTS = (
-    "analysis_models",
-    "analysis_pipeline",
-    "analysis_prompts",
-    "analysis_verifier",
+    "paper_engine.analysis.models",
+    "paper_engine.analysis.pipeline",
+    "paper_engine.analysis.prompts",
+    "paper_engine.analysis.verifier",
 )
 RETRIEVAL_HIDDEN_IMPORTS = (
-    "embeddings",
-    "hybrid_search",
-    "search",
+    "paper_engine.retrieval.embeddings",
+    "paper_engine.retrieval.hybrid",
+    "paper_engine.retrieval.lexical",
 )
 API_HIDDEN_IMPORTS = (
-    "main",
-    "agent_executor",
+    "paper_engine.api.app",
+    "paper_engine.agent.executor",
     *ANALYSIS_PIPELINE_HIDDEN_IMPORTS,
-    "card_extractor",
-    "config",
-    "db",
-    "llm_client",
-    "parser",
+    "paper_engine.cards.extraction",
+    "paper_engine.core.config",
+    "paper_engine.storage.database",
+    "paper_engine.agent.llm_client",
+    "paper_engine.pdf.compat",
     *PDF_PIPELINE_HIDDEN_IMPORTS,
     *RETRIEVAL_HIDDEN_IMPORTS,
-    "routes_agent",
-    "routes_cards",
-    "routes_papers",
-    "routes_search",
-    "routes_spaces",
+    "paper_engine.api.routes.agent",
+    "paper_engine.api.routes.cards",
+    "paper_engine.api.routes.papers",
+    "paper_engine.api.routes.search",
+    "paper_engine.api.routes.spaces",
 )
 MCP_HIDDEN_IMPORTS = (
-    "config",
-    "db",
-    "db_migrations",
+    "paper_engine.core.config",
+    "paper_engine.storage.database",
+    "paper_engine.storage.migrations",
     *RETRIEVAL_HIDDEN_IMPORTS,
 )
 
@@ -166,7 +166,7 @@ def build_targets(target: str) -> list[SidecarTarget]:
         targets.append(
             SidecarTarget(
                 sidecar_name="paper-engine-api",
-                entrypoint="api_sidecar.py",
+                entrypoint="paper_engine/sidecar/api.py",
                 hidden_imports=API_HIDDEN_IMPORTS,
                 collect_submodules=api_collections,
                 excluded_modules=api_exclusions,
@@ -176,7 +176,7 @@ def build_targets(target: str) -> list[SidecarTarget]:
         targets.append(
             SidecarTarget(
                 sidecar_name="paper-engine-mcp",
-                entrypoint="mcp_server.py",
+                entrypoint="paper_engine/mcp/server.py",
                 hidden_imports=MCP_HIDDEN_IMPORTS,
                 collect_submodules=mcp_collections,
                 excluded_modules=mcp_exclusions,

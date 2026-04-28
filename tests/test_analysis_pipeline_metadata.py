@@ -232,4 +232,6 @@ def test_analysis_pipeline_is_in_packaged_runtime_modules() -> None:
     """The analysis pipeline should ship with packaged runtime modules."""
     pyproject = tomllib.loads(Path("pyproject.toml").read_text())
 
-    assert "analysis_pipeline" in pyproject["tool"]["setuptools"]["py-modules"]
+    assert pyproject["tool"]["setuptools"]["packages"]["find"]["include"] == [
+        "paper_engine*"
+    ]

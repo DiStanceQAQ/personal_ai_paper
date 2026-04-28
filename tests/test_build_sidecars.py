@@ -78,24 +78,24 @@ def test_api_sidecar_target_includes_upgraded_pdf_pipeline_modules() -> None:
     api_target = targets[0]
 
     expected_modules = {
-        "db_migrations",
-        "analysis_models",
-        "analysis_pipeline",
-        "analysis_prompts",
-        "analysis_verifier",
-        "embeddings",
-        "hybrid_search",
-        "pdf_backend_base",
-        "pdf_backend_docling",
-        "pdf_backend_grobid",
-        "pdf_backend_legacy",
-        "pdf_backend_llamaparse",
-        "pdf_backend_pymupdf4llm",
-        "pdf_chunker",
-        "pdf_models",
-        "pdf_persistence",
-        "pdf_profile",
-        "pdf_router",
+        "paper_engine.storage.migrations",
+        "paper_engine.analysis.models",
+        "paper_engine.analysis.pipeline",
+        "paper_engine.analysis.prompts",
+        "paper_engine.analysis.verifier",
+        "paper_engine.retrieval.embeddings",
+        "paper_engine.retrieval.hybrid",
+        "paper_engine.pdf.backends.base",
+        "paper_engine.pdf.backends.docling",
+        "paper_engine.pdf.backends.grobid",
+        "paper_engine.pdf.backends.legacy",
+        "paper_engine.pdf.backends.llamaparse",
+        "paper_engine.pdf.backends.pymupdf4llm",
+        "paper_engine.pdf.chunking",
+        "paper_engine.pdf.models",
+        "paper_engine.pdf.persistence",
+        "paper_engine.pdf.profile",
+        "paper_engine.pdf.router",
         "pymupdf",
         "pymupdf4llm",
         "tiktoken",
@@ -150,7 +150,9 @@ def test_installed_optional_dependencies_are_collected_when_available(
     assert "sentence_transformers" not in mcp_target.excluded_modules
 
 
-def test_pyproject_packages_database_migrations_module() -> None:
+def test_pyproject_uses_backend_package_discovery() -> None:
     pyproject = tomllib.loads((build_sidecars.ROOT / "pyproject.toml").read_text())
 
-    assert "db_migrations" in pyproject["tool"]["setuptools"]["py-modules"]
+    find_config = pyproject["tool"]["setuptools"]["packages"]["find"]
+    assert find_config["include"] == ["paper_engine*"]
+    assert "py-modules" not in pyproject["tool"]["setuptools"]

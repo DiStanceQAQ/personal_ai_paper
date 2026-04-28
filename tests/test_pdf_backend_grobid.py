@@ -113,7 +113,9 @@ FULLTEXT_TEI = """<?xml version="1.0" encoding="UTF-8"?>
 def test_pyproject_declares_grobid_module() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
-    assert "pdf_backend_grobid" in pyproject["tool"]["setuptools"]["py-modules"]
+    assert pyproject["tool"]["setuptools"]["packages"]["find"]["include"] == [
+        "paper_engine*"
+    ]
 
 
 def test_is_alive_returns_true_for_grobid_status_ok() -> None:

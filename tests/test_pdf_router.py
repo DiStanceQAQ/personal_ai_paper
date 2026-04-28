@@ -700,4 +700,6 @@ def test_pyproject_packages_router_module() -> None:
     with Path("pyproject.toml").open("rb") as handle:
         pyproject = tomllib.load(handle)
 
-    assert "pdf_router" in pyproject["tool"]["setuptools"]["py-modules"]
+    assert pyproject["tool"]["setuptools"]["packages"]["find"]["include"] == [
+        "paper_engine*"
+    ]

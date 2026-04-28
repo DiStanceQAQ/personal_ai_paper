@@ -16,8 +16,8 @@ dependencies = [
 ]
 
 [project.scripts]
-paper-engine-api = "api_sidecar:main"
-paper-engine-mcp = "mcp_server:main"
+paper-engine-api = "paper_engine.sidecar.api:main"
+paper-engine-mcp = "paper_engine.mcp.server:main"
 
 [project.optional-dependencies]
 dev = [
@@ -29,42 +29,8 @@ dev = [
 pdf-advanced = ["docling>=2.0.0"]
 embeddings = ["sentence-transformers>=2.7.0"]
 
-[tool.setuptools]
-py-modules = [
-    "agent_executor",
-    "analysis_models",
-    "analysis_pipeline",
-    "analysis_prompts",
-    "analysis_verifier",
-    "api_sidecar",
-    "card_extractor",
-    "config",
-    "db",
-    "db_migrations",
-    "embeddings",
-    "hybrid_search",
-    "llm_client",
-    "main",
-    "mcp_server",
-    "parser",
-    "pdf_backend_base",
-    "pdf_backend_docling",
-    "pdf_backend_grobid",
-    "pdf_backend_legacy",
-    "pdf_backend_llamaparse",
-    "pdf_backend_pymupdf4llm",
-    "pdf_chunker",
-    "pdf_models",
-    "pdf_persistence",
-    "pdf_profile",
-    "pdf_router",
-    "routes_agent",
-    "routes_cards",
-    "routes_papers",
-    "routes_search",
-    "routes_spaces",
-    "search",
-]
+[tool.setuptools.packages.find]
+include = ["paper_engine*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -89,9 +55,9 @@ module = "mcp"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = "pdf_profile"
+module = "paper_engine.pdf.profile"
 disable_error_code = ["no-untyped-call"]
 
 [[tool.mypy.overrides]]
-module = "parser"
+module = "paper_engine.pdf.compat"
 disable_error_code = ["no-untyped-call", "no-any-return"]

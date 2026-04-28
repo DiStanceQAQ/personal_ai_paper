@@ -17,7 +17,9 @@ def test_pyproject_declares_docling_extra_and_module() -> None:
     assert pyproject["project"]["optional-dependencies"]["pdf-advanced"] == [
         "docling>=2.0.0"
     ]
-    assert "pdf_backend_docling" in pyproject["tool"]["setuptools"]["py-modules"]
+    assert pyproject["tool"]["setuptools"]["packages"]["find"]["include"] == [
+        "paper_engine*"
+    ]
 
 
 def test_availability_uses_find_spec_without_importing_docling(monkeypatch: pytest.MonkeyPatch) -> None:

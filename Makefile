@@ -4,13 +4,13 @@ install:
 	pip install -e ".[dev]"
 
 dev:
-	uvicorn main:app --reload --host 127.0.0.1 --port 8000
+	uvicorn paper_engine.api.app:app --reload --host 127.0.0.1 --port 8000
 
 test:
 	pytest -v
 
 typecheck:
-	mypy main.py api_sidecar.py tests/
+	mypy paper_engine tests/
 
 check: typecheck test
 	@echo "All checks passed!"

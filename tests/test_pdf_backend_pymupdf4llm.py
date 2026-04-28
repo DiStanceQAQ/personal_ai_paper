@@ -29,7 +29,9 @@ def test_pyproject_packages_pymupdf4llm_backend_module() -> None:
     with Path("pyproject.toml").open("rb") as handle:
         pyproject = tomllib.load(handle)
 
-    assert "pdf_backend_pymupdf4llm" in pyproject["tool"]["setuptools"]["py-modules"]
+    assert pyproject["tool"]["setuptools"]["packages"]["find"]["include"] == [
+        "paper_engine*"
+    ]
 
 
 def test_backend_reports_availability() -> None:

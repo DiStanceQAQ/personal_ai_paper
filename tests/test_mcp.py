@@ -75,7 +75,7 @@ def _setup_data(db_path_str: str) -> str:
 
 def test_list_spaces(db_path: str) -> None:
     _setup_data(db_path)
-    from mcp_server import list_spaces
+    from paper_engine.mcp.server import list_spaces
     result = list_spaces()
     assert len(result) >= 1
     assert any(s["id"] == "space-1" for s in result)
@@ -83,14 +83,14 @@ def test_list_spaces(db_path: str) -> None:
 
 def test_get_active_space(db_path: str) -> None:
     _setup_data(db_path)
-    from mcp_server import get_active_space
+    from paper_engine.mcp.server import get_active_space
     result = get_active_space()
     assert result["id"] == "space-1"
 
 
 def test_list_papers(db_path: str) -> None:
     _setup_data(db_path)
-    from mcp_server import list_papers
+    from paper_engine.mcp.server import list_papers
     result = list_papers()
     assert len(result) >= 1
     assert result[0]["title"] == "Test Paper"
@@ -98,14 +98,14 @@ def test_list_papers(db_path: str) -> None:
 
 def test_search_literature(db_path: str) -> None:
     _setup_data(db_path)
-    from mcp_server import search_literature
+    from paper_engine.mcp.server import search_literature
     result = search_literature("transformer")
     assert len(result) >= 1
 
 
 def test_search_literature_includes_source_metadata(db_path: str) -> None:
     _setup_data(db_path)
-    from mcp_server import search_literature
+    from paper_engine.mcp.server import search_literature
 
     result = search_literature("transformer")
 
@@ -119,7 +119,7 @@ def test_search_literature_includes_source_metadata(db_path: str) -> None:
 
 def test_get_paper_summary(db_path: str) -> None:
     _setup_data(db_path)
-    from mcp_server import get_paper_summary
+    from paper_engine.mcp.server import get_paper_summary
     result = get_paper_summary("paper-1")
     assert result["paper"]["title"] == "Test Paper"
     assert result["passage_count"] >= 1
@@ -128,14 +128,14 @@ def test_get_paper_summary(db_path: str) -> None:
 
 def test_get_citation(db_path: str) -> None:
     _setup_data(db_path)
-    from mcp_server import get_citation
+    from paper_engine.mcp.server import get_citation
     result = get_citation("paper-1")
     assert "title" in result
 
 
 def test_get_methods(db_path: str) -> None:
     _setup_data(db_path)
-    from mcp_server import get_methods
+    from paper_engine.mcp.server import get_methods
     result = get_methods()
     assert len(result) >= 1
     assert result[0]["card_type"] == "Method"
@@ -143,7 +143,7 @@ def test_get_methods(db_path: str) -> None:
 
 def test_card_tools_include_source_passage_metadata(db_path: str) -> None:
     _setup_data(db_path)
-    from mcp_server import get_methods
+    from paper_engine.mcp.server import get_methods
 
     result = get_methods()
 
@@ -162,13 +162,13 @@ def test_card_tools_include_source_passage_metadata(db_path: str) -> None:
 
 def test_get_evidence_for_claim(db_path: str) -> None:
     _setup_data(db_path)
-    from mcp_server import get_evidence_for_claim
+    from paper_engine.mcp.server import get_evidence_for_claim
     result = get_evidence_for_claim("transformer")
     assert len(result) >= 1
 
 
 def test_get_limitations(db_path: str) -> None:
     _setup_data(db_path)
-    from mcp_server import get_limitations
+    from paper_engine.mcp.server import get_limitations
     result = get_limitations()
     assert isinstance(result, list)

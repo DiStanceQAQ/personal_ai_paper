@@ -165,6 +165,6 @@ def test_corrupt_pdf_returns_open_warning_instead_of_raising(
 def test_pdf_profile_is_in_packaged_module_allow_list() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
-    modules = pyproject["tool"]["setuptools"]["py-modules"]
-
-    assert "pdf_profile" in modules
+    assert pyproject["tool"]["setuptools"]["packages"]["find"]["include"] == [
+        "paper_engine*"
+    ]

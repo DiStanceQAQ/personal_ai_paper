@@ -29,7 +29,9 @@ def test_pyproject_packages_llamaparse_backend_module() -> None:
     with Path("pyproject.toml").open("rb") as handle:
         pyproject = tomllib.load(handle)
 
-    assert "pdf_backend_llamaparse" in pyproject["tool"]["setuptools"]["py-modules"]
+    assert pyproject["tool"]["setuptools"]["packages"]["find"]["include"] == [
+        "paper_engine*"
+    ]
 
 
 def test_backend_unavailable_without_api_key(tmp_path: Path) -> None:

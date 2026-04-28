@@ -27,7 +27,9 @@ def test_pdf_models_is_in_packaged_runtime_modules() -> None:
     """The runtime parser models module should be included in packaged builds."""
     pyproject = tomllib.loads(Path("pyproject.toml").read_text())
 
-    assert "pdf_models" in pyproject["tool"]["setuptools"]["py-modules"]
+    assert pyproject["tool"]["setuptools"]["packages"]["find"]["include"] == [
+        "paper_engine*"
+    ]
 
 
 def test_pdf_models_declares_direct_pydantic_v2_runtime_dependency() -> None:

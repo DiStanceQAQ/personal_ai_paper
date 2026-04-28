@@ -61,8 +61,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ))}
       </nav>
 
-      <div className="sidebar-footer" style={{ marginTop: 'auto', paddingTop: '20px' }}>
-        <button className="btn-secondary" style={{ width: '100%' }} onClick={onOpenSettings}>
+      <div className="sidebar-footer">
+        <button className="btn-settings-sidebar" onClick={onOpenSettings}>
           <Settings size={16} />
           <span>LLM 配置</span>
         </button>

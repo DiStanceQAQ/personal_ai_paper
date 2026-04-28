@@ -132,10 +132,10 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && onSearch()}
-                    placeholder="搜索关键词..."
+                    placeholder="在海量论文中深度检索知识..."
                   />
-                  <button className="btn-primary" onClick={onSearch}>
-                    检索
+                  <button className="btn-search-main" onClick={onSearch}>
+                    <span>立即检索</span>
                   </button>
                 </div>
               </div>

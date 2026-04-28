@@ -132,7 +132,7 @@ export const Inspector: React.FC<InspectorProps> = ({
                     className="btn-icon-secondary"
                     onClick={onOpenEditPaper}
                     title="编辑元数据"
-                    style={{ width: '28px', height: '28px', borderRadius: '50%', background: '#f3f4f6' }}
+                    style={{ width: '28px', height: '28px', borderRadius: '50%' }}
                   >
                     <Edit2 size={14} />
                   </button>
@@ -160,33 +160,45 @@ export const Inspector: React.FC<InspectorProps> = ({
                 <div className="section-title">解析质量</div>
                 <div className="parse-quality-grid">
                   <div className="parse-quality-item">
-                    <Server size={14} />
-                    <label>解析器</label>
+                    <div className="item-label-group">
+                      <Server size={14} />
+                      <label>解析器</label>
+                    </div>
                     <span>{parseDiagnostics?.parser_backend || '未知'}</span>
                   </div>
                   <div className="parse-quality-item">
-                    <Gauge size={14} />
-                    <label>质量评分</label>
+                    <div className="item-label-group">
+                      <Gauge size={14} />
+                      <label>质量评分</label>
+                    </div>
                     <span>{formatQualityScore(parseDiagnostics?.quality_score)}</span>
                   </div>
                   <div className={parseDiagnostics?.warning_count ? 'parse-quality-item has-warning' : 'parse-quality-item'}>
-                    <AlertTriangle size={14} />
-                    <label>警告</label>
+                    <div className="item-label-group">
+                      <AlertTriangle size={14} />
+                      <label>警告</label>
+                    </div>
                     <span>{formatCount(parseDiagnostics?.warning_count)}</span>
                   </div>
                   <div className="parse-quality-item">
-                    <Database size={14} />
-                    <label>切片</label>
+                    <div className="item-label-group">
+                      <Database size={14} />
+                      <label>切片</label>
+                    </div>
                     <span>{formatCount(parseDiagnostics?.passage_count)}</span>
                   </div>
                   <div className="parse-quality-item">
-                    <Table2 size={14} />
-                    <label>表格</label>
+                    <div className="item-label-group">
+                      <Table2 size={14} />
+                      <label>表格</label>
+                    </div>
                     <span>{formatCount(parseDiagnostics?.table_count)}</span>
                   </div>
                   <div className="parse-quality-item wide">
-                    <Clock3 size={14} />
-                    <label>最后解析</label>
+                    <div className="item-label-group">
+                      <Clock3 size={14} />
+                      <label>最后解析</label>
+                    </div>
                     <span>{formatDateTime(parseDiagnostics?.last_parse_time)}</span>
                   </div>
                 </div>

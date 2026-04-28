@@ -47,6 +47,7 @@ export default function App(): JSX.Element {
 
   // --- View State ---
   const [activeView, setActiveView] = useState<'library' | 'search'>('library');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isInspectorOpen, setIsInspectorOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<(typeof cardTabs)[number]>('Method');
   const [query, setQuery] = useState('');
@@ -55,9 +56,9 @@ export default function App(): JSX.Element {
   // --- Custom Hooks (Logic Logic) ---
   const modals = useModals();
   const { spaces, activeSpace, loadSpaces, switchSpace, createOrUpdateSpace, deleteSpace } = useSpaces(setNotice);
-  const { 
+  const {
     papers, selectedPaper, setSelectedPaper, passages, cards, setCards, agentStatus, setAgentStatus,
-    loadPapers, openPaper, deletePaper: handleDeletePaper, uploadPaper, runDeepAnalysis 
+    loadPapers, openPaper, deletePaper: handleDeletePaper, uploadPaper, runDeepAnalysis
   } = usePapers(activeSpace?.id, setNotice, setIsProcessing);
   const {
     llmConfig,
@@ -70,6 +71,11 @@ export default function App(): JSX.Element {
 
   // --- Derived State ---
   const visibleCards = useMemo(() => cards.filter((card) => card.card_type === activeTab), [cards, activeTab]);
+  const appShellClassName = [
+    'app-shell',
+    !isSidebarOpen ? 'sidebar-collapsed' : '',
+    !isInspectorOpen ? 'inspector-collapsed' : '',
+  ].filter(Boolean).join(' ');
 
   // --- Initial Mount ---
   useEffect(() => {
@@ -169,8 +175,10 @@ export default function App(): JSX.Element {
 
   return (
     <>
-      <main className="app-shell">
+      <main className={appShellClassName}>
         <Sidebar
+          isOpen={isSidebarOpen}
+          onToggle={() => setIsSidebarOpen((open) => !open)}
           spaces={spaces}
           activeSpace={activeSpace}
           onSelectSpace={switchSpace}
@@ -201,7 +209,7 @@ export default function App(): JSX.Element {
 
         <Inspector
           isOpen={isInspectorOpen}
-          onToggle={() => setIsInspectorOpen(!isInspectorOpen)}
+          onToggle={() => setIsInspectorOpen((open) => !open)}
           selectedPaper={selectedPaper}
           activeSpace={activeSpace}
           agentStatus={agentStatus}
@@ -238,11 +246,11 @@ export default function App(): JSX.Element {
 
       <LoadingOverlay isVisible={isProcessing} message={notice?.message || ''} />
 
-      <Toast 
-        message={notice?.message || ''} 
+      <Toast
+        message={notice?.message || ''}
         type={notice?.type || 'success'}
-        isVisible={!!notice && !isProcessing} 
-        onClose={() => setNotice(null)} 
+        isVisible={!!notice && !isProcessing}
+        onClose={() => setNotice(null)}
       />
     </>
   );

@@ -1,5 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, Clock3, Cpu, Database, Edit2, FileText, Gauge, Plus, Server, Table2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  Clock3,
+  Cpu,
+  Database,
+  Edit2,
+  FileText,
+  Gauge,
+  PanelRightClose,
+  PanelRightOpen,
+  Plus,
+  Server,
+  Table2,
+} from 'lucide-react';
 import type { Paper, KnowledgeCard, AgentStatus, Space } from '../../types';
 import { api } from '../../api';
 import { KnowledgeCardFancy } from '../ui/KnowledgeCardFancy';
@@ -82,6 +95,8 @@ export const Inspector: React.FC<InspectorProps> = ({
   const [sourcePageById, setSourcePageById] = useState<Record<string, number>>({});
   const parseDiagnostics = selectedPaper?.parse_diagnostics;
   const selectedPaperId = selectedPaper?.id;
+  const ToggleIcon = isOpen ? PanelRightClose : PanelRightOpen;
+  const toggleLabel = isOpen ? '收起详情栏' : '展开详情栏';
 
   useEffect(() => {
     if (!selectedPaperId) {
@@ -118,8 +133,15 @@ export const Inspector: React.FC<InspectorProps> = ({
 
   return (
     <aside className={isOpen ? 'inspector' : 'inspector collapsed'}>
-      <button className="inspector-toggle" onClick={onToggle}>
-        {isOpen ? '→' : '←'}
+      <button
+        type="button"
+        className="inspector-toggle"
+        onClick={onToggle}
+        title={toggleLabel}
+        aria-label={toggleLabel}
+        aria-expanded={isOpen}
+      >
+        <ToggleIcon size={15} aria-hidden="true" />
       </button>
       {isOpen && (
         <div className="inspector-content">

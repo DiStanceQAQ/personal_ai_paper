@@ -6,10 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import api_sidecar
+import paper_engine.sidecar.api as api_sidecar
 import pytest
 import uvicorn
-from api_sidecar import ServerSettings, parse_args
+from paper_engine.sidecar.api import ServerSettings, parse_args
 
 
 def test_parse_args_uses_defaults() -> None:
@@ -43,7 +43,7 @@ def test_main_sets_data_dir_before_importing_app(
     calls: list[Any] = []
 
     def fake_import_module(name: str) -> SimpleNamespace:
-        assert name == "main"
+        assert name == "paper_engine.api.app"
         calls.append(os.environ.get("PAPER_ENGINE_DATA_DIR"))
         return SimpleNamespace(app=fake_app)
 

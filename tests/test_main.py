@@ -3,8 +3,8 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-import main
-from main import app
+import paper_engine.api.app as app_module
+from paper_engine.api.app import app
 
 
 @pytest.mark.asyncio
@@ -52,7 +52,7 @@ def test_fastapi_startup_trace_is_quiet_by_default(
 ) -> None:
     monkeypatch.delenv("PAPER_ENGINE_STARTUP_TRACE", raising=False)
 
-    main.startup_trace("lifespan_start")
+    app_module.startup_trace("lifespan_start")
 
     captured = capsys.readouterr()
     assert captured.err == ""
@@ -64,7 +64,7 @@ def test_fastapi_startup_trace_writes_structured_timing(
 ) -> None:
     monkeypatch.setenv("PAPER_ENGINE_STARTUP_TRACE", "1")
 
-    main.startup_trace("database_ready", init_db_ms=12)
+    app_module.startup_trace("database_ready", init_db_ms=12)
 
     captured = capsys.readouterr()
     assert "[paper-engine startup] fastapi event=database_ready" in captured.err

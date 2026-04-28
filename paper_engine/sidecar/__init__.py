@@ -1,0 +1,1 @@
+"""Packaged sidecar entry points."""

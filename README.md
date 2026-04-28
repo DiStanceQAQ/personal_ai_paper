@@ -15,7 +15,7 @@
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,pdf-advanced]"
 
 npm install
 npm --prefix frontend install
@@ -31,7 +31,7 @@ npm install
 
 ## PDF 解析后端
 
-默认安装包含 PyMuPDF 和 PyMuPDF4LLM，适合本地解析带原生文本的论文 PDF。需要本地高级版面解析时安装：
+仓库默认安装和 `npm run tauri dev/build` 启动前预处理都会确保 Docling 可用，因此首次打开设置页时不应该再提示缺少本地高级解析依赖。单独补装时可执行：
 
 ```bash
 pip install -e ".[pdf-advanced]"
@@ -68,15 +68,14 @@ http://127.0.0.1:8000/docs
 
 ## 启动 Tauri 桌面开发版
 
-桌面端会自动启动 React/Vite 前端，并通过 Tauri sidecar 启动 FastAPI 后端。首次运行桌面端前需要先构建 sidecar：
+桌面端会自动启动 React/Vite 前端，并在启动前依次检查 Docling 依赖、嵌入模型和 API sidecar：
 
 ```bash
 source .venv/bin/activate
-make build-sidecars
 make tauri-dev
 ```
 
-如果看到类似 `Unable to resolve API sidecar` 的错误，通常是还没有执行 `make build-sidecars`，或当前平台的 sidecar 二进制文件不存在。
+如果看到类似 `Unable to resolve API sidecar` 的错误，通常说明 sidecar 预处理失败，或当前平台的构建依赖（如 Python/Rust）不完整。
 
 ## 前端开发
 

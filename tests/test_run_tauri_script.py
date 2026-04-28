@@ -29,6 +29,10 @@ def test_tauri_dev_dry_run_builds_api_sidecar_before_launch() -> None:
     dry_run = json.loads(result.stdout)
     expected_python = str(Path(".venv/bin/python")) if Path(".venv/bin/python").exists() else "python"
 
+    assert dry_run["pdfAdvancedInstall"] == {
+        "command": expected_python,
+        "args": ["scripts/ensure_pdf_advanced.py", "--if-missing"],
+    }
     assert dry_run["modelDownload"] == {
         "command": expected_python,
         "args": ["scripts/download_embedding_model.py", "--if-missing"],

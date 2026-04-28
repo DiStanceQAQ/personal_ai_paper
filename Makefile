@@ -1,7 +1,7 @@
 .PHONY: dev test typecheck install check frontend-install frontend-dev frontend-build tauri-dev build-sidecars tauri-build package-macos
 
 install:
-	pip install -e ".[dev]"
+	pip install -e ".[dev,pdf-advanced]"
 
 dev:
 	uvicorn paper_engine.api.app:app --reload --host 127.0.0.1 --port 8000

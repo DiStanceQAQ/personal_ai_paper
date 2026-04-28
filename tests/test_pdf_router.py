@@ -384,6 +384,7 @@ def test_docling_unavailable_on_scanned_pdf_uses_llamaparse_then_legacy(
         "router_attempt:docling",
         "router_unavailable:docling:is_available returned false",
         "router_attempt:legacy-pymupdf",
+        "router_degraded:legacy-pymupdf:advanced_parser_unavailable_for_layout_pdf",
         "router_selected:legacy-pymupdf",
     ]
 
@@ -486,8 +487,55 @@ def test_all_preferred_backends_fail_then_legacy_fallback_works(tmp_path: Path) 
         "router_attempt:llamaparse",
         "router_unavailable:llamaparse:llamaparse backend unavailable: missing dependency",
         "router_attempt:legacy-pymupdf",
+        "router_degraded:legacy-pymupdf:advanced_parser_unavailable_for_layout_pdf",
         "router_selected:legacy-pymupdf",
     ]
+
+
+def test_layout_pdf_legacy_fallback_is_marked_degraded(tmp_path: Path) -> None:
+    router_module = _router_module()
+    docling = FakeBackend("docling", available=False, extraction_method="layout_model")
+    pymupdf = FakeBackend("pymupdf4llm", action="unavailable")
+    legacy = FakeBackend("legacy-pymupdf", extraction_method="legacy")
+
+    router = router_module.PdfBackendRouter(
+        **_backends(
+            pymupdf=pymupdf,
+            docling=docling,
+            llamaparse=None,
+            legacy=legacy,
+        )
+    )
+    document = router.parse_pdf(
+        tmp_path / "table-heavy.pdf",
+        "paper-1",
+        "space-1",
+        _quality(needs_layout_model=True, estimated_table_pages=1),
+    )
+
+    assert document.backend == "legacy-pymupdf"
+    assert "router_degraded:legacy-pymupdf:advanced_parser_unavailable_for_layout_pdf" in (
+        document.quality.warnings
+    )
+
+
+def test_clean_digital_pdf_can_fallback_to_legacy_without_degraded_warning(
+    tmp_path: Path,
+) -> None:
+    router_module = _router_module()
+    pymupdf = FakeBackend("pymupdf4llm", action="unavailable")
+    legacy = FakeBackend("legacy-pymupdf", extraction_method="legacy")
+
+    router = router_module.PdfBackendRouter(
+        **_backends(pymupdf=pymupdf, docling=None, llamaparse=None, legacy=legacy)
+    )
+    document = router.parse_pdf(tmp_path / "clean.pdf", "paper-1", "space-1", _quality())
+
+    assert document.backend == "legacy-pymupdf"
+    assert not any(
+        warning.startswith("router_degraded:legacy-pymupdf")
+        for warning in document.quality.warnings
+    )
 
 
 def test_grobid_healthy_client_merges_metadata_and_references(tmp_path: Path) -> None:

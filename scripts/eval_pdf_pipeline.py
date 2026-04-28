@@ -38,6 +38,7 @@ PASSING_THRESHOLDS = {
     "stable_source_ratio": 0.95,
     "max_token_violation_count": 0,
     "reference_filter_precision": 0.90,
+    "table_isolation": 0.90,
 }
 _SPACE_ID = "eval-space"
 
@@ -290,6 +291,8 @@ def _threshold_failures(metrics: dict[str, float | int]) -> list[str]:
         < PASSING_THRESHOLDS["reference_filter_precision"]
     ):
         failures.append("reference_filter_precision")
+    if metrics["table_isolation"] < PASSING_THRESHOLDS["table_isolation"]:
+        failures.append("table_isolation")
     return failures
 
 

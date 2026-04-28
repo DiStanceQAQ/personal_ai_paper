@@ -10,8 +10,10 @@ import pymupdf
 import pytest
 
 from pdf_backend_base import ParserBackendError
-from pdf_backend_legacy import LegacyPyMuPDFBackend
+from pdf_backend_legacy import LegacyPyMuPDFBackend, _normalize_table_cell
+from pdf_chunker import chunk_parse_document
 from pdf_models import ParseDocument, PdfQualityReport
+from tests.fixtures.pdf_factory import table_pdf
 
 
 def _create_simple_pdf(path: Path) -> None:
@@ -92,6 +94,55 @@ def test_backend_exposes_legacy_passage_dicts(tmp_path: Path) -> None:
     assert passages[0]["space_id"] == "space-1"
     assert passages[0]["section"] == "abstract"
     assert passages[0]["passage_type"] == "abstract"
+
+
+def test_parse_table_pdf_extracts_table_and_avoids_duplicate_body_passage(
+    tmp_path: Path,
+) -> None:
+    pdf_path = table_pdf(tmp_path / "table.pdf")
+    quality = PdfQualityReport(
+        page_count=1,
+        native_text_pages=1,
+        estimated_table_pages=1,
+        needs_layout_model=True,
+    )
+
+    document = LegacyPyMuPDFBackend().parse(pdf_path, "paper-1", "space-1", quality)
+
+    assert document.tables
+    table = document.tables[0]
+    assert table.cells == [
+        ["Metric", "Baseline", "Proposed"],
+        ["Accuracy", "81.2", "89.7"],
+        ["Latency", "240 ms", "180 ms"],
+        ["Coverage", "72%", "91%"],
+    ]
+    assert any(
+        element.id == table.element_id and element.element_type == "table"
+        for element in document.elements
+    )
+
+    passages = chunk_parse_document(document)
+    table_passages = [
+        passage for passage in passages if passage.metadata.get("table_id") == table.id
+    ]
+    assert table_passages
+    assert all(
+        term in table_passages[0].original_text
+        for term in ("Metric", "Accuracy", "Latency", "Coverage")
+    )
+    assert not any(
+        "Accuracy" in passage.original_text and not passage.metadata.get("table_id")
+        for passage in passages
+    )
+
+
+def test_normalize_table_cell_repairs_split_decimal_artifact() -> None:
+    assert _normalize_table_cell("812 .") == "81.2"
+    assert _normalize_table_cell("897 .") == "89.7"
+    assert _normalize_table_cell("240ms") == "240 ms"
+    assert _normalize_table_cell("240 ms") == "240 ms"
+    assert _normalize_table_cell("72%") == "72%"
 
 
 def test_backend_invalid_pdf_raises_parser_backend_error(tmp_path: Path) -> None:

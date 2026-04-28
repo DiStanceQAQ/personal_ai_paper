@@ -13,11 +13,18 @@ layout-aware parsing.
 1. If `app_state.pdf_forced_backend` is configured, that backend is tried first.
    Supported values are `pymupdf4llm`, `docling`, `llamaparse`, `legacy`, and
    `legacy-pymupdf`.
-2. For image-only, table-heavy, or multi-column PDFs, the default local order is
-   Docling, then configured LlamaParse, then legacy PyMuPDF.
-3. For normal digital PDFs, the default local order is PyMuPDF4LLM, then
+2. For image-only PDFs, the default local order is Docling, then configured
+   LlamaParse, then legacy PyMuPDF.
+3. For table-heavy or multi-column PDFs with native text, the default local
+   order is Docling, then configured LlamaParse, then PyMuPDF4LLM, then legacy
+   PyMuPDF.
+4. For normal digital PDFs, the default local order is PyMuPDF4LLM, then
    configured LlamaParse, then legacy PyMuPDF.
-4. GROBID is optional post-parse enrichment. When `app_state.grobid_base_url` is
+5. If legacy PyMuPDF is selected for OCR- or layout-sensitive PDFs, the router
+   records `router_degraded:legacy-pymupdf:advanced_parser_unavailable_for_layout_pdf`
+   so callers can show a quality warning instead of treating the fallback as a
+   normal high-fidelity parse.
+6. GROBID is optional post-parse enrichment. When `app_state.grobid_base_url` is
    configured and the service is alive, GROBID metadata and references are
    merged into the parse metadata after the selected parser succeeds.
 

@@ -103,6 +103,11 @@ class PdfBackendRouter:
                 continue
 
             else:
+                if _is_degraded_legacy_selection(name, quality):
+                    quality.warnings.append(
+                        "router_degraded:legacy-pymupdf:"
+                        "advanced_parser_unavailable_for_layout_pdf"
+                    )
                 quality.warnings.append(f"router_selected:{name}")
                 return document.model_copy(update={"quality": quality})
             finally:
@@ -320,6 +325,17 @@ def _warning_detail(exc: BaseException) -> str:
     if len(detail) <= WARNING_DETAIL_LIMIT:
         return detail
     return f"{detail[: WARNING_DETAIL_LIMIT - 3]}..."
+
+
+def _is_degraded_legacy_selection(name: str, quality: PdfQualityReport) -> bool:
+    if name != "legacy-pymupdf":
+        return False
+    return (
+        quality.needs_ocr
+        or quality.needs_layout_model
+        or quality.estimated_table_pages > 0
+        or quality.estimated_two_column_pages > 0
+    )
 
 
 def _json_safe_dataclass(value: Any) -> Any:

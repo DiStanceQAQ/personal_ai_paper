@@ -100,3 +100,5 @@ def test_eval_report_covers_parser_routing_and_structure_diagnostics(
     assert fixtures["references"]["reference_passage_count"] == 0
     assert fixtures["long_section"]["max_token_count"] <= report["config"]["max_tokens"]
     assert report["metrics"]["table_isolation"] == fixtures["table"]["table_isolation"]
+    assert report["thresholds"]["table_isolation"] == 0.90
+    assert report["metrics"]["table_isolation"] >= 0.90

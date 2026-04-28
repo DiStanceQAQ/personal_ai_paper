@@ -2,8 +2,10 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import os
 from pathlib import Path
 import sys
+import threading
 import time
 
 from fastapi import FastAPI
@@ -18,6 +20,9 @@ from paper_engine.api.routes.cards import router as cards_router
 from paper_engine.api.routes.papers import router as papers_router
 from paper_engine.api.routes.search import router as search_router
 from paper_engine.api.routes.spaces import router as spaces_router
+from paper_engine.pdf.jobs import recover_stale_parse_runs
+from paper_engine.pdf.worker import ParseWorker, run_worker_loop
+from paper_engine.storage.database import get_connection
 
 APP_IMPORTED_AT = time.perf_counter()
 _tracer = StartupTracer("fastapi")
@@ -34,8 +39,43 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "database_ready",
         init_db_ms=f"{(time.perf_counter() - init_db_started_at) * 1000:.1f}",
     )
+    conn = get_connection()
+    try:
+        recovered = recover_stale_parse_runs(
+            conn,
+            stale_after_seconds=int(os.getenv("PAPER_ENGINE_PARSE_STALE_SECONDS", "600")),
+            max_attempts=int(os.getenv("PAPER_ENGINE_PARSE_MAX_ATTEMPTS", "3")),
+        )
+        startup_trace("parse_runs_recovered", count=str(recovered))
+    finally:
+        conn.close()
+
+    stop_event = threading.Event()
+    worker_thread: threading.Thread | None = None
+    if os.getenv("PAPER_ENGINE_PARSE_WORKER_ENABLED", "1") == "1":
+        worker = ParseWorker(worker_id=f"api-worker-{os.getpid()}")
+        worker_thread = threading.Thread(
+            target=run_worker_loop,
+            kwargs={
+                "worker": worker,
+                "poll_interval_seconds": float(
+                    os.getenv("PAPER_ENGINE_PARSE_POLL_SECONDS", "2")
+                ),
+                "stop": stop_event.is_set,
+            },
+            daemon=True,
+        )
+        worker_thread.start()
+        startup_trace("parse_worker_started", worker_id=worker.worker_id)
+
     startup_trace("lifespan_ready")
-    yield
+    try:
+        yield
+    finally:
+        stop_event.set()
+        if worker_thread is not None:
+            worker_thread.join(timeout=5)
+            startup_trace("parse_worker_stopped")
 
 
 app = FastAPI(

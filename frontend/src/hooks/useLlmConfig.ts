@@ -7,6 +7,7 @@ export function useLlmConfig(setNotice: (n: { message: string, type: 'success' |
     llm_provider: 'openai',
     llm_base_url: 'https://api.openai.com/v1',
     llm_model: 'gpt-4o',
+    llm_timeout_seconds: 180,
     llm_api_key: '',
     has_api_key: false,
     pdf_parser_backend: 'docling',

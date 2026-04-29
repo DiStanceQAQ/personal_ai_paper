@@ -132,6 +132,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
 
           <div className="form-group">
+            <label>请求超时（秒）</label>
+            <input
+              type="number"
+              min={5}
+              max={600}
+              step={5}
+              value={config.llm_timeout_seconds}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  llm_timeout_seconds: Number(e.target.value) || 180,
+                })
+              }
+            />
+          </div>
+
+          <div className="form-group">
             <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span>API Key</span>
               {config.has_api_key && <span className="secure-tag">密钥已就绪</span>}

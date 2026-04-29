@@ -131,6 +131,10 @@ async def test_call_llm_schema_uses_json_mode_when_provider_lacks_schema_support
     assert result == {"answer": "local"}
     assert len(calls) == 1
     assert calls[0]["json"]["response_format"] == {"type": "json_object"}
+    user_prompt = calls[0]["json"]["messages"][1]["content"]
+    assert "JSON mode schema contract" in user_prompt
+    assert "top-level JSON value must be an object" in user_prompt
+    assert '"required":["answer"]' in user_prompt
 
 
 @pytest.mark.asyncio
@@ -255,3 +259,110 @@ async def test_call_llm_schema_raises_after_retryable_failures_are_exhausted(
             "answer_schema",
             SIMPLE_SCHEMA,
         )
+
+
+@pytest.mark.asyncio
+async def test_call_llm_schema_wraps_timeout_with_actionable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_config() -> dict[str, str]:
+        return {
+            "api_key": "test-key",
+            "base_url": "https://api.deepseek.com",
+            "model": "deepseek-v4-flash",
+            "timeout_seconds": "7",
+        }
+
+    class TimeoutAsyncClient:
+        def __init__(self, *, timeout: httpx.Timeout) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "TimeoutAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc_info: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            json: dict[str, Any],
+        ) -> httpx.Response:
+            request = httpx.Request("POST", url)
+            raise httpx.ReadTimeout("read timed out", request=request)
+
+    monkeypatch.setattr(llm_client, "get_llm_config", fake_config)
+    monkeypatch.setattr(llm_client.httpx, "AsyncClient", TimeoutAsyncClient)
+
+    with pytest.raises(llm_client.LLMRequestError) as exc_info:
+        await llm_client.call_llm_schema(
+            "system",
+            "user",
+            "answer_schema",
+            SIMPLE_SCHEMA,
+        )
+
+    message = str(exc_info.value)
+    assert "LLM request timed out after 7s" in message
+    assert "after 3 attempt(s)" in message
+    assert "base_url=https://api.deepseek.com" in message
+    assert "model=deepseek-v4-flash" in message
+
+
+@pytest.mark.asyncio
+async def test_call_llm_schema_retries_connect_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_config() -> dict[str, str]:
+        return {
+            "api_key": "test-key",
+            "base_url": "https://api.deepseek.com",
+            "model": "deepseek-v4-flash",
+            "timeout_seconds": "60",
+        }
+
+    attempts = 0
+
+    class FlakyAsyncClient:
+        def __init__(self, *, timeout: httpx.Timeout) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "FlakyAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc_info: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            json: dict[str, Any],
+        ) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            request = httpx.Request("POST", url)
+            if attempts == 1:
+                raise httpx.ConnectTimeout("connect timed out", request=request)
+            return make_chat_response('{"answer": "ok"}')
+
+    monkeypatch.setattr(llm_client, "get_llm_config", fake_config)
+    monkeypatch.setattr(llm_client.httpx, "AsyncClient", FlakyAsyncClient)
+    monkeypatch.setattr(llm_client.asyncio, "sleep", lambda delay: _noop_sleep())
+
+    result = await llm_client.call_llm_schema(
+        "system",
+        "user",
+        "answer_schema",
+        SIMPLE_SCHEMA,
+    )
+
+    assert result == {"answer": "ok"}
+    assert attempts == 2
+
+
+async def _noop_sleep() -> None:
+    return None

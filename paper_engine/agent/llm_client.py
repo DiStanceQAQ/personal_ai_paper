@@ -1,6 +1,7 @@
 """Client for calling LLM APIs (OpenAI compatible)."""
 
 from collections.abc import Mapping
+import asyncio
 import json
 import re
 from typing import Any, Literal, overload, cast
@@ -8,10 +9,19 @@ import httpx
 from paper_engine.storage.database import get_connection
 
 STRUCTURED_OUTPUT_MAX_ATTEMPTS = 3
+LLM_REQUEST_MAX_ATTEMPTS = 3
+LLM_REQUEST_RETRY_BASE_DELAY_SECONDS = 0.75
+DEFAULT_LLM_TIMEOUT_SECONDS = 180.0
+MIN_LLM_TIMEOUT_SECONDS = 5.0
+MAX_LLM_TIMEOUT_SECONDS = 600.0
 
 
 class LLMStructuredOutputError(ValueError):
     """Raised when an LLM response cannot satisfy the requested schema."""
+
+
+class LLMRequestError(RuntimeError):
+    """Raised when the configured LLM service cannot be reached reliably."""
 
 
 class _RetryableStructuredOutputError(LLMStructuredOutputError):
@@ -28,6 +38,10 @@ async def get_llm_config() -> dict[str, str]:
             "api_key": config.get("llm_api_key", ""),
             "base_url": config.get("llm_base_url", "https://api.openai.com/v1"),
             "model": config.get("llm_model", "gpt-4o"),
+            "timeout_seconds": config.get(
+                "llm_timeout_seconds",
+                f"{DEFAULT_LLM_TIMEOUT_SECONDS:g}",
+            ),
         }
     finally:
         conn.close()
@@ -96,16 +110,24 @@ async def call_llm_schema(
     last_error: Exception | None = None
 
     for _attempt in range(STRUCTURED_OUTPUT_MAX_ATTEMPTS):
+        response_format = (
+            _schema_response_format(schema_name, schema)
+            if use_json_schema
+            else {"type": "json_object"}
+        )
+        schema_user_prompt = (
+            user_prompt
+            if use_json_schema
+            else _json_mode_schema_prompt(user_prompt, schema_name, schema)
+        )
         payload = {
             "model": config["model"],
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": schema_user_prompt},
             ],
             "temperature": 0.1,
-            "response_format": _schema_response_format(schema_name, schema)
-            if use_json_schema
-            else {"type": "json_object"},
+            "response_format": response_format,
         }
 
         try:
@@ -151,17 +173,103 @@ async def _post_chat_completion(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(
-            f"{config['base_url'].rstrip('/')}/chat/completions",
-            headers=headers,
-            json=payload,
+    timeout_seconds = _configured_timeout_seconds(config)
+    connect_timeout_seconds = min(30.0, timeout_seconds)
+    timeout = httpx.Timeout(timeout_seconds, connect=connect_timeout_seconds)
+    endpoint = f"{config['base_url'].rstrip('/')}/chat/completions"
+    last_error: httpx.TimeoutException | httpx.RequestError | None = None
+    for attempt in range(LLM_REQUEST_MAX_ATTEMPTS):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    endpoint,
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+                data = response.json()
+                if not isinstance(data, dict):
+                    raise ValueError("LLM response envelope is not a JSON object.")
+                return cast(dict[str, Any], data)
+        except httpx.TimeoutException as exc:
+            last_error = exc
+            if not _is_retryable_request_error(exc) or attempt == LLM_REQUEST_MAX_ATTEMPTS - 1:
+                raise _llm_timeout_error(
+                    config,
+                    exc,
+                    timeout_seconds=timeout_seconds,
+                    connect_timeout_seconds=connect_timeout_seconds,
+                    attempts=attempt + 1,
+                ) from exc
+        except httpx.RequestError as exc:
+            last_error = exc
+            if not _is_retryable_request_error(exc) or attempt == LLM_REQUEST_MAX_ATTEMPTS - 1:
+                raise LLMRequestError(
+                    "LLM request failed "
+                    f"after {attempt + 1} attempt(s) "
+                    f"(base_url={config['base_url']}, model={config['model']}): {exc}"
+                ) from exc
+
+        await asyncio.sleep(
+            LLM_REQUEST_RETRY_BASE_DELAY_SECONDS * (2**attempt)
         )
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, dict):
-            raise ValueError("LLM response envelope is not a JSON object.")
-        return cast(dict[str, Any], data)
+
+    raise LLMRequestError(
+        "LLM request failed unexpectedly "
+        f"(base_url={config['base_url']}, model={config['model']}): {last_error}"
+    )
+
+
+def _configured_timeout_seconds(config: Mapping[str, str]) -> float:
+    raw_value = config.get("timeout_seconds", f"{DEFAULT_LLM_TIMEOUT_SECONDS:g}")
+    try:
+        timeout = float(raw_value)
+    except (TypeError, ValueError):
+        timeout = DEFAULT_LLM_TIMEOUT_SECONDS
+    return min(MAX_LLM_TIMEOUT_SECONDS, max(MIN_LLM_TIMEOUT_SECONDS, timeout))
+
+
+def _is_retryable_request_error(exc: httpx.RequestError) -> bool:
+    return isinstance(
+        exc,
+        (
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+            httpx.ReadTimeout,
+            httpx.PoolTimeout,
+            httpx.RemoteProtocolError,
+        ),
+    )
+
+
+def _llm_timeout_error(
+    config: Mapping[str, str],
+    exc: httpx.TimeoutException,
+    *,
+    timeout_seconds: float,
+    connect_timeout_seconds: float,
+    attempts: int,
+) -> LLMRequestError:
+    if isinstance(exc, httpx.ConnectTimeout):
+        detail = (
+            "LLM connection timed out "
+            f"after {connect_timeout_seconds:g}s connect timeout"
+        )
+        hint = (
+            "Check network/proxy/DNS or the LLM service status; increasing "
+            "llm_timeout_seconds may not help if connect timeout is the bottleneck."
+        )
+    else:
+        detail = f"LLM request timed out after {timeout_seconds:g}s"
+        hint = (
+            "Check the LLM service, model name, network, or increase "
+            "llm_timeout_seconds in settings."
+        )
+    return LLMRequestError(
+        f"{detail} after {attempts} attempt(s) "
+        f"(base_url={config['base_url']}, model={config['model']}). "
+        f"{hint}"
+    )
 
 
 def _schema_response_format(
@@ -175,6 +283,27 @@ def _schema_response_format(
             "schema": schema,
         },
     }
+
+
+def _json_mode_schema_prompt(
+    user_prompt: str,
+    schema_name: str,
+    schema: Mapping[str, Any],
+) -> str:
+    """Append an explicit schema contract for providers with JSON mode only."""
+    compact_schema = json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "\n".join(
+        [
+            user_prompt,
+            "",
+            "JSON mode schema contract:",
+            f"Return exactly one JSON object matching the {schema_name} JSON Schema.",
+            "The top-level JSON value must be an object, not an array or string.",
+            "Do not use Markdown fences or explanatory text.",
+            "Required JSON Schema:",
+            compact_schema,
+        ]
+    )
 
 
 def _provider_supports_json_schema(

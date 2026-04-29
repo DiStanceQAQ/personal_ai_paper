@@ -1,8 +1,8 @@
 """API routes for internal Agent and LLM configuration."""
 
 from typing import Any, Literal
-from fastapi import APIRouter, Body, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Body
+from pydantic import BaseModel, Field
 from paper_engine.storage.database import get_connection
 from paper_engine.pdf.settings import (
     ParserSettingsUpdate,
@@ -19,19 +19,32 @@ LEGACY_AGENT_ACCESS_KEY = "agent_enabled"
 MCP_SERVER_NAME = "paper-knowledge-engine"
 MCP_TRANSPORT = "stdio"
 DEFAULT_LLAMAPARSE_BASE_URL = "https://api.cloud.llamaindex.ai"
-NO_PASSAGES_FOUND_MESSAGE = "No passages found. Please parse PDF first."
+DEFAULT_LLM_TIMEOUT_SECONDS = 180
 
 
 class LLMConfig(BaseModel):
     llm_provider: str = "openai"
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o"
+    llm_timeout_seconds: int = Field(
+        default=DEFAULT_LLM_TIMEOUT_SECONDS,
+        ge=5,
+        le=600,
+    )
     llm_api_key: str | None = None
     llamaparse_base_url: str = DEFAULT_LLAMAPARSE_BASE_URL
     llamaparse_api_key: str | None = None
     pdf_parser_backend: Literal["mineru", "docling"] | None = None
     mineru_base_url: str | None = None
     mineru_api_key: str | None = None
+
+
+def _llm_timeout_from_config(config: dict[str, str]) -> int:
+    try:
+        timeout = int(config.get("llm_timeout_seconds", DEFAULT_LLM_TIMEOUT_SECONDS))
+    except (TypeError, ValueError):
+        timeout = DEFAULT_LLM_TIMEOUT_SECONDS
+    return min(600, max(5, timeout))
 
 
 def _get_agent_access_value() -> str:
@@ -81,20 +94,6 @@ def _get_active_space() -> dict[str, Any] | None:
         conn.close()
 
 
-def _get_active_space_id() -> str:
-    active_space = _get_active_space()
-    if active_space is None or active_space["status"] != "active":
-        raise HTTPException(status_code=400, detail="No active space selected.")
-    return str(active_space["id"])
-
-
-async def analyze_paper_with_llm(paper_id: str, space_id: str) -> dict[str, Any]:
-    """Run LLM analysis without importing the heavy executor during API startup."""
-    from paper_engine.agent.executor import analyze_paper_with_llm as run_analysis
-
-    return await run_analysis(paper_id, space_id)
-
-
 @router.get("/config")
 async def get_agent_config() -> dict[str, Any]:
     """Get the current LLM configuration (excluding full API key)."""
@@ -109,6 +108,7 @@ async def get_agent_config() -> dict[str, Any]:
             "llm_provider": config.get("llm_provider", "openai"),
             "llm_base_url": config.get("llm_base_url", "https://api.openai.com/v1"),
             "llm_model": config.get("llm_model", "gpt-4o"),
+            "llm_timeout_seconds": _llm_timeout_from_config(config),
             "has_api_key": bool(config.get("llm_api_key")),
             "llamaparse_base_url": config.get(
                 "llamaparse_base_url",
@@ -159,35 +159,6 @@ async def test_mineru_config() -> dict[str, str]:
         return {"status": result["status"], "detail": result["detail"]}
     finally:
         conn.close()
-
-@router.post("/analyze/{paper_id}")
-async def run_deep_analysis(paper_id: str) -> dict[str, Any]:
-    """Trigger the internal Agent to analyze a paper using the configured LLM."""
-    active_space_id = _get_active_space_id()
-    conn = get_connection()
-    try:
-        paper = conn.execute(
-            "SELECT space_id FROM papers WHERE id = ? AND space_id = ?",
-            (paper_id, active_space_id),
-        ).fetchone()
-        if not paper:
-            raise HTTPException(status_code=404, detail="Paper not found")
-        
-        space_id = str(paper["space_id"])
-    finally:
-        conn.close()
-
-    result = await analyze_paper_with_llm(paper_id, space_id)
-    if result["status"] == "error":
-        detail = str(result["message"])
-        if detail == NO_PASSAGES_FOUND_MESSAGE:
-            raise HTTPException(
-                status_code=409,
-                detail="PDF parsing has not completed yet. Please wait for parsing to finish.",
-            )
-        raise HTTPException(status_code=500, detail=detail)
-    
-    return result
 
 @router.get("/status")
 async def get_agent_status() -> dict[str, Any]:

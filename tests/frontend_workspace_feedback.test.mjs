@@ -34,3 +34,12 @@ test('AI extraction action uses quiet tool styling instead of dominant animated 
   assert.doesNotMatch(styles, /\.btn-ai-extract svg\s*\{[^}]*animation:/s);
   assert.doesNotMatch(styles, /@keyframes pulse-icon/);
 });
+
+test('library empty state is a dedicated centered panel instead of a grid item', () => {
+  assert.match(workspace, /papers\.length > 0 \? \(/);
+  assert.match(workspace, /className="library-empty-state"/);
+  assert.match(styles, /\.library-empty-state\s*\{[^}]*min-height:\s*220px;/s);
+  assert.match(styles, /\.library-empty-state\s*\{[^}]*display:\s*flex;/s);
+  assert.match(styles, /\.library-empty-state\s*\{[^}]*justify-content:\s*center;/s);
+  assert.match(styles, /\.library-empty-state\s*\{[^}]*border:\s*1px dashed var\(--border\);/s);
+});

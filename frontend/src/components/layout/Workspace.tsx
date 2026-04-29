@@ -110,9 +110,9 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                 </label>
               </div>
 
-              <div className="paper-grid">
-                {papers.length > 0 ? (
-                  papers.map((paper) => (
+              {papers.length > 0 ? (
+                <div className="paper-grid">
+                  {papers.map((paper) => (
                     <PaperCard
                       key={paper.id}
                       paper={paper}
@@ -121,13 +121,13 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                       onDelete={onDeletePaper}
                       parseLabel={parseLabel}
                     />
-                  ))
-                ) : (
-                  <div className="empty-state">
-                    <p>该空间下暂无论文，请先导入。</p>
-                  </div>
-                )}
-              </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="library-empty-state">
+                  <p>该空间下暂无论文，请先导入。</p>
+                </div>
+              )}
             </div>
           ) : (
             <div className="view-container search-view">

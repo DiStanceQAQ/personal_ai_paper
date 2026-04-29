@@ -79,12 +79,16 @@ async def test_lifespan_starts_parse_worker_when_enabled(
         calls.append(kwargs)
 
     monkeypatch.setattr(app_module, "run_worker_loop", fake_run_worker_loop)
+    monkeypatch.setattr(app_module, "run_parse_recovery_loop", fake_run_worker_loop)
     monkeypatch.setenv("PAPER_ENGINE_PARSE_WORKER_ENABLED", "1")
     monkeypatch.setenv("PAPER_ENGINE_PARSE_POLL_SECONDS", "0.01")
+    monkeypatch.setenv("PAPER_ENGINE_PARSE_RECOVERY_POLL_SECONDS", "0.02")
 
     async with app_module.app.router.lifespan_context(app_module.app):
         pass
 
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert calls[0]["poll_interval_seconds"] == 0.01
     assert calls[0]["stop"]() is True
+    assert calls[1]["poll_interval_seconds"] == 0.02
+    assert calls[1]["stop"]() is True

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import traceback
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -37,6 +38,19 @@ class ParserFactory:
 
     mineru: Callable[[dict[str, Any]], PdfParserBackend]
     docling: Callable[[dict[str, Any]], PdfParserBackend]
+
+
+def _format_exception_details(exc: BaseException) -> str:
+    message = str(exc)
+    cause = exc.__cause__
+    if cause is None:
+        return f"{type(exc).__name__}: {message}"
+
+    cause_message = str(cause)
+    return (
+        f"{type(exc).__name__}: {message} | "
+        f"cause={type(cause).__name__}: {cause_message}"
+    )
 
 
 def default_parser_factory(conn: sqlite3.Connection) -> ParserFactory:
@@ -132,13 +146,15 @@ class ParseWorker:
                 )
                 return True
             except Exception as exc:
+                traceback.print_exc()
                 conn.rollback()
+                error_detail = _format_exception_details(exc)
                 fail_parse_run(
                     conn,
                     job.id,
                     paper_id=job.paper_id,
-                    error=str(exc),
-                    warnings=[str(exc)],
+                    error=error_detail,
+                    warnings=[error_detail],
                 )
                 return True
         finally:

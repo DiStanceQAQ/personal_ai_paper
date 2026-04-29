@@ -8,7 +8,6 @@ import { Workspace } from './components/layout/Workspace';
 import { Inspector } from './components/layout/Inspector';
 
 // UI Components
-import { LoadingOverlay } from './components/ui/LoadingOverlay';
 import { Toast } from './components/ui/Toast';
 
 // Modals
@@ -60,7 +59,7 @@ export default function App(): JSX.Element {
   const { spaces, activeSpace, loadSpaces, switchSpace, createOrUpdateSpace, deleteSpace } = useSpaces(setNotice);
   const {
     papers, selectedPaper, setSelectedPaper, passages, cards, setCards, agentStatus, setAgentStatus,
-    loadPapers, openPaper, deletePaper: handleDeletePaper, uploadPaper, runDeepAnalysis
+    loadPapers, openPaper, deletePaper: handleDeletePaper, uploadPaper, runDeepAnalysis, backgroundTasks
   } = usePapers(activeSpace?.id, setNotice, setIsProcessing);
   const {
     llmConfig,
@@ -251,6 +250,7 @@ export default function App(): JSX.Element {
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           visibleCards={visibleCards}
+          analysisTask={selectedPaper ? backgroundTasks[selectedPaper.id] || null : null}
           cardTabs={cardTabs}
           cardLabel={cardLabel}
           parseLabel={parseLabel}
@@ -273,12 +273,10 @@ export default function App(): JSX.Element {
         setNotice={setNotice}
       />
 
-      <LoadingOverlay isVisible={isProcessing} message={notice?.message || ''} />
-
       <Toast
         message={notice?.message || ''}
         type={notice?.type || 'success'}
-        isVisible={!!notice && !isProcessing}
+        isVisible={!!notice}
         onClose={() => setNotice(null)}
       />
     </>

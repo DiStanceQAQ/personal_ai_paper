@@ -13,7 +13,7 @@ import {
   Server,
   Table2,
 } from 'lucide-react';
-import type { Paper, KnowledgeCard, AgentStatus, Space } from '../../types';
+import type { Paper, KnowledgeCard, AgentStatus, PaperBackgroundTask, Space } from '../../types';
 import { api } from '../../api';
 import { KnowledgeCardFancy } from '../ui/KnowledgeCardFancy';
 
@@ -32,6 +32,7 @@ export interface InspectorProps {
   activeTab: string;
   setActiveTab: (tab: any) => void;
   visibleCards: KnowledgeCard[];
+  analysisTask: PaperBackgroundTask | null;
   cardTabs: readonly string[];
   cardLabel: (type: string) => string;
   parseLabel: (status: string) => string;
@@ -86,6 +87,7 @@ export const Inspector: React.FC<InspectorProps> = ({
   activeTab,
   setActiveTab,
   visibleCards,
+  analysisTask,
   cardTabs,
   cardLabel,
   parseLabel,
@@ -95,6 +97,7 @@ export const Inspector: React.FC<InspectorProps> = ({
   const [sourcePageById, setSourcePageById] = useState<Record<string, number>>({});
   const parseDiagnostics = selectedPaper?.parse_diagnostics;
   const selectedPaperId = selectedPaper?.id;
+  const extractBusy = analysisTask?.phase === 'parsing' || analysisTask?.phase === 'analyzing';
   const ToggleIcon = isOpen ? PanelRightClose : PanelRightOpen;
   const toggleLabel = isOpen ? '收起详情栏' : '展开详情栏';
 
@@ -172,11 +175,36 @@ export const Inspector: React.FC<InspectorProps> = ({
               )}
 
               <div className="ai-supercharge">
-                <button className="btn-ai-extract" onClick={onExtract}>
+                <button className="btn-ai-extract" onClick={onExtract} disabled={extractBusy}>
                   <Cpu size={16} />
-                  <span>一键执行 AI 深度解析</span>
+                  <span>
+                    {analysisTask?.phase === 'parsing'
+                      ? '后台解析中'
+                      : analysisTask?.phase === 'analyzing'
+                        ? '后台分析中'
+                        : '一键执行 AI 深度解析'}
+                  </span>
                 </button>
               </div>
+
+              {analysisTask && (
+                <div className={`task-progress-card ${analysisTask.phase}`}>
+                  <div className="task-progress-header">
+                    <span>后台任务</span>
+                    <span>{analysisTask.progress}%</span>
+                  </div>
+                  <div className="task-progress-bar" aria-hidden="true">
+                    <div
+                      className={`task-progress-fill ${analysisTask.phase}`}
+                      style={{ width: `${analysisTask.progress}%` }}
+                    />
+                  </div>
+                  <p className="task-progress-message">{analysisTask.message}</p>
+                  {analysisTask.error_detail && (
+                    <p className="task-progress-error">{analysisTask.error_detail}</p>
+                  )}
+                </div>
+              )}
 
               <div className="inspector-section">
                 <div className="section-title">解析质量</div>

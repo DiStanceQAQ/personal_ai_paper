@@ -139,9 +139,21 @@ export interface ParseRun {
   started_at: string;
   created_at: string;
   completed_at: string | null;
+  last_error: string | null;
   warnings_json: string;
   config_json: string;
   metadata_json: string;
+}
+
+export type PaperTaskPhase = 'parsing' | 'analyzing' | 'completed' | 'failed';
+
+export interface PaperBackgroundTask {
+  paper_id: string;
+  phase: PaperTaskPhase;
+  progress: number;
+  message: string;
+  parse_run_id: string | null;
+  error_detail: string | null;
 }
 
 export interface DocumentElement {

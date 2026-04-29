@@ -20,6 +20,7 @@ LEGACY_AGENT_ACCESS_KEY = "agent_enabled"
 MCP_SERVER_NAME = "paper-knowledge-engine"
 MCP_TRANSPORT = "stdio"
 DEFAULT_LLAMAPARSE_BASE_URL = "https://api.cloud.llamaindex.ai"
+NO_PASSAGES_FOUND_MESSAGE = "No passages found. Please parse PDF first."
 
 
 class LLMConfig(BaseModel):
@@ -159,7 +160,13 @@ async def run_deep_analysis(paper_id: str) -> dict[str, Any]:
 
     result = await analyze_paper_with_llm(paper_id, space_id)
     if result["status"] == "error":
-        raise HTTPException(status_code=500, detail=result["message"])
+        detail = str(result["message"])
+        if detail == NO_PASSAGES_FOUND_MESSAGE:
+            raise HTTPException(
+                status_code=409,
+                detail="PDF parsing has not completed yet. Please wait for parsing to finish.",
+            )
+        raise HTTPException(status_code=500, detail=detail)
     
     return result
 

@@ -244,6 +244,7 @@ async def list_parse_runs(paper_id: str) -> list[dict[str, Any]]:
                 started_at,
                 started_at AS created_at,
                 completed_at,
+                last_error,
                 warnings_json,
                 config_json,
                 metadata_json

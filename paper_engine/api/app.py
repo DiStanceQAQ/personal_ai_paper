@@ -1,6 +1,6 @@
 """Local Paper Knowledge Engine FastAPI application."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 import os
 from pathlib import Path
@@ -29,6 +29,25 @@ _tracer = StartupTracer("fastapi")
 startup_trace = _tracer.trace
 
 
+def run_parse_recovery_loop(
+    *,
+    poll_interval_seconds: float,
+    stop: Callable[[], bool] | None = None,
+) -> None:
+    """Requeue or fail stale parse runs while the API stays online."""
+    while stop is None or not stop():
+        conn = get_connection()
+        try:
+            recover_stale_parse_runs(
+                conn,
+                stale_after_seconds=int(os.getenv("PAPER_ENGINE_PARSE_STALE_SECONDS", "600")),
+                max_attempts=int(os.getenv("PAPER_ENGINE_PARSE_MAX_ATTEMPTS", "3")),
+            )
+        finally:
+            conn.close()
+        time.sleep(poll_interval_seconds)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Initialize the database on startup."""
@@ -52,6 +71,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     stop_event = threading.Event()
     worker_thread: threading.Thread | None = None
+    recovery_thread: threading.Thread | None = None
     if os.getenv("PAPER_ENGINE_PARSE_WORKER_ENABLED", "1") == "1":
         worker = ParseWorker(worker_id=f"api-worker-{os.getpid()}")
         worker_thread = threading.Thread(
@@ -67,6 +87,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         worker_thread.start()
         startup_trace("parse_worker_started", worker_id=worker.worker_id)
+        recovery_thread = threading.Thread(
+            target=run_parse_recovery_loop,
+            kwargs={
+                "poll_interval_seconds": float(
+                    os.getenv("PAPER_ENGINE_PARSE_RECOVERY_POLL_SECONDS", "15")
+                ),
+                "stop": stop_event.is_set,
+            },
+            daemon=True,
+        )
+        recovery_thread.start()
+        startup_trace("parse_recovery_started")
 
     startup_trace("lifespan_ready")
     try:
@@ -76,6 +108,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if worker_thread is not None:
             worker_thread.join(timeout=5)
             startup_trace("parse_worker_stopped")
+        if recovery_thread is not None:
+            recovery_thread.join(timeout=5)
+            startup_trace("parse_recovery_stopped")
 
 
 app = FastAPI(

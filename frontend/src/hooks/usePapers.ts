@@ -3,12 +3,16 @@ import { api } from '../api';
 import type {
   AgentStatus,
   KnowledgeCard,
+  PaperBackgroundTask,
   Paper,
   PaperParseDiagnostics,
   ParsePaperResponse,
   ParseRun,
   Passage,
 } from '../types';
+
+const PARSE_POLL_INTERVAL_MS = 1000;
+const BACKGROUND_TASK_POLL_MS = 2000;
 
 function parseWarnings(warningsJson: string | undefined): string[] {
   if (!warningsJson) return [];
@@ -92,6 +96,14 @@ async function loadPaperParseSummary(paper: Paper): Promise<PaperParseDiagnostic
   }
 }
 
+function findLatestActiveParseRun(runs: ParseRun[]): ParseRun | undefined {
+  return runs.find((run) => run.status === 'queued' || run.status === 'running');
+}
+
+function parseRunFailureMessage(run: ParseRun): string {
+  return run.last_error || 'PDF 解析失败，请检查解析配置或稍后重试。';
+}
+
 export function usePapers(
   activeSpaceId: string | undefined,
   setNotice: (n: { message: string, type: 'success' | 'error' } | null) => void,
@@ -102,8 +114,17 @@ export function usePapers(
   const [passages, setPassages] = useState<Passage[]>([]);
   const [cards, setCards] = useState<KnowledgeCard[]>([]);
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
+  const [backgroundTasks, setBackgroundTasks] = useState<Record<string, PaperBackgroundTask>>({});
   
   const pollingRef = useRef<number | null>(null);
+  const backgroundPollingRef = useRef<number | null>(null);
+  const backgroundTasksRef = useRef<Record<string, PaperBackgroundTask>>({});
+  const monitorInFlightRef = useRef(false);
+  const analysisInFlightRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    backgroundTasksRef.current = backgroundTasks;
+  }, [backgroundTasks]);
 
   useEffect(() => {
     setSelectedPaper(null);
@@ -148,9 +169,100 @@ export function usePapers(
     }
   }, [activeSpaceId]);
 
+  const setBackgroundTask = useCallback(
+    (paperId: string, update: Omit<PaperBackgroundTask, 'paper_id'>) => {
+      setBackgroundTasks((current) => ({
+        ...current,
+        [paperId]: {
+          paper_id: paperId,
+          ...update,
+        },
+      }));
+    },
+    [],
+  );
+
+  const refreshPaperDetails = useCallback(
+    async (
+      paperId: string,
+      parseResult?: ParsePaperResponse,
+    ) => {
+      const [updatedPaper, paperCards, paperPassages, parseRuns, paperTables] = await Promise.all([
+        api.getPaper(paperId),
+        api.listCards(paperId),
+        api.listPassages(paperId),
+        api.listParseRuns(paperId),
+        api.listDocumentTables(paperId),
+      ]);
+      const diagnostics = mergeDiagnostics(
+        diagnosticsFromRun(parseRuns[0], {
+          passageCount: paperPassages.length,
+          tableCount: paperTables.length,
+        }),
+        parseResult ? diagnosticsFromParseResponse(parseResult) : undefined,
+      );
+      const updatedPaperWithDiagnostics = attachDiagnostics(updatedPaper, diagnostics);
+
+      if (selectedPaper?.id === paperId) {
+        setSelectedPaper(updatedPaperWithDiagnostics);
+        setPassages(paperPassages);
+        setCards(paperCards);
+      }
+      setPapers((current) =>
+        current.map((paper) =>
+          paper.id === paperId
+            ? attachDiagnostics(updatedPaperWithDiagnostics, mergeDiagnostics(diagnostics, paper.parse_diagnostics))
+            : paper,
+        ),
+      );
+      await loadPapers();
+    },
+    [loadPapers, selectedPaper],
+  );
+
+  const startBackgroundAnalysis = useCallback(
+    async (paperId: string) => {
+      if (analysisInFlightRef.current.has(paperId)) return;
+
+      analysisInFlightRef.current.add(paperId);
+      setBackgroundTask(paperId, {
+        phase: 'analyzing',
+        progress: 82,
+        message: '正在后台执行 AI 深度分析...',
+        parse_run_id: backgroundTasksRef.current[paperId]?.parse_run_id || null,
+        error_detail: null,
+      });
+      try {
+        const result = await api.runDeepAnalysis(paperId);
+        setBackgroundTask(paperId, {
+          phase: 'completed',
+          progress: 100,
+          message: `AI 深度分析完成，生成 ${result.card_count} 张卡片。`,
+          parse_run_id: backgroundTasksRef.current[paperId]?.parse_run_id || null,
+          error_detail: null,
+        });
+        setNotice({ message: `AI 解析成功！识别了元数据并提取了 ${result.card_count} 张卡片。`, type: 'success' });
+        await refreshPaperDetails(paperId);
+      } catch (err: any) {
+        const detail = err.message || 'AI 深度分析失败，请检查模型配置。';
+        setBackgroundTask(paperId, {
+          phase: 'failed',
+          progress: 100,
+          message: 'AI 深度分析失败。',
+          parse_run_id: backgroundTasksRef.current[paperId]?.parse_run_id || null,
+          error_detail: detail,
+        });
+        setNotice({ message: `AI 解析失败: ${detail}`, type: 'error' });
+      } finally {
+        analysisInFlightRef.current.delete(paperId);
+      }
+    },
+    [refreshPaperDetails, setBackgroundTask, setNotice],
+  );
+
   // 状态轮询逻辑：如果有论文正在解析，每 3 秒刷新一次列表
   useEffect(() => {
-    const hasParsingPaper = papers.some(p => p.parse_status === 'parsing');
+    const hasParsingPaper = papers.some(p => p.parse_status === 'pending' || p.parse_status === 'parsing');
     
     if (hasParsingPaper && !pollingRef.current) {
       pollingRef.current = window.setInterval(() => {
@@ -168,6 +280,95 @@ export function usePapers(
       }
     };
   }, [papers, loadPapers]);
+
+  const monitorBackgroundTasks = useCallback(async () => {
+    if (monitorInFlightRef.current) return;
+    monitorInFlightRef.current = true;
+    try {
+      const activeTasks = Object.values(backgroundTasksRef.current).filter(
+        (task) => task.phase === 'parsing',
+      );
+      if (activeTasks.length > 0) {
+        await loadPapers();
+      }
+      for (const task of activeTasks) {
+        const runs = await api.listParseRuns(task.paper_id);
+        const matchedRun = task.parse_run_id
+          ? runs.find((run) => run.id === task.parse_run_id) || runs[0]
+          : runs[0];
+
+        if (!matchedRun) {
+          setBackgroundTask(task.paper_id, {
+            phase: 'failed',
+            progress: 100,
+            message: '未找到解析任务记录。',
+            parse_run_id: task.parse_run_id,
+            error_detail: '未找到解析任务记录。',
+          });
+          continue;
+        }
+
+        if (matchedRun.status === 'completed') {
+          setBackgroundTask(task.paper_id, {
+            phase: 'analyzing',
+            progress: 76,
+            message: 'PDF 解析完成，准备执行 AI 深度分析...',
+            parse_run_id: matchedRun.id,
+            error_detail: null,
+          });
+          void startBackgroundAnalysis(task.paper_id);
+          continue;
+        }
+
+        if (matchedRun.status === 'failed') {
+          const detail = parseRunFailureMessage(matchedRun);
+          setBackgroundTask(task.paper_id, {
+            phase: 'failed',
+            progress: 100,
+            message: 'PDF 解析失败。',
+            parse_run_id: matchedRun.id,
+            error_detail: detail,
+          });
+          setNotice({ message: `PDF 解析失败: ${detail}`, type: 'error' });
+          continue;
+        }
+
+        setBackgroundTask(task.paper_id, {
+          phase: 'parsing',
+          progress: matchedRun.status === 'queued' ? 18 : 54,
+          message: matchedRun.status === 'queued'
+            ? '解析任务已进入队列，等待后台处理...'
+            : 'PDF 解析正在后台运行...',
+          parse_run_id: matchedRun.id,
+          error_detail: null,
+        });
+      }
+    } finally {
+      monitorInFlightRef.current = false;
+    }
+  }, [loadPapers, setBackgroundTask, setNotice, startBackgroundAnalysis]);
+
+  useEffect(() => {
+    const hasActiveBackgroundTask = Object.values(backgroundTasks).some(
+      (task) => task.phase === 'parsing',
+    );
+
+    if (hasActiveBackgroundTask && !backgroundPollingRef.current) {
+      backgroundPollingRef.current = window.setInterval(() => {
+        void monitorBackgroundTasks();
+      }, BACKGROUND_TASK_POLL_MS);
+    } else if (!hasActiveBackgroundTask && backgroundPollingRef.current) {
+      window.clearInterval(backgroundPollingRef.current);
+      backgroundPollingRef.current = null;
+    }
+
+    return () => {
+      if (backgroundPollingRef.current) {
+        window.clearInterval(backgroundPollingRef.current);
+        backgroundPollingRef.current = null;
+      }
+    };
+  }, [backgroundTasks, monitorBackgroundTasks]);
 
   const openPaper = async (paper: Paper) => {
     setSelectedPaper(paper);
@@ -234,47 +435,52 @@ export function usePapers(
   };
 
   const runDeepAnalysis = async (paperId: string) => {
-    setIsProcessing(true);
     try {
-      setNotice({ message: '正在进行 PDF 物理切片和 RAG 预处理...', type: 'success' });
-      const parseResult = await api.parsePaper(paperId);
-      setNotice({ message: '正在调用内置 Agent 进行深度语义分析...', type: 'success' });
-      const result = await api.runDeepAnalysis(paperId);
-      setNotice({ message: `AI 解析成功！识别了元数据并提取了 ${result.card_count} 张卡片。`, type: 'success' });
-      
-      const [updatedPaper, paperCards, paperPassages, parseRuns, paperTables] = await Promise.all([
-        api.getPaper(paperId),
-        api.listCards(paperId),
-        api.listPassages(paperId),
-        api.listParseRuns(paperId),
-        api.listDocumentTables(paperId),
-      ]);
-      const diagnostics = mergeDiagnostics(
-        diagnosticsFromRun(parseRuns[0], {
-          passageCount: paperPassages.length,
-          tableCount: paperTables.length,
-        }),
-        diagnosticsFromParseResponse(parseResult),
-      );
-      const updatedPaperWithDiagnostics = attachDiagnostics(updatedPaper, diagnostics);
-      
-      if (selectedPaper?.id === paperId) {
-        setSelectedPaper(updatedPaperWithDiagnostics);
-        setPassages(paperPassages);
-        setCards(paperCards);
+      const currentPaper =
+        papers.find((paper) => paper.id === paperId) ||
+        (selectedPaper?.id === paperId ? selectedPaper : null);
+      const existingRuns = await api.listParseRuns(paperId);
+      const existingActiveRun = findLatestActiveParseRun(existingRuns);
+
+      if (existingActiveRun) {
+        setBackgroundTask(paperId, {
+          phase: 'parsing',
+          progress: existingActiveRun.status === 'queued' ? 18 : 54,
+          message: existingActiveRun.status === 'queued'
+            ? '解析任务已进入队列，等待后台处理...'
+            : 'PDF 解析正在后台运行...',
+          parse_run_id: existingActiveRun.id,
+          error_detail: null,
+        });
+        setNotice({ message: '已在后台继续等待 PDF 解析完成。', type: 'success' });
+        return;
       }
-      setPapers((current) =>
-        current.map((paper) =>
-          paper.id === paperId
-            ? attachDiagnostics(updatedPaperWithDiagnostics, mergeDiagnostics(diagnostics, paper.parse_diagnostics))
-            : paper,
-        ),
-      );
+
+      if (currentPaper?.parse_status === 'parsed') {
+        setBackgroundTask(paperId, {
+          phase: 'analyzing',
+          progress: 82,
+          message: '已在后台启动 AI 深度分析。',
+          parse_run_id: null,
+          error_detail: null,
+        });
+        setNotice({ message: '已在后台启动 AI 深度分析。', type: 'success' });
+        void startBackgroundAnalysis(paperId);
+        return;
+      }
+
+      const parseResult = await api.parsePaper(paperId);
+      setBackgroundTask(paperId, {
+        phase: 'parsing',
+        progress: 18,
+        message: '已在后台提交 PDF 解析任务。',
+        parse_run_id: parseResult.parse_run_id,
+        error_detail: null,
+      });
+      setNotice({ message: '已在后台提交 PDF 解析任务。', type: 'success' });
       await loadPapers();
     } catch (err: any) {
       setNotice({ message: `AI 解析失败: ${err.message || '请检查模型配置'}`, type: 'error' });
-    } finally {
-      setIsProcessing(false);
     }
   };
 
@@ -292,5 +498,6 @@ export function usePapers(
     deletePaper,
     uploadPaper,
     runDeepAnalysis,
+    backgroundTasks,
   };
 }

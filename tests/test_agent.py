@@ -262,6 +262,50 @@ async def test_analyze_route_returns_pipeline_run_metadata(
     }
 
 
+@pytest.mark.asyncio
+async def test_analyze_route_returns_conflict_when_passages_are_missing(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The analyze endpoint should not surface a prerequisite failure as a 500."""
+    import paper_engine.storage.database as db_module
+    import paper_engine.agent.service as agent_service
+
+    conn = db_module.get_connection()
+    try:
+        conn.execute("INSERT INTO spaces (id, name) VALUES (?, ?)", ("space-1", "A"))
+        conn.execute(
+            "INSERT INTO papers (id, space_id, title, parse_status) VALUES (?, ?, ?, ?)",
+            ("paper-1", "space-1", "Paper", "parsing"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    async def fake_analyze_paper_with_llm(
+        paper_id: str,
+        space_id: str,
+    ) -> dict[str, object]:
+        assert (paper_id, space_id) == ("paper-1", "space-1")
+        return {
+            "status": "error",
+            "message": "No passages found. Please parse PDF first.",
+        }
+
+    monkeypatch.setattr(
+        agent_service,
+        "analyze_paper_with_llm",
+        fake_analyze_paper_with_llm,
+    )
+
+    resp = await client.post("/api/agent/analyze/paper-1")
+
+    assert resp.status_code == 409
+    assert resp.json() == {
+        "detail": "PDF parsing has not completed yet. Please wait for parsing to finish.",
+    }
+
+
 # ── MCP Tool Access Control ──────────────────────────────────────────
 
 

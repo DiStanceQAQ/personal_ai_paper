@@ -606,6 +606,7 @@ async def test_list_parse_runs_ordered_and_scoped_to_active_space(
     assert [run["id"] for run in data] == ["run-newer", "run-older"]
     assert data[0]["created_at"] == "2026-04-27 11:00:00"
     assert data[0]["backend"] == "docling"
+    assert "last_error" in data[0]
 
     other_space_id = await _create_and_activate_space(client, "Other Space")
     assert other_space_id != space_id

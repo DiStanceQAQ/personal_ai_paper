@@ -85,10 +85,15 @@ def test_local_provider_loads_packaged_model_from_resource_dir(
     provider = embeddings.get_embedding_provider(
         embeddings.EmbeddingConfig(provider="local")
     )
+    second_provider = embeddings.get_embedding_provider(
+        embeddings.EmbeddingConfig(provider="local")
+    )
 
     assert loaded_targets == [str(model_dir)]
     assert provider.provider == "sentence_transformer"
+    assert second_provider.provider == "sentence_transformer"
     assert provider.model == "intfloat/multilingual-e5-small"
+    assert provider._model is second_provider._model
 
 
 def test_local_provider_requires_packaged_model_when_not_injected(

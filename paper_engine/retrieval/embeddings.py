@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import threading
 from typing import Any, Literal, Protocol, TypeAlias, cast
 
 import httpx
@@ -32,6 +33,8 @@ _CONFIG_KEYS = (
     "embedding_dimension",
 )
 _REQUIRED_SENTENCE_TRANSFORMER_FILES = ("modules.json",)
+_SENTENCE_TRANSFORMER_CACHE_LOCK = threading.Lock()
+_SENTENCE_TRANSFORMER_CACHE: dict[str, Any] = {}
 
 
 class EmbeddingProviderError(RuntimeError):
@@ -221,10 +224,13 @@ def get_embedding_provider(
             if sentence_transformer_model is not None
             else resolve_local_embedding_model_path(model_name)
         )
+        cached_model = sentence_transformer_model
+        if cached_model is None and model_path is not None:
+            cached_model = _cached_sentence_transformer(str(model_path))
         return SentenceTransformerEmbeddingProvider(
             model_name=model_name,
             model_path=model_path,
-            model=sentence_transformer_model,
+            model=cached_model,
         )
 
     raise EmbeddingProviderUnavailable(
@@ -399,3 +405,12 @@ def _load_sentence_transformer(model_name: str) -> Any:
             "sentence_transformers.SentenceTransformer is unavailable."
         )
     return cast(Any, sentence_transformer)(model_name)
+
+
+def _cached_sentence_transformer(load_target: str) -> Any:
+    with _SENTENCE_TRANSFORMER_CACHE_LOCK:
+        model = _SENTENCE_TRANSFORMER_CACHE.get(load_target)
+        if model is None:
+            model = _load_sentence_transformer(load_target)
+            _SENTENCE_TRANSFORMER_CACHE[load_target] = model
+        return model

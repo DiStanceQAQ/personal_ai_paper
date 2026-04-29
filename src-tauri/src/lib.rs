@@ -1,3 +1,4 @@
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Mutex;
 use std::thread;
@@ -81,18 +82,40 @@ fn wait_for_backend(port: u16, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
 
     loop {
-        match TcpStream::connect(("127.0.0.1", port)) {
+        match probe_backend_health(port) {
             Ok(_) => return Ok(()),
             Err(error) => {
                 if Instant::now() >= deadline {
                     return Err(format!(
-                        "Timed out waiting for API sidecar on 127.0.0.1:{port}: {}",
+                        "Timed out waiting for API sidecar health on 127.0.0.1:{port}: {}",
                         error
                     ));
                 }
                 thread::sleep(Duration::from_millis(50));
             }
         }
+    }
+}
+
+fn probe_backend_health(port: u16) -> Result<(), String> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).map_err(|err| err.to_string())?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .map_err(|err| err.to_string())?;
+    stream
+        .set_write_timeout(Some(Duration::from_millis(500)))
+        .map_err(|err| err.to_string())?;
+    stream
+        .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .map_err(|err| err.to_string())?;
+
+    let mut buffer = [0_u8; 256];
+    let bytes_read = stream.read(&mut buffer).map_err(|err| err.to_string())?;
+    let response = String::from_utf8_lossy(&buffer[..bytes_read]);
+    if response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200") {
+        Ok(())
+    } else {
+        Err(format!("health check did not return 200: {response:?}"))
     }
 }
 
@@ -250,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn wait_for_backend_succeeds_when_port_starts_listening() {
+    fn wait_for_backend_succeeds_when_health_responds() {
         let probe = TcpListener::bind("127.0.0.1:0").expect("bind probe port");
         let port = probe.local_addr().expect("probe local addr").port();
         drop(probe);
@@ -258,10 +281,35 @@ mod tests {
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(50));
             let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind delayed backend");
-            let _ = listener.accept();
+            if let Ok((mut stream, _addr)) = listener.accept() {
+                let mut buffer = [0_u8; 512];
+                let _ = stream.read(&mut buffer);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                );
+            }
         });
 
         wait_for_backend(port, Duration::from_secs(2)).expect("backend should become ready");
+    }
+
+    #[test]
+    fn wait_for_backend_keeps_waiting_when_port_listens_without_health() {
+        let probe = TcpListener::bind("127.0.0.1:0").expect("bind probe port");
+        let port = probe.local_addr().expect("probe local addr").port();
+        drop(probe);
+
+        thread::spawn(move || {
+            let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind backend");
+            for _ in 0..3 {
+                if let Ok((_stream, _addr)) = listener.accept() {}
+            }
+        });
+
+        let error = wait_for_backend(port, Duration::from_millis(100))
+            .expect_err("non-responsive health endpoint should time out");
+
+        assert!(error.contains("Timed out waiting for API sidecar health"));
     }
 
     #[test]

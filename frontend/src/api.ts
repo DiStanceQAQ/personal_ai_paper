@@ -17,6 +17,7 @@ import type {
 } from './types';
 
 const DEFAULT_BACKEND = 'http://127.0.0.1:8000';
+const REQUEST_TIMEOUT_MS = 8000;
 
 let cachedBackendUrl: string | null = null;
 
@@ -39,21 +40,42 @@ export function setBackendBaseUrl(url: string): void {
   window.localStorage.setItem('paper-engine-backend-url', cachedBackendUrl);
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  timeoutMs?: number,
+): Promise<T> {
   const baseUrl = await initializeBackendBaseUrl();
-  const res = await fetch(`${baseUrl}${path}`, {
-    headers: init?.body instanceof FormData ? undefined : { 'Content-Type': 'application/json' },
-    ...init,
-  });
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({}));
-    throw new Error(error.detail || `请求失败：${res.status}`);
+  const controller = timeoutMs === undefined ? null : new AbortController();
+  const timeout =
+    controller === null
+      ? undefined
+      : window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${baseUrl}${path}`, {
+      headers: init?.body instanceof FormData ? undefined : { 'Content-Type': 'application/json' },
+      ...init,
+      signal: init?.signal ?? controller?.signal,
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.detail || `请求失败：${res.status}`);
+    }
+    return res.json() as Promise<T>;
+  } finally {
+    if (timeout !== undefined) {
+      window.clearTimeout(timeout);
+    }
   }
-  return res.json() as Promise<T>;
 }
 
 export const api = {
-  health: () => request<{ status: string; service: string; version: string }>('/health'),
+  health: () =>
+    request<{ status: string; service: string; version: string }>(
+      '/health',
+      undefined,
+      REQUEST_TIMEOUT_MS,
+    ),
   listSpaces: () => request<Space[]>('/api/spaces'),
   createSpace: (name: string, description: string) =>
     request<Space>('/api/spaces', { method: 'POST', body: JSON.stringify({ name, description }) }),

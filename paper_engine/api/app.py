@@ -53,7 +53,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Initialize the database on startup."""
     startup_trace("lifespan_start")
     init_db_started_at = time.perf_counter()
-    init_db()
+    init_conn = init_db()
+    init_conn.close()
     startup_trace(
         "database_ready",
         init_db_ms=f"{(time.perf_counter() - init_db_started_at) * 1000:.1f}",

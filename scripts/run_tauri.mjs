@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+const DEV_SERVER_PORT = 1420;
+const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const command = process.platform === 'win32' ? 'tauri.cmd' : 'tauri';
 const env = { ...process.env };
 const localPython = process.platform === 'win32' ? '.venv\\Scripts\\python.exe' : '.venv/bin/python';
 const pythonCommand = env.PAPER_ENGINE_PYTHON || (existsSync(localPython) ? localPython : 'python');
+const binaryExtension = process.platform === 'win32' ? '.exe' : '';
 
 if (
   args[0] === 'build' &&
@@ -27,9 +32,10 @@ function sidecarBuildForArgs(tauriArgs) {
     return null;
   }
   if (tauriArgs[0] === 'dev') {
+    const target = mcpSidecarExists() ? 'api' : 'all';
     return {
       command: pythonCommand,
-      args: ['scripts/build_sidecars.py', '--target', 'api'],
+      args: ['scripts/build_sidecars.py', '--target', target],
     };
   }
   if (tauriArgs[0] === 'build') {
@@ -39,6 +45,179 @@ function sidecarBuildForArgs(tauriArgs) {
     };
   }
   return null;
+}
+
+function hostTriple() {
+  const result = spawnSync('rustc', ['--print', 'host-tuple'], {
+    env,
+    encoding: 'utf8',
+    shell: false,
+  });
+  if (result.status === 0 && result.stdout.trim()) {
+    return result.stdout.trim();
+  }
+  return null;
+}
+
+function mcpSidecarExists() {
+  const triple = hostTriple();
+  if (triple) {
+    return existsSync(
+      join(
+        ROOT_DIR,
+        'src-tauri',
+        'binaries',
+        `paper-engine-mcp-${triple}${binaryExtension}`,
+      ),
+    );
+  }
+  try {
+    return readdirSync(join(ROOT_DIR, 'src-tauri', 'binaries')).some(
+      (entry) =>
+        entry.startsWith('paper-engine-mcp-') && entry.endsWith(binaryExtension),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function listeningPids(port) {
+  if (process.platform === 'win32') {
+    return [];
+  }
+  const result = spawnSync(
+    'lsof',
+    ['-nP', `-tiTCP:${port}`, '-sTCP:LISTEN'],
+    {
+      env,
+      encoding: 'utf8',
+      shell: false,
+    },
+  );
+  if (result.status !== 0 && !result.stdout.trim()) {
+    return [];
+  }
+  return result.stdout
+    .split(/\s+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function processCommand(pid) {
+  if (process.platform === 'win32') {
+    return '';
+  }
+  const result = spawnSync('ps', ['-p', pid, '-o', 'command='], {
+    env,
+    encoding: 'utf8',
+    shell: false,
+  });
+  return result.status === 0 ? result.stdout.trim() : '';
+}
+
+function processRows() {
+  if (process.platform === 'win32') {
+    return [];
+  }
+  const result = spawnSync('ps', ['-axo', 'pid=,ppid=,command='], {
+    env,
+    encoding: 'utf8',
+    shell: false,
+  });
+  if (result.status !== 0) {
+    return [];
+  }
+  return result.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+)\s+(\d+)\s+(.+)$/);
+      if (!match) {
+        return null;
+      }
+      return { pid: match[1], ppid: match[2], command: match[3] };
+    })
+    .filter(Boolean);
+}
+
+function wait(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function isProjectViteCommand(commandText) {
+  return (
+    commandText.includes(ROOT_DIR) &&
+    commandText.includes('frontend/node_modules/.bin/vite') &&
+    commandText.includes(`--port ${DEV_SERVER_PORT}`)
+  );
+}
+
+function isProjectApiSidecarCommand(commandText) {
+  return (
+    commandText.includes(ROOT_DIR) &&
+    commandText.includes('src-tauri/target/debug/paper-engine-api')
+  );
+}
+
+function cleanupStaleProjectSidecars() {
+  if (args[0] !== 'dev' || env.PAPER_ENGINE_SKIP_SIDECAR_CLEANUP === '1') {
+    return;
+  }
+  const rows = processRows();
+  const orphanParents = rows.filter(
+    (row) => row.ppid === '1' && isProjectApiSidecarCommand(row.command),
+  );
+  if (orphanParents.length === 0) {
+    return;
+  }
+
+  const orphanParentPids = new Set(orphanParents.map((row) => row.pid));
+  const staleRows = [
+    ...rows.filter(
+      (row) =>
+        orphanParentPids.has(row.ppid) && isProjectApiSidecarCommand(row.command),
+    ),
+    ...orphanParents,
+  ];
+
+  for (const row of staleRows) {
+    console.log(`Stopping stale API sidecar (PID ${row.pid})`);
+    try {
+      process.kill(Number(row.pid), 'SIGTERM');
+    } catch (error) {
+      console.warn(`Unable to stop PID ${row.pid}: ${error.message}`);
+    }
+  }
+  wait(500);
+}
+
+function ensureDevPortAvailable() {
+  if (args[0] !== 'dev' || env.PAPER_ENGINE_SKIP_PORT_CLEANUP === '1') {
+    return;
+  }
+  const pids = listeningPids(DEV_SERVER_PORT);
+  for (const pid of pids) {
+    const commandText = processCommand(pid);
+    if (!isProjectViteCommand(commandText)) {
+      console.error(
+        `Port ${DEV_SERVER_PORT} is already in use by PID ${pid}: ${commandText}`,
+      );
+      console.error(
+        'Set PAPER_ENGINE_SKIP_PORT_CLEANUP=1 to bypass this check, or stop that process manually.',
+      );
+      process.exit(1);
+    }
+    console.log(`Stopping stale Vite dev server on port ${DEV_SERVER_PORT} (PID ${pid})`);
+    try {
+      process.kill(Number(pid), 'SIGTERM');
+    } catch (error) {
+      console.warn(`Unable to stop PID ${pid}: ${error.message}`);
+    }
+  }
+  if (pids.length > 0) {
+    wait(500);
+  }
 }
 
 function pdfAdvancedInstallForArgs(tauriArgs) {
@@ -92,6 +271,9 @@ if (env.PAPER_ENGINE_TAURI_DRY_RUN === '1') {
   }));
   process.exit(0);
 }
+
+cleanupStaleProjectSidecars();
+ensureDevPortAvailable();
 
 if (pdfAdvancedInstall) {
   const result = spawnSync(pdfAdvancedInstall.command, pdfAdvancedInstall.args, {

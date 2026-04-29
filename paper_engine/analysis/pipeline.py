@@ -955,13 +955,13 @@ def _update_paper_metadata(
     conn.execute(
         """
         UPDATE papers
-        SET title = CASE WHEN ? != '' THEN ? ELSE title END,
-            authors = CASE WHEN ? != '' THEN ? ELSE authors END,
-            year = CASE WHEN ? IS NOT NULL THEN ? ELSE year END,
-            abstract = CASE WHEN ? != '' THEN ? ELSE abstract END,
-            venue = CASE WHEN ? != '' THEN ? ELSE venue END,
-            doi = CASE WHEN ? != '' THEN ? ELSE doi END,
-            arxiv_id = CASE WHEN ? != '' THEN ? ELSE arxiv_id END
+        SET title = CASE WHEN title = '' AND ? != '' THEN ? ELSE title END,
+            authors = CASE WHEN authors = '' AND ? != '' THEN ? ELSE authors END,
+            year = CASE WHEN year IS NULL AND ? IS NOT NULL THEN ? ELSE year END,
+            abstract = CASE WHEN abstract = '' AND ? != '' THEN ? ELSE abstract END,
+            venue = CASE WHEN venue = '' AND ? != '' THEN ? ELSE venue END,
+            doi = CASE WHEN doi = '' AND ? != '' THEN ? ELSE doi END,
+            arxiv_id = CASE WHEN arxiv_id = '' AND ? != '' THEN ? ELSE arxiv_id END
         WHERE id = ? AND space_id = ?
         """,
         (

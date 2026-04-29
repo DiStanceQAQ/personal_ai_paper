@@ -12,7 +12,7 @@ from paper_engine.analysis.models import (
     MergedAnalysisResult,
     PaperMetadataExtraction,
 )
-from paper_engine.analysis.pipeline import persist_analysis_result
+from paper_engine.analysis.pipeline import _update_paper_metadata, persist_analysis_result
 from paper_engine.storage.database import init_db
 
 
@@ -261,3 +261,57 @@ def test_persist_analysis_result_replaces_only_unedited_ai_cards() -> None:
         for rows in sources_by_summary.values()
         for row in rows
     )
+
+
+def test_update_paper_metadata_only_fills_empty_fields() -> None:
+    conn = _test_conn()
+    _seed_space_paper_and_passages(conn)
+    conn.execute(
+        """
+        UPDATE papers
+        SET title = 'Manual Title',
+            authors = 'Manual Author',
+            year = 2020,
+            abstract = 'Manual abstract',
+            venue = 'Manual Venue',
+            doi = '10.0000/manual',
+            arxiv_id = ''
+        WHERE id = 'paper-1'
+        """
+    )
+    conn.commit()
+
+    result = _analysis_result().model_copy(
+        update={
+            "metadata": PaperMetadataExtraction(
+                title="AI Title",
+                authors=["AI Author"],
+                year=2026,
+                abstract="AI abstract",
+                venue="AI Venue",
+                doi="10.0000/ai",
+                arxiv_id="2601.00001",
+                source_passage_ids=["passage-1"],
+                confidence=0.8,
+            )
+        }
+    )
+
+    _update_paper_metadata(conn, result)
+
+    row = conn.execute(
+        """
+        SELECT title, authors, year, abstract, venue, doi, arxiv_id
+        FROM papers
+        WHERE id = 'paper-1'
+        """
+    ).fetchone()
+    assert dict(row) == {
+        "title": "Manual Title",
+        "authors": "Manual Author",
+        "year": 2020,
+        "abstract": "Manual abstract",
+        "venue": "Manual Venue",
+        "doi": "10.0000/manual",
+        "arxiv_id": "2601.00001",
+    }

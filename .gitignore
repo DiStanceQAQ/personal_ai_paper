@@ -21,3 +21,4 @@ app-data/
 venv/
 resources/models/intfloat-multilingual-e5-small/*
 !resources/models/intfloat-multilingual-e5-small/.gitkeep
+resources/models/docling-hf-cache/

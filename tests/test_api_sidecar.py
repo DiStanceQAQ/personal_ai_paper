@@ -52,6 +52,8 @@ def test_main_sets_runtime_dirs_before_importing_app(
         calls.append((
             os.environ.get("PAPER_ENGINE_DATA_DIR"),
             os.environ.get("PAPER_ENGINE_RESOURCE_DIR"),
+            os.environ.get("HF_HOME"),
+            os.environ.get("HF_HUB_CACHE"),
         ))
         return SimpleNamespace(app=fake_app)
 
@@ -65,10 +67,13 @@ def test_main_sets_runtime_dirs_before_importing_app(
     )
     monkeypatch.delenv("PAPER_ENGINE_DATA_DIR", raising=False)
     monkeypatch.delenv("PAPER_ENGINE_RESOURCE_DIR", raising=False)
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
     monkeypatch.setattr(importlib, "import_module", fake_import_module)
     monkeypatch.setattr(uvicorn, "run", fake_run)
 
     resource_dir = tmp_path / "resources"
+    (resource_dir / "models" / "docling-hf-cache" / "hub").mkdir(parents=True)
     api_sidecar.main([
         "--port",
         "9412",
@@ -80,7 +85,12 @@ def test_main_sets_runtime_dirs_before_importing_app(
 
     assert calls == [
         "freeze_support",
-        (str(tmp_path.resolve()), str(resource_dir.resolve())),
+        (
+            str(tmp_path.resolve()),
+            str(resource_dir.resolve()),
+            str((resource_dir / "models" / "docling-hf-cache").resolve()),
+            str((resource_dir / "models" / "docling-hf-cache" / "hub").resolve()),
+        ),
         (fake_app, "127.0.0.1", 9412, "info"),
     ]
 

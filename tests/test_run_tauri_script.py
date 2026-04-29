@@ -33,6 +33,10 @@ def test_tauri_dev_dry_run_builds_api_sidecar_before_launch() -> None:
         "command": expected_python,
         "args": ["scripts/ensure_pdf_advanced.py", "--if-missing"],
     }
+    assert dry_run["doclingModelDownload"] == {
+        "command": expected_python,
+        "args": ["scripts/ensure_docling_models.py", "--if-missing"],
+    }
     assert dry_run["modelDownload"] == {
         "command": expected_python,
         "args": ["scripts/download_embedding_model.py", "--if-missing"],

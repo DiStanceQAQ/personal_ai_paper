@@ -10,6 +10,11 @@ import pytest
 from paper_engine.pdf.backends.base import ParserBackendError, ParserBackendUnavailable
 from paper_engine.pdf.models import ParseDocument, PdfQualityReport
 
+_DOCLING_LAYOUT_CACHE_DIRS = (
+    Path("resources/models/docling-hf-cache/hub/models--docling-project--docling-layout-heron"),
+    Path.home() / ".cache" / "huggingface" / "hub" / "models--docling-project--docling-layout-heron",
+)
+
 
 def test_pyproject_declares_docling_extra_and_module() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
@@ -59,6 +64,30 @@ def test_parse_requires_docling_when_backend_unavailable(monkeypatch: pytest.Mon
         )
 
 
+def test_missing_docling_parse_resources_are_reported(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import paper_engine.pdf.backends.docling as pdf_backend_docling
+
+    package_dir = tmp_path / "docling_parse"
+    package_dir.mkdir()
+    init_file = package_dir / "__init__.py"
+    init_file.write_text("", encoding="utf-8")
+
+    def fake_import_module(name: str) -> object:
+        if name == "docling_parse":
+            return SimpleNamespace(__file__=str(init_file))
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(pdf_backend_docling.importlib, "import_module", fake_import_module)
+
+    with pytest.raises(ParserBackendUnavailable) as exc_info:
+        pdf_backend_docling._ensure_docling_parse_resources()
+
+    assert "docling-parse PDF resources are missing" in str(exc_info.value)
+
+
 def test_parse_wraps_docling_conversion_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     import paper_engine.pdf.backends.docling as pdf_backend_docling
     from paper_engine.pdf.backends.docling import DoclingBackend
@@ -68,7 +97,11 @@ def test_parse_wraps_docling_conversion_errors(monkeypatch: pytest.MonkeyPatch) 
             raise RuntimeError(f"cannot convert {file_path}")
 
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
-    monkeypatch.setattr(pdf_backend_docling, "_load_docling_converter", lambda: FailingConverter)
+    monkeypatch.setattr(
+        pdf_backend_docling,
+        "_create_docling_converter",
+        lambda: FailingConverter(),
+    )
 
     with pytest.raises(ParserBackendError) as exc_info:
         DoclingBackend().parse(
@@ -79,6 +112,37 @@ def test_parse_wraps_docling_conversion_errors(monkeypatch: pytest.MonkeyPatch) 
         )
 
     assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+
+def test_create_docling_converter_uses_default_constructor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import paper_engine.pdf.backends.docling as pdf_backend_docling
+
+    captured: dict[str, object] = {}
+
+    class FakeDocumentConverter:
+        def __init__(self, **kwargs: object) -> None:
+            captured["kwargs"] = kwargs
+
+    class FakeInputFormat:
+        PDF = "pdf"
+
+    monkeypatch.setattr(
+        pdf_backend_docling,
+        "_load_docling_components",
+        lambda: (
+            FakeDocumentConverter,
+            FakeInputFormat,
+            object(),
+            object(),
+        ),
+    )
+
+    converter = pdf_backend_docling._create_docling_converter()
+
+    assert isinstance(converter, FakeDocumentConverter)
+    assert captured["kwargs"] == {}
 
 
 def test_parse_normalizes_mixed_docling_items_in_reading_order(
@@ -148,7 +212,11 @@ def test_parse_normalizes_mixed_docling_items_in_reading_order(
             return FakeResult()
 
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
-    monkeypatch.setattr(pdf_backend_docling, "_load_docling_converter", lambda: FakeConverter)
+    monkeypatch.setattr(
+        pdf_backend_docling,
+        "_create_docling_converter",
+        lambda: FakeConverter(),
+    )
 
     document = DoclingBackend().parse(
         Path("paper.pdf"),
@@ -243,7 +311,11 @@ def test_parse_prefers_docling_iterated_reading_order_over_top_level_texts(
             return FakeResult()
 
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
-    monkeypatch.setattr(pdf_backend_docling, "_load_docling_converter", lambda: FakeConverter)
+    monkeypatch.setattr(
+        pdf_backend_docling,
+        "_create_docling_converter",
+        lambda: FakeConverter(),
+    )
 
     document = DoclingBackend().parse(
         Path("docling-v2.pdf"),
@@ -295,7 +367,11 @@ def test_parse_resolves_caption_ref_lists_without_caption_text_method(
             return FakeResult()
 
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
-    monkeypatch.setattr(pdf_backend_docling, "_load_docling_converter", lambda: FakeConverter)
+    monkeypatch.setattr(
+        pdf_backend_docling,
+        "_create_docling_converter",
+        lambda: FakeConverter(),
+    )
 
     document = DoclingBackend().parse(
         Path("caption-ref.pdf"),
@@ -347,7 +423,11 @@ def test_parse_maps_docling_page_margins_without_corrupting_heading_path(
             return FakeResult()
 
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
-    monkeypatch.setattr(pdf_backend_docling, "_load_docling_converter", lambda: FakeConverter)
+    monkeypatch.setattr(
+        pdf_backend_docling,
+        "_create_docling_converter",
+        lambda: FakeConverter(),
+    )
 
     document = DoclingBackend().parse(
         Path("page-margins.pdf"),
@@ -406,7 +486,11 @@ def test_parse_preserves_docling_provenance_bbox_objects(
             return FakeResult()
 
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
-    monkeypatch.setattr(pdf_backend_docling, "_load_docling_converter", lambda: FakeConverter)
+    monkeypatch.setattr(
+        pdf_backend_docling,
+        "_create_docling_converter",
+        lambda: FakeConverter(),
+    )
 
     document = DoclingBackend().parse(
         Path("bbox.pdf"),
@@ -420,28 +504,46 @@ def test_parse_preserves_docling_provenance_bbox_objects(
 
 
 @pytest.mark.skipif(
-    importlib.util.find_spec("docling") is None,
-    reason="docling is not installed",
+    importlib.util.find_spec("docling") is None
+    or not any(path.exists() for path in _DOCLING_LAYOUT_CACHE_DIRS),
+    reason="docling or its local model cache is not available",
 )
 def test_live_docling_conversion_when_installed(tmp_path: Path) -> None:
     from paper_engine.pdf.backends.docling import DoclingBackend
 
+    import fitz
+    import os
     pytest.importorskip("docling")
+    bundled_hf_hub_cache = Path("resources/models/docling-hf-cache/hub").resolve()
+    previous_hf_hub_cache = os.environ.get("HF_HUB_CACHE")
+    previous_hf_home = os.environ.get("HF_HOME")
+    if bundled_hf_hub_cache.is_dir():
+        os.environ["HF_HUB_CACHE"] = str(bundled_hf_hub_cache)
+        os.environ["HF_HOME"] = str(bundled_hf_hub_cache.parent)
 
     pdf_path = tmp_path / "blank.pdf"
-    pdf_path.write_bytes(
-        b"%PDF-1.4\n"
-        b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
-        b"2 0 obj<</Type/Pages/Count 0/Kids[]>>endobj\n"
-        b"trailer<</Root 1 0 R>>\n%%EOF\n"
-    )
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_text((72, 72), "Docling live conversion test.")
+    document.save(pdf_path)
+    document.close()
 
-    document = DoclingBackend().parse(
-        pdf_path,
-        paper_id="paper-live",
-        space_id="space-live",
-        quality_report=PdfQualityReport(),
-    )
+    try:
+        document = DoclingBackend().parse(
+            pdf_path,
+            paper_id="paper-live",
+            space_id="space-live",
+            quality_report=PdfQualityReport(),
+        )
+    finally:
+        if previous_hf_hub_cache is None:
+            os.environ.pop("HF_HUB_CACHE", None)
+        else:
+            os.environ["HF_HUB_CACHE"] = previous_hf_hub_cache
+        if previous_hf_home is None:
+            os.environ.pop("HF_HOME", None)
+        else:
+            os.environ["HF_HOME"] = previous_hf_home
 
     assert isinstance(document, ParseDocument)
     assert document.backend == "docling"

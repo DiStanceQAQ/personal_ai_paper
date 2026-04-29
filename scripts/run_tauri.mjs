@@ -51,6 +51,16 @@ function pdfAdvancedInstallForArgs(tauriArgs) {
   return null;
 }
 
+function doclingModelDownloadForArgs(tauriArgs) {
+  if (tauriArgs[0] === 'dev' || tauriArgs[0] === 'build') {
+    return {
+      command: pythonCommand,
+      args: ['scripts/ensure_docling_models.py', '--if-missing'],
+    };
+  }
+  return null;
+}
+
 function modelDownloadForArgs(tauriArgs) {
   if (env.PAPER_ENGINE_SKIP_MODEL_DOWNLOAD === '1') {
     return null;
@@ -65,12 +75,14 @@ function modelDownloadForArgs(tauriArgs) {
 }
 
 const pdfAdvancedInstall = pdfAdvancedInstallForArgs(args);
+const doclingModelDownload = doclingModelDownloadForArgs(args);
 const modelDownload = modelDownloadForArgs(args);
 const sidecarBuild = sidecarBuildForArgs(args);
 
 if (env.PAPER_ENGINE_TAURI_DRY_RUN === '1') {
   console.log(JSON.stringify({
     pdfAdvancedInstall,
+    doclingModelDownload,
     modelDownload,
     sidecarBuild,
     tauri: {
@@ -90,6 +102,22 @@ if (pdfAdvancedInstall) {
 
   if (result.error) {
     console.error(`Failed to prepare Docling dependency: ${result.error.message}`);
+    process.exit(1);
+  }
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
+}
+
+if (doclingModelDownload) {
+  const result = spawnSync(doclingModelDownload.command, doclingModelDownload.args, {
+    env,
+    stdio: 'inherit',
+    shell: false,
+  });
+
+  if (result.error) {
+    console.error(`Failed to prepare Docling models: ${result.error.message}`);
     process.exit(1);
   }
   if (result.status !== 0) {

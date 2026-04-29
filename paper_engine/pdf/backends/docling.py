@@ -22,12 +22,51 @@ from paper_engine.pdf.models import (
 _BACKEND_NAME = "docling"
 
 
-def _load_docling_converter() -> Any:
+def _ensure_docling_parse_resources() -> None:
+    """Verify packaged docling-parse data files required by the PDF backend."""
+    try:
+        docling_parse_module = importlib.import_module("docling_parse")
+    except Exception as exc:
+        raise ParserBackendUnavailable(
+            _BACKEND_NAME,
+            "docling-parse is not installed",
+        ) from exc
+
+    module_file = getattr(docling_parse_module, "__file__", None)
+    if not module_file:
+        raise ParserBackendUnavailable(
+            _BACKEND_NAME,
+            "docling-parse module path is unavailable",
+        )
+
+    resources_dir = Path(module_file).resolve().parent / "pdf_resources"
+    if not resources_dir.is_dir():
+        raise ParserBackendUnavailable(
+            _BACKEND_NAME,
+            f"docling-parse PDF resources are missing: {resources_dir}",
+        )
+
+
+def _load_docling_components() -> tuple[Any, Any, Any, Any]:
     """Import Docling lazily so startup does not require the optional extra."""
     if importlib.util.find_spec("docling") is None:
         raise ParserBackendUnavailable(_BACKEND_NAME, "docling is not installed")
-    module = importlib.import_module("docling.document_converter")
-    return module.DocumentConverter
+    _ensure_docling_parse_resources()
+    converter_module = importlib.import_module("docling.document_converter")
+    pipeline_options_module = importlib.import_module("docling.datamodel.pipeline_options")
+    return (
+        converter_module.DocumentConverter,
+        converter_module.InputFormat,
+        converter_module.PdfFormatOption,
+        pipeline_options_module.PdfPipelineOptions,
+    )
+
+
+def _create_docling_converter() -> Any:
+    converter_class, _input_format, _pdf_format_option, _pdf_pipeline_options = (
+        _load_docling_components()
+    )
+    return converter_class()
 
 
 class DoclingBackend:
@@ -51,8 +90,7 @@ class DoclingBackend:
             raise ParserBackendUnavailable(self.name, "docling is not installed")
 
         try:
-            converter_class = _load_docling_converter()
-            converter = converter_class()
+            converter = _create_docling_converter()
             result = converter.convert(str(file_path))
         except ParserBackendUnavailable:
             raise

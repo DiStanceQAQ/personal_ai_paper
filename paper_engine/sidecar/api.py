@@ -62,6 +62,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     if settings.resource_dir is not None:
         os.environ["PAPER_ENGINE_RESOURCE_DIR"] = str(settings.resource_dir)
         startup_trace("resource_dir_configured", resource_dir=settings.resource_dir)
+        docling_cache_dir = (
+            settings.resource_dir / "models" / "docling-hf-cache" / "hub"
+        )
+        if docling_cache_dir.is_dir():
+            os.environ["HF_HOME"] = str(docling_cache_dir.parent)
+            os.environ["HF_HUB_CACHE"] = str(docling_cache_dir)
+            startup_trace("docling_cache_configured", hf_hub_cache=docling_cache_dir)
 
     startup_trace("uvicorn_import_start")
     import uvicorn

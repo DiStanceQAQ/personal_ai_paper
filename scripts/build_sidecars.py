@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import importlib.metadata
 import importlib.util
 import shutil
 import subprocess
@@ -12,7 +13,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TAURI_BINARIES = ROOT / "src-tauri" / "binaries"
-PDF_OPTIONAL_PACKAGES = ("docling",)
+PDF_OPTIONAL_PACKAGES = (
+    "docling",
+    "docling_ibm_models",
+    "transformers.models.rt_detr_v2",
+)
+PDF_OPTIONAL_DATA_PACKAGES = ("docling_parse",)
+PDF_OPTIONAL_METADATA = (
+    "docling",
+    "docling-core",
+    "docling-ibm-models",
+    "docling-parse",
+)
 EMBEDDING_REQUIRED_PACKAGES = ("sentence_transformers",)
 
 
@@ -22,6 +34,8 @@ class SidecarTarget:
     entrypoint: str
     hidden_imports: tuple[str, ...] = ()
     collect_submodules: tuple[str, ...] = ()
+    collect_data: tuple[str, ...] = ()
+    copy_metadata: tuple[str, ...] = ()
     excluded_modules: tuple[str, ...] = ()
 
 
@@ -70,6 +84,8 @@ API_HIDDEN_IMPORTS = (
     "paper_engine.api.routes.papers",
     "paper_engine.api.routes.search",
     "paper_engine.api.routes.spaces",
+    "multipart",
+    "multipart.multipart",
 )
 MCP_HIDDEN_IMPORTS = (
     "paper_engine.core.config",
@@ -110,6 +126,8 @@ def build_onefile(
     entrypoint: str,
     hidden_imports: tuple[str, ...] = (),
     collect_submodules: tuple[str, ...] = (),
+    collect_data: tuple[str, ...] = (),
+    copy_metadata: tuple[str, ...] = (),
     excluded_modules: tuple[str, ...] = (),
 ) -> Path:
     command = [
@@ -126,6 +144,10 @@ def build_onefile(
         command.extend(["--hidden-import", module])
     for package in collect_submodules:
         command.extend(["--collect-submodules", package])
+    for package in collect_data:
+        command.extend(["--collect-data", package])
+    for distribution in copy_metadata:
+        command.extend(["--copy-metadata", distribution])
     for module in excluded_modules:
         command.extend(["--exclude-module", module])
     command.append(entrypoint)
@@ -155,6 +177,10 @@ def build_targets(target: str) -> list[SidecarTarget]:
     api_optional_collections, api_exclusions = _optional_dependency_args(
         PDF_OPTIONAL_PACKAGES
     )
+    api_optional_data, _api_data_exclusions = _optional_dependency_args(
+        PDF_OPTIONAL_DATA_PACKAGES
+    )
+    api_optional_metadata = _optional_metadata_args(PDF_OPTIONAL_METADATA)
     api_collections = _dedupe(
         (*api_optional_collections, *EMBEDDING_REQUIRED_PACKAGES)
     )
@@ -169,6 +195,8 @@ def build_targets(target: str) -> list[SidecarTarget]:
                 entrypoint="paper_engine/sidecar/api.py",
                 hidden_imports=API_HIDDEN_IMPORTS,
                 collect_submodules=api_collections,
+                collect_data=api_optional_data,
+                copy_metadata=api_optional_metadata,
                 excluded_modules=api_exclusions,
             )
         )
@@ -202,6 +230,17 @@ def _dedupe(values: tuple[str, ...] | list[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
+def _optional_metadata_args(distribution_names: tuple[str, ...]) -> tuple[str, ...]:
+    collected: list[str] = []
+    for distribution_name in distribution_names:
+        try:
+            importlib.metadata.distribution(distribution_name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        collected.append(distribution_name)
+    return _dedupe(collected)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -220,6 +259,8 @@ def main(argv: list[str] | None = None) -> int:
             sidecar_target.entrypoint,
             sidecar_target.hidden_imports,
             sidecar_target.collect_submodules,
+            sidecar_target.collect_data,
+            sidecar_target.copy_metadata,
             sidecar_target.excluded_modules,
         )
         packaged = copy_for_tauri(binary, sidecar_target.sidecar_name, target_triple)

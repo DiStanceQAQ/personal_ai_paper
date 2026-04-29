@@ -141,7 +141,8 @@ async def test_mineru_config() -> dict[str, str]:
     """Test configured MinerU connectivity without returning credentials."""
     conn = get_connection()
     try:
-        return dict(test_mineru_connection(conn))
+        result = test_mineru_connection(conn)
+        return {"status": result["status"], "detail": result["detail"]}
     finally:
         conn.close()
 

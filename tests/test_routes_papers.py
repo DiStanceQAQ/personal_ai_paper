@@ -253,6 +253,51 @@ async def test_get_paper(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_single_paper_routes_are_scoped_to_active_space(
+    client: AsyncClient,
+) -> None:
+    """Single-paper HTTP routes must not expose papers from inactive spaces."""
+    original_space_id = await _create_and_activate_space(client, "Original Space")
+    upload = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    paper_id = upload.json()["id"]
+
+    other_space_id = await _create_and_activate_space(client, "Other Space")
+    assert other_space_id != original_space_id
+
+    get_resp = await client.get(f"/api/papers/{paper_id}")
+    patch_resp = await client.patch(
+        f"/api/papers/{paper_id}",
+        json={"title": "Should not change from another space"},
+    )
+    parse_resp = await client.post(f"/api/papers/{paper_id}/parse")
+    passages_resp = await client.get(f"/api/papers/{paper_id}/passages")
+    delete_resp = await client.delete(f"/api/papers/{paper_id}")
+
+    assert get_resp.status_code == 404
+    assert patch_resp.status_code == 404
+    assert parse_resp.status_code == 404
+    assert passages_resp.status_code == 404
+    assert delete_resp.status_code == 404
+
+    import paper_engine.storage.database as db_module
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        row = conn.execute(
+            "SELECT title FROM papers WHERE id = ? AND space_id = ?",
+            (paper_id, original_space_id),
+        ).fetchone()
+        assert row is not None
+        assert row["title"] == ""
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
 async def test_update_paper_metadata(client: AsyncClient) -> None:
     """Test updating paper metadata fields."""
     await _create_and_activate_space(client)

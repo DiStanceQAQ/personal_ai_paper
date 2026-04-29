@@ -31,12 +31,10 @@ async def create_card(
 async def list_cards(
     paper_id: str | None = None,
     card_type: str | None = None,
-    space_id_override: str | None = None,
 ) -> list[dict[str, Any]]:
     return await service.list_cards(
         paper_id=paper_id,
         card_type=card_type,
-        space_id_override=space_id_override,
     )
 
 

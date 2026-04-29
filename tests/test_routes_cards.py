@@ -118,6 +118,58 @@ async def test_list_cards(client: AsyncClient, setup_space_and_paper: tuple[str,
 
 
 @pytest.mark.asyncio
+async def test_card_routes_are_scoped_to_active_space(
+    client: AsyncClient,
+    setup_space_and_paper: tuple[str, str],
+) -> None:
+    """Card HTTP routes must not expose cards from inactive spaces."""
+    original_space_id, paper_id = setup_space_and_paper
+    create_resp = await client.post(
+        "/api/cards",
+        json={"paper_id": paper_id, "card_type": "Method", "summary": "Private card"},
+    )
+    assert create_resp.status_code == 200
+    card_id = create_resp.json()["id"]
+
+    other_space_resp = await client.post(
+        "/api/spaces",
+        json={"name": "Other Space", "description": ""},
+    )
+    assert other_space_resp.status_code == 200
+    other_space_id = other_space_resp.json()["id"]
+    assert other_space_id != original_space_id
+    assert (await client.put(f"/api/spaces/active/{other_space_id}")).status_code == 200
+
+    get_resp = await client.get(f"/api/cards/{card_id}")
+    patch_resp = await client.patch(
+        f"/api/cards/{card_id}",
+        json={"summary": "Should not change from another space"},
+    )
+    delete_resp = await client.delete(f"/api/cards/{card_id}")
+    override_resp = await client.get(
+        "/api/cards",
+        params={"space_id_override": original_space_id},
+    )
+
+    assert get_resp.status_code == 404
+    assert patch_resp.status_code == 404
+    assert delete_resp.status_code == 404
+    assert override_resp.status_code == 200
+    assert override_resp.json() == []
+
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT summary FROM knowledge_cards WHERE id = ? AND space_id = ?",
+            (card_id, original_space_id),
+        ).fetchone()
+        assert row is not None
+        assert row["summary"] == "Private card"
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
 async def test_update_card(client: AsyncClient, setup_space_and_paper: tuple[str, str]) -> None:
     space_id, paper_id = setup_space_and_paper
     resp = await client.post("/api/cards", json={"paper_id": paper_id, "card_type": "Method", "summary": "Old"})

@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Root data directory for all local application data
 APP_DATA_DIR = Path(

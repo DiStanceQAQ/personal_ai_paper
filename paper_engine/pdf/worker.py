@@ -24,6 +24,7 @@ from paper_engine.pdf.jobs import (
     heartbeat_parse_run,
 )
 from paper_engine.pdf.persistence import (
+    PassageEmbeddingError,
     embed_passages_for_parse_run as default_embed_passages_for_parse_run,
 )
 from paper_engine.pdf.persistence import persist_parse_result as default_persist_parse_result
@@ -41,6 +42,9 @@ class ParserFactory:
 
 
 def _format_exception_details(exc: BaseException) -> str:
+    if isinstance(exc, PassageEmbeddingError) and exc.warnings:
+        return "; ".join(exc.warnings)
+
     message = str(exc)
     cause = exc.__cause__
     if cause is None:

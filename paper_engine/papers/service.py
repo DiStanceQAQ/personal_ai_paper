@@ -19,23 +19,27 @@ router = APIRouter(prefix="/api/papers", tags=["papers"])
 ACTIVE_SPACE_KEY = "active_space"
 
 
+def _get_active_space_id_from_conn(conn: Any) -> str:
+    row = conn.execute(
+        """SELECT s.id
+           FROM spaces s
+           JOIN app_state a ON a.value = s.id
+           WHERE a.key = ? AND s.status = 'active'""",
+        (ACTIVE_SPACE_KEY,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No active space selected. Please open an active space first.",
+        )
+    return str(row["id"])
+
+
 def _get_active_space_id() -> str:
     """Get the currently active space ID, or raise 400."""
     conn = get_connection()
     try:
-        row = conn.execute(
-            """SELECT s.id
-               FROM spaces s
-               JOIN app_state a ON a.value = s.id
-               WHERE a.key = ? AND s.status = 'active'""",
-            (ACTIVE_SPACE_KEY,),
-        ).fetchone()
-        if row is None:
-            raise HTTPException(
-                status_code=400,
-                detail="No active space selected. Please open an active space first.",
-            )
-        return str(row["id"])
+        return _get_active_space_id_from_conn(conn)
     finally:
         conn.close()
 
@@ -51,6 +55,19 @@ def _require_paper_in_space(conn: Any, paper_id: str, space_id: str) -> None:
     ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Paper not found in active space")
+
+
+def _get_paper_in_active_space(conn: Any, paper_id: str) -> Any:
+    row = conn.execute(
+        "SELECT * FROM papers WHERE id = ?", (paper_id,)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Paper not found")
+
+    active_space_id = _get_active_space_id_from_conn(conn)
+    if str(row["space_id"]) != active_space_id:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    return row
 
 
 def _compute_sha256(file_path: Path) -> str:
@@ -214,11 +231,7 @@ async def get_paper(paper_id: str) -> dict[str, Any]:
     """Get a single paper by ID."""
     conn = get_connection()
     try:
-        row = conn.execute(
-            "SELECT * FROM papers WHERE id = ?", (paper_id,)
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Paper not found")
+        row = _get_paper_in_active_space(conn, paper_id)
         return _paper_row_to_dict(row)
     finally:
         conn.close()
@@ -335,11 +348,8 @@ async def update_paper(
     """Update paper metadata fields."""
     conn = get_connection()
     try:
-        row = conn.execute(
-            "SELECT * FROM papers WHERE id = ?", (paper_id,)
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Paper not found")
+        row = _get_paper_in_active_space(conn, paper_id)
+        space_id = str(row["space_id"])
 
         field_map: dict[str, str | int | None] = {
             "title": title,
@@ -365,8 +375,9 @@ async def update_paper(
 
         if updates:
             params.append(paper_id)
+            params.append(space_id)
             conn.execute(
-                f"UPDATE papers SET {', '.join(updates)} WHERE id = ?",
+                f"UPDATE papers SET {', '.join(updates)} WHERE id = ? AND space_id = ?",
                 params,
             )
             conn.commit()
@@ -380,25 +391,22 @@ async def update_paper(
 async def parse_paper(paper_id: str) -> dict[str, Any]:
     """Trigger PDF parsing for a paper."""
     conn = get_connection()
+    space_id: str | None = None
     try:
-        row = conn.execute(
-            "SELECT * FROM papers WHERE id = ?", (paper_id,)
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Paper not found")
+        row = _get_paper_in_active_space(conn, paper_id)
+        space_id = str(row["space_id"])
 
         file_path = Path(row["file_path"])
         if not file_path.exists():
             conn.execute(
-                "UPDATE papers SET parse_status = 'error' WHERE id = ?",
-                (paper_id,),
+                "UPDATE papers SET parse_status = 'error' WHERE id = ? AND space_id = ?",
+                (paper_id, space_id),
             )
             conn.commit()
             raise HTTPException(
                 status_code=400, detail="PDF file not found on disk"
             )
 
-        space_id = str(row["space_id"])
         parse_run_id, backend = _queue_parse_for_paper(
             conn,
             paper_id=paper_id,
@@ -420,11 +428,12 @@ async def parse_paper(paper_id: str) -> dict[str, Any]:
         print(f"Error parsing paper {paper_id}:")
         traceback.print_exc()
         conn.rollback()
-        conn.execute(
-            "UPDATE papers SET parse_status = 'error' WHERE id = ?",
-            (paper_id,),
-        )
-        conn.commit()
+        if space_id is not None:
+            conn.execute(
+                "UPDATE papers SET parse_status = 'error' WHERE id = ? AND space_id = ?",
+                (paper_id, space_id),
+            )
+            conn.commit()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
@@ -435,15 +444,15 @@ async def list_passages(paper_id: str) -> list[dict[str, Any]]:
     """List all passages for a paper."""
     conn = get_connection()
     try:
-        row = conn.execute(
-            "SELECT id FROM papers WHERE id = ?", (paper_id,)
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Paper not found")
+        row = _get_paper_in_active_space(conn, paper_id)
+        space_id = str(row["space_id"])
 
         rows = conn.execute(
-            "SELECT * FROM passages WHERE paper_id = ? ORDER BY page_number, paragraph_index",
-            (paper_id,),
+            """SELECT *
+               FROM passages
+               WHERE paper_id = ? AND space_id = ?
+               ORDER BY page_number, paragraph_index""",
+            (paper_id, space_id),
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -455,22 +464,34 @@ async def delete_paper(paper_id: str) -> dict[str, str]:
     """Delete a paper and all associated data."""
     conn = get_connection()
     try:
-        row = conn.execute(
-            "SELECT file_path FROM papers WHERE id = ?", (paper_id,)
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Paper not found")
+        row = _get_paper_in_active_space(conn, paper_id)
 
         file_path = Path(row["file_path"])
+        space_id = str(row["space_id"])
 
         # 1. Clear linked data
-        conn.execute("DELETE FROM knowledge_cards WHERE paper_id = ?", (paper_id,))
-        conn.execute("DELETE FROM notes WHERE paper_id = ?", (paper_id,))
-        conn.execute(f"DELETE FROM {FTS_TABLE} WHERE paper_id = ?", (paper_id,))
-        conn.execute("DELETE FROM passages WHERE paper_id = ?", (paper_id,))
+        conn.execute(
+            "DELETE FROM knowledge_cards WHERE paper_id = ? AND space_id = ?",
+            (paper_id, space_id),
+        )
+        conn.execute(
+            "DELETE FROM notes WHERE paper_id = ? AND space_id = ?",
+            (paper_id, space_id),
+        )
+        conn.execute(
+            f"DELETE FROM {FTS_TABLE} WHERE paper_id = ? AND space_id = ?",
+            (paper_id, space_id),
+        )
+        conn.execute(
+            "DELETE FROM passages WHERE paper_id = ? AND space_id = ?",
+            (paper_id, space_id),
+        )
         
         # 2. Delete the paper record
-        conn.execute("DELETE FROM papers WHERE id = ?", (paper_id,))
+        conn.execute(
+            "DELETE FROM papers WHERE id = ? AND space_id = ?",
+            (paper_id, space_id),
+        )
         conn.commit()
 
         # 3. Delete the file from disk

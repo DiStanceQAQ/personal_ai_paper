@@ -16,6 +16,22 @@ CARD_TYPES = [
 ]
 
 
+def _get_active_space_id_from_conn(conn: Any) -> str:
+    row = conn.execute(
+        """SELECT s.id
+           FROM spaces s
+           JOIN app_state a ON a.value = s.id
+           WHERE a.key = ? AND s.status = 'active'""",
+        ("active_space",),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No active space selected.",
+        )
+    return str(row["id"])
+
+
 def _card_row_to_dict(row: Any) -> dict[str, Any]:
     return dict(row)
 
@@ -23,21 +39,22 @@ def _card_row_to_dict(row: Any) -> dict[str, Any]:
 def _get_active_space_id() -> str:
     conn = get_connection()
     try:
-        row = conn.execute(
-            """SELECT s.id
-               FROM spaces s
-               JOIN app_state a ON a.value = s.id
-               WHERE a.key = ? AND s.status = 'active'""",
-            ("active_space",),
-        ).fetchone()
-        if row is None:
-            raise HTTPException(
-                status_code=400,
-                detail="No active space selected.",
-            )
-        return str(row["id"])
+        return _get_active_space_id_from_conn(conn)
     finally:
         conn.close()
+
+
+def _get_card_in_active_space(conn: Any, card_id: str) -> Any:
+    row = conn.execute(
+        "SELECT * FROM knowledge_cards WHERE id = ?", (card_id,)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    active_space_id = _get_active_space_id_from_conn(conn)
+    if str(row["space_id"]) != active_space_id:
+        raise HTTPException(status_code=404, detail="Card not found")
+    return row
 
 
 @router.post("")
@@ -111,14 +128,12 @@ async def create_card(
 async def list_cards(
     paper_id: str | None = None,
     card_type: str | None = None,
-    space_id_override: str | None = None,
 ) -> list[dict[str, Any]]:
     """List knowledge cards in the active space, optionally filtered."""
-    if space_id_override is None:
-        space_id_override = _get_active_space_id()
+    space_id = _get_active_space_id()
 
     query = "SELECT * FROM knowledge_cards WHERE space_id = ?"
-    params: list[Any] = [space_id_override]
+    params: list[Any] = [space_id]
 
     if paper_id:
         query += " AND paper_id = ?"
@@ -142,11 +157,7 @@ async def get_card(card_id: str) -> dict[str, Any]:
     """Get a single knowledge card by ID."""
     conn = get_connection()
     try:
-        row = conn.execute(
-            "SELECT * FROM knowledge_cards WHERE id = ?", (card_id,)
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Card not found")
+        row = _get_card_in_active_space(conn, card_id)
         return _card_row_to_dict(row)
     finally:
         conn.close()
@@ -165,11 +176,8 @@ async def update_card(
 
     conn = get_connection()
     try:
-        row = conn.execute(
-            "SELECT * FROM knowledge_cards WHERE id = ?", (card_id,)
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Card not found")
+        row = _get_card_in_active_space(conn, card_id)
+        space_id = str(row["space_id"])
 
         updates: list[str] = []
         params: list[Any] = []
@@ -189,8 +197,9 @@ async def update_card(
             updates.append("created_by = 'user'")
             updates.append("updated_at = datetime('now')")
             params.append(card_id)
+            params.append(space_id)
             conn.execute(
-                f"UPDATE knowledge_cards SET {', '.join(updates)} WHERE id = ?",
+                f"UPDATE knowledge_cards SET {', '.join(updates)} WHERE id = ? AND space_id = ?",
                 params,
             )
             conn.commit()
@@ -205,13 +214,13 @@ async def delete_card(card_id: str) -> dict[str, str]:
     """Delete a knowledge card."""
     conn = get_connection()
     try:
-        row = conn.execute(
-            "SELECT id FROM knowledge_cards WHERE id = ?", (card_id,)
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Card not found")
+        row = _get_card_in_active_space(conn, card_id)
+        space_id = str(row["space_id"])
 
-        conn.execute("DELETE FROM knowledge_cards WHERE id = ?", (card_id,))
+        conn.execute(
+            "DELETE FROM knowledge_cards WHERE id = ? AND space_id = ?",
+            (card_id, space_id),
+        )
         conn.commit()
         return {"status": "deleted", "card_id": card_id}
     finally:

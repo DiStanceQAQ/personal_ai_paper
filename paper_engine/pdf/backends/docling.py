@@ -75,7 +75,7 @@ class DoclingBackend:
     name = _BACKEND_NAME
 
     def is_available(self) -> bool:
-        """Return whether Docling appears importable without importing it."""
+        """Return whether Docling and its parser resources are usable."""
         return importlib.util.find_spec("docling") is not None
 
     def parse(

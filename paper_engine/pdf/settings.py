@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from typing import Literal, TypedDict, cast
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, Field
@@ -86,6 +87,7 @@ def parser_availability() -> dict[str, dict[str, object]]:
         "docling": {
             "available": docling_available,
             "install_hint": "" if docling_available else 'pip install -e ".[pdf-advanced]"',
+            "detail": "" if docling_available else "Docling or docling-parse resources are unavailable.",
         },
         "mineru": {
             "configured": False,
@@ -107,6 +109,11 @@ def test_mineru_connection(
             "status": "missing_credentials",
             "detail": "MinerU Base URL and API Key are required",
         }
+    if _uses_official_precise_api(base_url):
+        return {
+            "status": "ok",
+            "detail": "MinerU precise API credentials are configured; health check skipped.",
+        }
 
     client = http_client or httpx.Client(timeout=10)
     close_client = http_client is None
@@ -126,3 +133,7 @@ def test_mineru_connection(
     finally:
         if close_client:
             client.close()
+
+
+def _uses_official_precise_api(base_url: str) -> bool:
+    return urlsplit(base_url).path.rstrip("/") == "/api/v4/extract/task"

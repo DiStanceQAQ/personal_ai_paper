@@ -97,3 +97,20 @@ def test_mineru_connection_uses_health_endpoint() -> None:
     )
 
     assert result["status"] == "ok"
+
+
+def test_mineru_precise_api_skips_health_endpoint() -> None:
+    conn = _settings_conn()
+    set_setting(conn, "mineru_base_url", "https://mineru.net/api/v4/extract/task")
+    set_setting(conn, "mineru_api_key", "secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"unexpected health request to {request.url}")
+
+    result = check_mineru_connection(
+        conn,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert result["status"] == "ok"
+    assert "health check skipped" in result["detail"]

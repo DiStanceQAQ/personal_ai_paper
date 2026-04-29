@@ -40,6 +40,7 @@ export interface ParserAvailability {
   docling: {
     available: boolean;
     install_hint: string;
+    detail?: string;
   };
   mineru: {
     configured: boolean;

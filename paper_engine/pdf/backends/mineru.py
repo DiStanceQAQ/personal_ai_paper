@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from io import BytesIO
 import json
 from pathlib import Path
+import time
 from typing import Any, Mapping, cast
+from urllib.parse import urlsplit
+import zipfile
 
 import httpx
 
@@ -32,11 +36,15 @@ class MinerUBackend:
         api_key: str,
         parse_path: str = "/file_parse",
         http_client: httpx.Client | None = None,
+        poll_interval_seconds: float = 2.0,
+        poll_timeout_seconds: float = 300.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.parse_path = parse_path if parse_path.startswith("/") else f"/{parse_path}"
         self._client = http_client
+        self.poll_interval_seconds = poll_interval_seconds
+        self.poll_timeout_seconds = poll_timeout_seconds
 
     def is_available(self) -> bool:
         """Return whether the backend has enough configuration to run."""
@@ -56,24 +64,17 @@ class MinerUBackend:
                 "mineru_base_url or mineru_api_key is not configured",
             )
 
-        client = self._client or httpx.Client(timeout=120)
+        client = self._client or httpx.Client(timeout=120, trust_env=False)
         close_client = self._client is None
         try:
-            with file_path.open("rb") as handle:
-                response = client.post(
-                    f"{self.base_url}{self.parse_path}",
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                    files={"files": (file_path.name, handle, "application/pdf")},
-                    data={
-                        "return_md": "true",
-                        "return_content_list": "true",
-                        "return_images": "true",
-                        "table_enable": "true",
-                        "formula_enable": "true",
-                    },
+            if self._uses_official_precise_api():
+                payload = self._parse_via_official_precise_api(
+                    client,
+                    file_path=file_path,
+                    data_id=paper_id,
                 )
-            response.raise_for_status()
-            payload = response.json()
+            else:
+                payload = self._parse_via_direct_upload_api(client, file_path=file_path)
             return _payload_to_document(
                 payload,
                 paper_id,
@@ -87,6 +88,125 @@ class MinerUBackend:
         finally:
             if close_client:
                 client.close()
+
+    def _parse_via_direct_upload_api(
+        self,
+        client: httpx.Client,
+        *,
+        file_path: Path,
+    ) -> Mapping[str, Any]:
+        with file_path.open("rb") as handle:
+            response = client.post(
+                f"{self.base_url}{self.parse_path}",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                files={"files": (file_path.name, handle, "application/pdf")},
+                data={
+                    "return_md": "true",
+                    "return_content_list": "true",
+                    "return_images": "true",
+                    "table_enable": "true",
+                    "formula_enable": "true",
+                },
+            )
+        response.raise_for_status()
+        return cast(Mapping[str, Any], response.json())
+
+    def _parse_via_official_precise_api(
+        self,
+        client: httpx.Client,
+        *,
+        file_path: Path,
+        data_id: str,
+    ) -> Mapping[str, Any]:
+        upload_response = client.post(
+            f"{self._official_api_origin()}/api/v4/file-urls/batch",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={
+                "files": [
+                    {
+                        "name": file_path.name,
+                        "data_id": data_id,
+                    }
+                ]
+            },
+        )
+        upload_data = _official_response_data(upload_response)
+        batch_id = str(upload_data.get("batch_id") or "")
+        file_urls = upload_data.get("file_urls")
+        if not batch_id or not isinstance(file_urls, list) or not file_urls:
+            raise RuntimeError("mineru precise API did not return upload URLs")
+
+        with file_path.open("rb") as handle:
+            upload_file_response = client.put(
+                str(file_urls[0]),
+                content=handle.read(),
+            )
+        upload_file_response.raise_for_status()
+
+        result = self._poll_official_precise_batch_result(
+            client,
+            batch_id=batch_id,
+            data_id=data_id,
+            file_name=file_path.name,
+        )
+        full_zip_url = str(result.get("full_zip_url") or "")
+        if not full_zip_url:
+            raise RuntimeError("mineru precise API result did not include full_zip_url")
+
+        payload = _payload_from_precise_result_zip(
+            client,
+            full_zip_url,
+        )
+        payload["backend"] = "precise"
+        payload["version"] = "api/v4"
+        return payload
+
+    def _poll_official_precise_batch_result(
+        self,
+        client: httpx.Client,
+        *,
+        batch_id: str,
+        data_id: str,
+        file_name: str,
+    ) -> Mapping[str, Any]:
+        deadline = time.monotonic() + self.poll_timeout_seconds
+        last_state = "queued"
+
+        while time.monotonic() < deadline:
+            response = client.get(
+                f"{self._official_api_origin()}/api/v4/extract-results/batch/{batch_id}",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+            )
+            data = _official_response_data(response)
+            extract_results = data.get("extract_result")
+            if not isinstance(extract_results, list) or not extract_results:
+                raise RuntimeError("mineru precise API did not return extract_result")
+
+            matched = _match_precise_extract_result(
+                extract_results,
+                data_id=data_id,
+                file_name=file_name,
+            )
+            state = str(matched.get("state") or "").lower()
+            last_state = state or last_state
+            if state in {"done", "completed", "success"}:
+                return matched
+            if state in {"failed", "error"}:
+                error_message = str(matched.get("err_msg") or matched.get("message") or state)
+                raise RuntimeError(error_message)
+
+            time.sleep(self.poll_interval_seconds)
+
+        raise TimeoutError(
+            f"timed out waiting for MinerU batch {batch_id} to complete (last_state={last_state})"
+        )
+
+    def _uses_official_precise_api(self) -> bool:
+        return urlsplit(self.base_url).path.rstrip("/") == "/api/v4/extract/task"
+
+    def _official_api_origin(self) -> str:
+        parsed = urlsplit(self.base_url)
+        return f"{parsed.scheme}://{parsed.netloc}"
 
 
 def _payload_to_document(
@@ -216,3 +336,59 @@ def _markdown_table_cells(text: str) -> list[list[str]]:
         if cells and not all(set(cell) <= {"-", ":"} for cell in cells):
             rows.append(cells)
     return rows
+
+
+def _official_response_data(response: httpx.Response) -> Mapping[str, Any]:
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise RuntimeError("mineru precise API returned a non-object payload")
+    if int(payload.get("code", 0) or 0) != 0:
+        raise RuntimeError(str(payload.get("msg") or "mineru precise API request failed"))
+    data = payload.get("data")
+    if not isinstance(data, Mapping):
+        raise RuntimeError("mineru precise API response is missing data")
+    return cast(Mapping[str, Any], data)
+
+
+def _match_precise_extract_result(
+    extract_results: list[Any],
+    *,
+    data_id: str,
+    file_name: str,
+) -> Mapping[str, Any]:
+    for item in extract_results:
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("data_id") or "") == data_id:
+            return cast(Mapping[str, Any], item)
+    for item in extract_results:
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("file_name") or "") == file_name:
+            return cast(Mapping[str, Any], item)
+    first = extract_results[0]
+    if not isinstance(first, Mapping):
+        raise RuntimeError("mineru precise API extract_result payload is invalid")
+    return cast(Mapping[str, Any], first)
+
+
+def _payload_from_precise_result_zip(
+    client: httpx.Client,
+    full_zip_url: str,
+) -> dict[str, Any]:
+    response = client.get(full_zip_url)
+    response.raise_for_status()
+
+    payload: dict[str, Any] = {}
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        for name in archive.namelist():
+            lower_name = name.lower()
+            if lower_name.endswith("content_list.json"):
+                payload["content_list"] = json.loads(archive.read(name).decode("utf-8"))
+            elif lower_name.endswith("full.md"):
+                payload["md_content"] = archive.read(name).decode("utf-8")
+
+    if "content_list" not in payload and "md_content" not in payload:
+        raise RuntimeError("mineru precise API ZIP did not contain content_list.json or full.md")
+    return payload

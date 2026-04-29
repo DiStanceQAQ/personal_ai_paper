@@ -21,6 +21,7 @@ from paper_engine.retrieval.lexical import FTS_TABLE
 
 __all__ = [
     "PassageEmbeddingError",
+    "delete_parse_run_outputs",
     "embed_passages_for_parse_run",
     "persist_parse_result",
 ]
@@ -149,6 +150,31 @@ def _load_card_sources_for_old_passages(
         for row in rows
         if row["source_passage_id"] in old_passage_ids
     }
+
+
+def _load_structured_card_sources_for_old_passages(
+    conn: sqlite3.Connection,
+    paper_id: str,
+    space_id: str,
+    old_passage_ids: set[str],
+) -> list[dict[str, Any]]:
+    if not old_passage_ids:
+        return []
+
+    placeholders = ",".join("?" for _ in old_passage_ids)
+    rows = conn.execute(
+        f"""
+        SELECT card_id, passage_id, paper_id, space_id, analysis_run_id,
+               evidence_quote, confidence, metadata_json
+        FROM knowledge_card_sources
+        WHERE paper_id = ?
+          AND space_id = ?
+          AND passage_id IN ({placeholders})
+        ORDER BY created_at, id
+        """,
+        (paper_id, space_id, *old_passage_ids),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def _validate_existing_db_conflicts(
@@ -531,18 +557,91 @@ def embed_passages_for_parse_run(
     return []
 
 
+def _delete_fts_for_passages(
+    conn: sqlite3.Connection,
+    passage_ids: Sequence[str],
+) -> None:
+    if not passage_ids:
+        return
+    conn.executemany(
+        f"DELETE FROM {FTS_TABLE} WHERE passage_id = ?",
+        [(passage_id,) for passage_id in passage_ids],
+    )
+
+
+def _parse_run_ids_for_generated_outputs(
+    conn: sqlite3.Connection,
+    paper_id: str,
+    space_id: str,
+) -> list[str]:
+    rows = conn.execute(
+        "SELECT id FROM parse_runs WHERE paper_id = ? AND space_id = ?",
+        (paper_id, space_id),
+    ).fetchall()
+    return [str(row["id"]) for row in rows]
+
+
+def _delete_structured_outputs_for_parse_runs(
+    conn: sqlite3.Connection,
+    parse_run_ids: Sequence[str],
+) -> None:
+    if not parse_run_ids:
+        return
+    placeholders = ",".join("?" for _ in parse_run_ids)
+    params = tuple(parse_run_ids)
+    conn.execute(
+        f"DELETE FROM document_assets WHERE parse_run_id IN ({placeholders})",
+        params,
+    )
+    conn.execute(
+        f"DELETE FROM document_tables WHERE parse_run_id IN ({placeholders})",
+        params,
+    )
+    conn.execute(
+        f"DELETE FROM document_elements WHERE parse_run_id IN ({placeholders})",
+        params,
+    )
+
+
+def delete_parse_run_outputs(
+    conn: sqlite3.Connection,
+    *,
+    paper_id: str,
+    space_id: str,
+    parse_run_id: str,
+) -> None:
+    """Delete persisted parse artifacts while keeping the parse_runs row."""
+    rows = conn.execute(
+        """
+        SELECT id
+        FROM passages
+        WHERE paper_id = ?
+          AND space_id = ?
+          AND parse_run_id = ?
+        """,
+        (paper_id, space_id, parse_run_id),
+    ).fetchall()
+    passage_ids = [str(row["id"]) for row in rows]
+    _delete_fts_for_passages(conn, passage_ids)
+    conn.execute(
+        """
+        DELETE FROM passages
+        WHERE paper_id = ?
+          AND space_id = ?
+          AND parse_run_id = ?
+        """,
+        (paper_id, space_id, parse_run_id),
+    )
+    _delete_structured_outputs_for_parse_runs(conn, [parse_run_id])
+
+
 def _delete_old_generated_rows(
     conn: sqlite3.Connection,
     paper_id: str,
     space_id: str,
     old_passage_ids: Sequence[str],
-    preserve_parse_run_id: str | None = None,
 ) -> None:
-    if old_passage_ids:
-        conn.executemany(
-            f"DELETE FROM {FTS_TABLE} WHERE passage_id = ?",
-            [(passage_id,) for passage_id in old_passage_ids],
-        )
+    _delete_fts_for_passages(conn, old_passage_ids)
     conn.execute(
         """
         DELETE FROM passages
@@ -552,21 +651,12 @@ def _delete_old_generated_rows(
         """,
         (paper_id, space_id),
     )
-    if preserve_parse_run_id is None:
-        conn.execute(
-            "DELETE FROM parse_runs WHERE paper_id = ? AND space_id = ?",
-            (paper_id, space_id),
-        )
-    else:
-        conn.execute(
-            """
-            DELETE FROM parse_runs
-            WHERE paper_id = ?
-              AND space_id = ?
-              AND id != ?
-            """,
-            (paper_id, space_id, preserve_parse_run_id),
-        )
+    old_parse_run_ids = _parse_run_ids_for_generated_outputs(
+        conn,
+        paper_id,
+        space_id,
+    )
+    _delete_structured_outputs_for_parse_runs(conn, old_parse_run_ids)
 
 
 def _remap_card_sources(
@@ -588,6 +678,100 @@ def _remap_card_sources(
             WHERE id = ?
             """,
             (new_source_id, card_id),
+        )
+
+
+def _remap_structured_card_sources(
+    conn: sqlite3.Connection,
+    old_passage_hashes: dict[str, str | None],
+    new_hash_to_passage_id: dict[str, str],
+    source_rows: Sequence[dict[str, Any]],
+) -> None:
+    for row in source_rows:
+        old_passage_id = str(row["passage_id"])
+        old_hash = old_passage_hashes.get(old_passage_id)
+        new_passage_id = (
+            new_hash_to_passage_id.get(old_hash) if old_hash is not None else None
+        )
+        if new_passage_id is None:
+            continue
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO knowledge_card_sources (
+                id, card_id, passage_id, paper_id, space_id, analysis_run_id,
+                evidence_quote, confidence, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"card-source-{uuid.uuid4()}",
+                row["card_id"],
+                new_passage_id,
+                row["paper_id"],
+                row["space_id"],
+                row["analysis_run_id"],
+                row["evidence_quote"],
+                row["confidence"],
+                row["metadata_json"],
+            ),
+        )
+
+
+def _remap_card_evidence_json(
+    conn: sqlite3.Connection,
+    *,
+    paper_id: str,
+    space_id: str,
+    old_passage_hashes: dict[str, str | None],
+    new_hash_to_passage_id: dict[str, str],
+) -> None:
+    rows = conn.execute(
+        """
+        SELECT id, evidence_json
+        FROM knowledge_cards
+        WHERE paper_id = ?
+          AND space_id = ?
+          AND evidence_json IS NOT NULL
+          AND evidence_json != ''
+        """,
+        (paper_id, space_id),
+    ).fetchall()
+    for row in rows:
+        try:
+            evidence = json.loads(str(row["evidence_json"] or "{}"))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(evidence, dict):
+            continue
+        source_ids = evidence.get("source_passage_ids")
+        if not isinstance(source_ids, list):
+            continue
+        remapped: list[str] = []
+        changed = False
+        for source_id_value in source_ids:
+            source_id = str(source_id_value)
+            old_hash = old_passage_hashes.get(source_id)
+            new_source_id = (
+                new_hash_to_passage_id.get(old_hash) if old_hash is not None else None
+            )
+            if new_source_id is not None:
+                remapped.append(new_source_id)
+                changed = True
+            elif source_id in old_passage_hashes:
+                changed = True
+            else:
+                remapped.append(source_id)
+        if not changed:
+            continue
+        evidence["source_passage_ids"] = list(dict.fromkeys(remapped))
+        conn.execute(
+            """
+            UPDATE knowledge_cards
+            SET evidence_json = ?,
+                updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (_json(evidence), row["id"]),
         )
 
 
@@ -627,6 +811,12 @@ def persist_parse_result(
         card_id_to_old_source_id = _load_card_sources_for_old_passages(
             conn, paper_id, space_id, old_generated_passage_ids
         )
+        structured_source_rows = _load_structured_card_sources_for_old_passages(
+            conn,
+            paper_id,
+            space_id,
+            old_generated_passage_ids,
+        )
 
         # Temporarily drop card passage FKs so generated passages can be replaced.
         if old_passage_hashes:
@@ -653,7 +843,6 @@ def persist_parse_result(
             paper_id,
             space_id,
             list(old_passage_hashes),
-            preserve_parse_run_id=parse_run_id,
         )
         if parse_run_id is None:
             _insert_parse_run(
@@ -713,6 +902,19 @@ def persist_parse_result(
             old_passage_hashes,
             new_hash_to_passage_id,
             card_id_to_old_source_id,
+        )
+        _remap_structured_card_sources(
+            conn,
+            old_passage_hashes,
+            new_hash_to_passage_id,
+            structured_source_rows,
+        )
+        _remap_card_evidence_json(
+            conn,
+            paper_id=paper_id,
+            space_id=space_id,
+            old_passage_hashes=old_passage_hashes,
+            new_hash_to_passage_id=new_hash_to_passage_id,
         )
         conn.execute(f"RELEASE SAVEPOINT {savepoint}")
     except Exception:

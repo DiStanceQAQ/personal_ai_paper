@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 import traceback
 import time
 from collections.abc import Callable
@@ -21,10 +22,11 @@ from paper_engine.pdf.jobs import (
     claim_next_parse_run,
     complete_parse_run,
     fail_parse_run,
-    heartbeat_parse_run,
+    heartbeat_parse_run_for_worker,
 )
 from paper_engine.pdf.persistence import (
     PassageEmbeddingError,
+    delete_parse_run_outputs,
     embed_passages_for_parse_run as default_embed_passages_for_parse_run,
 )
 from paper_engine.pdf.persistence import persist_parse_result as default_persist_parse_result
@@ -88,6 +90,7 @@ class ParseWorker:
             ..., list[str]
         ] = default_embed_passages_for_parse_run,
         grobid_enricher: Callable[[Path], dict[str, Any] | None] | None = None,
+        heartbeat_interval_seconds: float | None = None,
         close_connection: bool = True,
     ) -> None:
         self.conn_factory = conn_factory
@@ -98,6 +101,11 @@ class ParseWorker:
         self.persist_parse_result = persist_parse_result
         self.embed_passages_for_parse_run = embed_passages_for_parse_run
         self.grobid_enricher = grobid_enricher or default_grobid_enricher
+        self.heartbeat_interval_seconds = (
+            heartbeat_interval_seconds
+            if heartbeat_interval_seconds is not None
+            else float(os.getenv("PAPER_ENGINE_PARSE_HEARTBEAT_SECONDS", "30"))
+        )
         self.close_connection = close_connection
 
     def run_once(self) -> bool:
@@ -107,7 +115,16 @@ class ParseWorker:
             job = claim_next_parse_run(conn, worker_id=self.worker_id)
             if job is None:
                 return False
+            heartbeat = _ParseRunHeartbeat(
+                conn_factory=self.conn_factory,
+                parse_run_id=job.id,
+                worker_id=self.worker_id,
+                interval_seconds=self.heartbeat_interval_seconds,
+                close_connection=self.close_connection,
+            )
+            persisted_parse_run_id: str | None = None
             try:
+                heartbeat.start()
                 file_path = Path(job.file_path)
                 if not file_path.exists():
                     raise FileNotFoundError(f"PDF file not found on disk: {file_path}")
@@ -124,20 +141,31 @@ class ParseWorker:
                     document = backend.parse(file_path, job.paper_id, job.space_id, quality)
                     document = self._merge_grobid(file_path, document, grobid_future)
 
-                heartbeat_parse_run(conn, job.id)
+                heartbeat_parse_run_for_worker(
+                    conn,
+                    job.id,
+                    worker_id=self.worker_id,
+                )
                 passages = self.chunk_parse_document(document)
                 if not passages:
                     raise RuntimeError("parsed document produced no passages")
 
                 conn.execute("BEGIN")
-                storage_run_id = self.persist_parse_result(
-                    conn,
-                    job.paper_id,
-                    job.space_id,
-                    document,
-                    passages,
-                    parse_run_id=job.id,
-                )
+                try:
+                    storage_run_id = self.persist_parse_result(
+                        conn,
+                        job.paper_id,
+                        job.space_id,
+                        document,
+                        passages,
+                        parse_run_id=job.id,
+                    )
+                    conn.commit()
+                    persisted_parse_run_id = storage_run_id
+                except Exception:
+                    conn.rollback()
+                    raise
+
                 embedding_warnings = self.embed_passages_for_parse_run(
                     conn,
                     storage_run_id,
@@ -146,21 +174,35 @@ class ParseWorker:
                     conn,
                     job.id,
                     paper_id=job.paper_id,
+                    space_id=job.space_id,
+                    worker_id=self.worker_id,
                     warnings=[*document.quality.warnings, *embedding_warnings],
                 )
                 return True
             except Exception as exc:
                 traceback.print_exc()
                 conn.rollback()
+                if persisted_parse_run_id is not None:
+                    delete_parse_run_outputs(
+                        conn,
+                        paper_id=job.paper_id,
+                        space_id=job.space_id,
+                        parse_run_id=persisted_parse_run_id,
+                    )
+                    conn.commit()
                 error_detail = _format_exception_details(exc)
                 fail_parse_run(
                     conn,
                     job.id,
                     paper_id=job.paper_id,
+                    space_id=job.space_id,
+                    worker_id=self.worker_id,
                     error=error_detail,
                     warnings=[error_detail],
                 )
                 return True
+            finally:
+                heartbeat.stop()
         finally:
             if self.close_connection:
                 conn.close()
@@ -221,6 +263,58 @@ def default_grobid_enricher(file_path: Path) -> dict[str, Any] | None:
         }
     finally:
         client.close()
+
+
+class _ParseRunHeartbeat:
+    """Refresh a claimed parse run from a separate short-lived connection."""
+
+    def __init__(
+        self,
+        *,
+        conn_factory: Callable[[], sqlite3.Connection],
+        parse_run_id: str,
+        worker_id: str,
+        interval_seconds: float,
+        close_connection: bool,
+    ) -> None:
+        self._conn_factory = conn_factory
+        self._parse_run_id = parse_run_id
+        self._worker_id = worker_id
+        self._interval_seconds = max(interval_seconds, 0.1)
+        self._close_connection = close_connection
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"parse-heartbeat-{self._worker_id}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval_seconds):
+            conn = self._conn_factory()
+            try:
+                heartbeat_parse_run_for_worker(
+                    conn,
+                    self._parse_run_id,
+                    worker_id=self._worker_id,
+                )
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            finally:
+                if self._close_connection:
+                    conn.close()
 
 
 def run_worker_loop(

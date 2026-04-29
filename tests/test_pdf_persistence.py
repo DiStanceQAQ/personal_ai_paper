@@ -395,9 +395,10 @@ def test_reparse_replaces_generated_rows_and_remaps_card_sources_by_hash() -> No
     conn.execute(
         """
         INSERT INTO knowledge_cards (
-            id, space_id, paper_id, source_passage_id, card_type, summary, updated_at
+            id, space_id, paper_id, source_passage_id, card_type, summary,
+            evidence_json, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             "card-h1",
@@ -406,6 +407,16 @@ def test_reparse_replaces_generated_rows_and_remaps_card_sources_by_hash() -> No
             _stored_id(first_run_id, "old-passage-1"),
             "Evidence",
             "kept",
+            json.dumps(
+                {
+                    "source_passage_ids": [
+                        _stored_id(first_run_id, "old-passage-1"),
+                        _stored_id(first_run_id, "old-passage-2"),
+                        "manual-passage",
+                    ],
+                    "reasoning_summary": "old ids should be remapped",
+                }
+            ),
             "2000-01-01 00:00:00",
             "card-h2",
             "space-1",
@@ -413,7 +424,37 @@ def test_reparse_replaces_generated_rows_and_remaps_card_sources_by_hash() -> No
             _stored_id(first_run_id, "old-passage-2"),
             "Evidence",
             "nulled",
+            "{}",
             "2000-01-01 00:00:00",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO knowledge_card_sources (
+            id, card_id, passage_id, paper_id, space_id, analysis_run_id,
+            evidence_quote, confidence, metadata_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "source-h1",
+            "card-h1",
+            _stored_id(first_run_id, "old-passage-1"),
+            "paper-1",
+            "space-1",
+            None,
+            "quote h1",
+            0.9,
+            '{"source":"old-h1"}',
+            "source-h2",
+            "card-h1",
+            _stored_id(first_run_id, "old-passage-2"),
+            "paper-1",
+            "space-1",
+            None,
+            "quote h2",
+            0.8,
+            '{"source":"old-h2"}',
         ),
     )
     conn.commit()
@@ -432,7 +473,15 @@ def test_reparse_replaces_generated_rows_and_remaps_card_sources_by_hash() -> No
     assert second_run_id != first_run_id
     assert conn.execute(
         "SELECT COUNT(*) FROM parse_runs WHERE id = ?", (first_run_id,)
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM document_elements WHERE parse_run_id = ?",
+        (first_run_id,),
     ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM document_elements WHERE parse_run_id = ?",
+        (second_run_id,),
+    ).fetchone()[0] == len(_document(suffix="new").elements)
     assert {row["id"] for row in conn.execute("SELECT id FROM passages")} == {
         _stored_id(second_run_id, "new-passage-1"),
         _stored_id(second_run_id, "new-passage-3"),
@@ -443,15 +492,40 @@ def test_reparse_replaces_generated_rows_and_remaps_card_sources_by_hash() -> No
     }
 
     cards = {
-        row["id"]: (row["source_passage_id"], row["updated_at"])
+        row["id"]: (
+            row["source_passage_id"],
+            row["updated_at"],
+            json.loads(row["evidence_json"]),
+        )
         for row in conn.execute(
-            "SELECT id, source_passage_id, updated_at FROM knowledge_cards"
+            "SELECT id, source_passage_id, updated_at, evidence_json FROM knowledge_cards"
         )
     }
     assert cards["card-h1"][0] == _stored_id(second_run_id, "new-passage-1")
     assert cards["card-h2"][0] is None
     assert cards["card-h1"][1] != "2000-01-01 00:00:00"
     assert cards["card-h2"][1] != "2000-01-01 00:00:00"
+    assert cards["card-h1"][2]["source_passage_ids"] == [
+        _stored_id(second_run_id, "new-passage-1"),
+        "manual-passage",
+    ]
+
+    source_rows = conn.execute(
+        """
+        SELECT card_id, passage_id, evidence_quote, confidence, metadata_json
+        FROM knowledge_card_sources
+        ORDER BY passage_id
+        """
+    ).fetchall()
+    assert [dict(row) for row in source_rows] == [
+        {
+            "card_id": "card-h1",
+            "passage_id": _stored_id(second_run_id, "new-passage-1"),
+            "evidence_quote": "quote h1",
+            "confidence": 0.9,
+            "metadata_json": '{"source":"old-h1"}',
+        }
+    ]
 
 
 def test_persist_parse_result_rolls_back_all_changes_on_insert_failure() -> None:

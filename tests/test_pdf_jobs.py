@@ -4,11 +4,14 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from paper_engine.pdf.jobs import (
     claim_next_parse_run,
     complete_parse_run,
     fail_parse_run,
     heartbeat_parse_run,
+    heartbeat_parse_run_for_worker,
     queue_parse_run,
     recover_stale_parse_runs,
 )
@@ -111,6 +114,135 @@ def test_heartbeat_updates_running_parse_run(tmp_path: Path) -> None:
     assert new_heartbeat > old_heartbeat
 
 
+def test_worker_heartbeat_does_not_refresh_stolen_parse_run(tmp_path: Path) -> None:
+    conn = _conn(tmp_path)
+    run_id = queue_parse_run(
+        conn,
+        paper_id="paper-1",
+        space_id="space-1",
+        parser_backend="docling",
+        parser_config={"parser_backend": "docling"},
+    )
+    assert claim_next_parse_run(conn, worker_id="worker-1") is not None
+    conn.execute(
+        "UPDATE parse_runs SET heartbeat_at = datetime('now', '-5 minutes') WHERE id = ?",
+        (run_id,),
+    )
+    conn.commit()
+    old_heartbeat = conn.execute(
+        "SELECT heartbeat_at FROM parse_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()["heartbeat_at"]
+
+    heartbeat_parse_run_for_worker(conn, run_id, worker_id="worker-2")
+
+    unchanged_heartbeat = conn.execute(
+        "SELECT heartbeat_at FROM parse_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()["heartbeat_at"]
+    assert unchanged_heartbeat == old_heartbeat
+
+    heartbeat_parse_run_for_worker(conn, run_id, worker_id="worker-1")
+    new_heartbeat = conn.execute(
+        "SELECT heartbeat_at FROM parse_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()["heartbeat_at"]
+    assert new_heartbeat > old_heartbeat
+
+
+def test_complete_parse_run_requires_current_worker_when_supplied(
+    tmp_path: Path,
+) -> None:
+    conn = _conn(tmp_path)
+    run_id = queue_parse_run(
+        conn,
+        paper_id="paper-1",
+        space_id="space-1",
+        parser_backend="docling",
+        parser_config={"parser_backend": "docling"},
+    )
+    assert claim_next_parse_run(conn, worker_id="worker-1") is not None
+
+    with pytest.raises(RuntimeError, match="no longer running"):
+        complete_parse_run(
+            conn,
+            run_id,
+            paper_id="paper-1",
+            space_id="space-1",
+            worker_id="worker-2",
+            warnings=[],
+        )
+
+    row = conn.execute(
+        "SELECT status, worker_id FROM parse_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    assert row["status"] == "running"
+    assert row["worker_id"] == "worker-1"
+
+    complete_parse_run(
+        conn,
+        run_id,
+        paper_id="paper-1",
+        space_id="space-1",
+        worker_id="worker-1",
+        warnings=["ok"],
+    )
+    row = conn.execute(
+        "SELECT status, worker_id FROM parse_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    assert row["status"] == "completed"
+    assert row["worker_id"] is None
+
+
+def test_fail_parse_run_ignores_non_owner_when_supplied(tmp_path: Path) -> None:
+    conn = _conn(tmp_path)
+    run_id = queue_parse_run(
+        conn,
+        paper_id="paper-1",
+        space_id="space-1",
+        parser_backend="docling",
+        parser_config={"parser_backend": "docling"},
+    )
+    assert claim_next_parse_run(conn, worker_id="worker-1") is not None
+
+    fail_parse_run(
+        conn,
+        run_id,
+        paper_id="paper-1",
+        space_id="space-1",
+        worker_id="worker-2",
+        error="wrong worker",
+        warnings=["wrong worker"],
+    )
+
+    row = conn.execute(
+        "SELECT status, worker_id, last_error FROM parse_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    assert row["status"] == "running"
+    assert row["worker_id"] == "worker-1"
+    assert row["last_error"] is None
+
+    fail_parse_run(
+        conn,
+        run_id,
+        paper_id="paper-1",
+        space_id="space-1",
+        worker_id="worker-1",
+        error="owned failure",
+        warnings=["owned failure"],
+    )
+    row = conn.execute(
+        "SELECT status, worker_id, last_error FROM parse_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    assert row["status"] == "failed"
+    assert row["worker_id"] is None
+    assert row["last_error"] == "owned failure"
+
+
 def test_recover_stale_parse_runs_requeues_stale_running_runs(
     tmp_path: Path,
 ) -> None:
@@ -143,6 +275,50 @@ def test_recover_stale_parse_runs_requeues_stale_running_runs(
     assert row["status"] == "queued"
     assert row["worker_id"] is None
     assert row["last_error"] == "worker_heartbeat_timeout"
+    paper = conn.execute(
+        "SELECT parse_status FROM papers WHERE id = 'paper-1'"
+    ).fetchone()
+    assert paper["parse_status"] == "pending"
+
+
+def test_recover_stale_parse_runs_recovers_missing_heartbeat(
+    tmp_path: Path,
+) -> None:
+    """Migrated running jobs without heartbeat state should not stay stuck."""
+    conn = _conn(tmp_path)
+    run_id = queue_parse_run(
+        conn,
+        paper_id="paper-1",
+        space_id="space-1",
+        parser_backend="docling",
+        parser_config={"parser_backend": "docling"},
+    )
+    assert claim_next_parse_run(conn, worker_id="worker-1") is not None
+    conn.execute(
+        "UPDATE parse_runs SET heartbeat_at = NULL WHERE id = ?",
+        (run_id,),
+    )
+    conn.commit()
+
+    recovered = recover_stale_parse_runs(
+        conn,
+        stale_after_seconds=600,
+        max_attempts=3,
+    )
+
+    assert recovered == 1
+    row = conn.execute(
+        "SELECT status, heartbeat_at, worker_id, last_error FROM parse_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    paper = conn.execute(
+        "SELECT parse_status FROM papers WHERE id = 'paper-1'"
+    ).fetchone()
+    assert row["status"] == "queued"
+    assert row["heartbeat_at"] is None
+    assert row["worker_id"] is None
+    assert row["last_error"] == "worker_heartbeat_timeout"
+    assert paper["parse_status"] == "pending"
 
 
 def test_recover_stale_parse_runs_fails_after_max_attempts(tmp_path: Path) -> None:
@@ -180,6 +356,10 @@ def test_recover_stale_parse_runs_fails_after_max_attempts(tmp_path: Path) -> No
     assert row["status"] == "failed"
     assert row["worker_id"] is None
     assert row["last_error"] == "worker_heartbeat_timeout"
+    paper = conn.execute(
+        "SELECT parse_status FROM papers WHERE id = 'paper-1'"
+    ).fetchone()
+    assert paper["parse_status"] == "error"
 
 
 def test_complete_and_fail_update_run_and_paper_status(tmp_path: Path) -> None:

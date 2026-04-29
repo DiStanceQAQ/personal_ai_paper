@@ -237,6 +237,23 @@ async def test_list_papers(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_papers_rejects_explicit_non_active_space(
+    client: AsyncClient,
+) -> None:
+    """Listing papers must not expose an inactive space through query params."""
+    active_space_id = await _create_and_activate_space(client, "Active Papers")
+    other_space_resp = await client.post("/api/spaces", json={"name": "Other Papers"})
+    assert other_space_resp.status_code == 200
+    other_space_id = other_space_resp.json()["id"]
+    assert other_space_id != active_space_id
+
+    resp = await client.get("/api/papers", params={"space_id": other_space_id})
+
+    assert resp.status_code == 403
+    assert "active space" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
 async def test_get_paper(client: AsyncClient) -> None:
     """Test getting a single paper by ID."""
     await _create_and_activate_space(client)
@@ -327,6 +344,28 @@ async def test_update_paper_metadata(client: AsyncClient) -> None:
     assert data["doi"] == "10.1234/test.1"
     assert data["abstract"] == "This is a test abstract."
     assert data["relation_to_idea"] == "supports"
+
+
+@pytest.mark.asyncio
+async def test_update_paper_rejects_invalid_relation_to_idea(
+    client: AsyncClient,
+) -> None:
+    """Paper relation values should be validated before hitting SQLite checks."""
+    await _create_and_activate_space(client)
+
+    resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+    paper_id = resp.json()["id"]
+
+    resp = await client.patch(
+        f"/api/papers/{paper_id}",
+        json={"relation_to_idea": "surprisingly-related"},
+    )
+
+    assert resp.status_code == 422
+    assert "relation_to_idea" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

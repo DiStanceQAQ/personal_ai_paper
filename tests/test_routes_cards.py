@@ -103,6 +103,46 @@ async def test_create_and_get_card(client: AsyncClient, setup_space_and_paper: t
 
 
 @pytest.mark.asyncio
+async def test_card_routes_reject_invalid_confidence(
+    client: AsyncClient,
+    setup_space_and_paper: tuple[str, str],
+) -> None:
+    """Card confidence should be clamped by API validation, not SQLite surprises."""
+    _space_id, paper_id = setup_space_and_paper
+
+    create_resp = await client.post(
+        "/api/cards",
+        json={
+            "paper_id": paper_id,
+            "card_type": "Method",
+            "summary": "Bad confidence",
+            "confidence": 1.5,
+        },
+    )
+    assert create_resp.status_code == 422
+    assert "confidence" in create_resp.json()["detail"]
+
+    valid_resp = await client.post(
+        "/api/cards",
+        json={
+            "paper_id": paper_id,
+            "card_type": "Method",
+            "summary": "Valid confidence",
+            "confidence": 0.5,
+        },
+    )
+    assert valid_resp.status_code == 200
+    card_id = valid_resp.json()["id"]
+
+    patch_resp = await client.patch(
+        f"/api/cards/{card_id}",
+        json={"confidence": -0.1},
+    )
+    assert patch_resp.status_code == 422
+    assert "confidence" in patch_resp.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_list_cards(client: AsyncClient, setup_space_and_paper: tuple[str, str]) -> None:
     space_id, paper_id = setup_space_and_paper
     await client.post("/api/cards", json={"paper_id": paper_id, "card_type": "Method", "summary": "M1"})

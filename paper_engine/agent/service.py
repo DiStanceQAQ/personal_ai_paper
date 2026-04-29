@@ -4,7 +4,6 @@ from typing import Any, Literal
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
 from paper_engine.storage.database import get_connection
-from paper_engine.agent.executor import analyze_paper_with_llm
 from paper_engine.pdf.settings import (
     ParserSettingsUpdate,
     get_parser_settings,
@@ -81,6 +80,21 @@ def _get_active_space() -> dict[str, Any] | None:
     finally:
         conn.close()
 
+
+def _get_active_space_id() -> str:
+    active_space = _get_active_space()
+    if active_space is None or active_space["status"] != "active":
+        raise HTTPException(status_code=400, detail="No active space selected.")
+    return str(active_space["id"])
+
+
+async def analyze_paper_with_llm(paper_id: str, space_id: str) -> dict[str, Any]:
+    """Run LLM analysis without importing the heavy executor during API startup."""
+    from paper_engine.agent.executor import analyze_paper_with_llm as run_analysis
+
+    return await run_analysis(paper_id, space_id)
+
+
 @router.get("/config")
 async def get_agent_config() -> dict[str, Any]:
     """Get the current LLM configuration (excluding full API key)."""
@@ -149,13 +163,17 @@ async def test_mineru_config() -> dict[str, str]:
 @router.post("/analyze/{paper_id}")
 async def run_deep_analysis(paper_id: str) -> dict[str, Any]:
     """Trigger the internal Agent to analyze a paper using the configured LLM."""
+    active_space_id = _get_active_space_id()
     conn = get_connection()
     try:
-        paper = conn.execute("SELECT space_id FROM papers WHERE id = ?", (paper_id,)).fetchone()
+        paper = conn.execute(
+            "SELECT space_id FROM papers WHERE id = ? AND space_id = ?",
+            (paper_id, active_space_id),
+        ).fetchone()
         if not paper:
             raise HTTPException(status_code=404, detail="Paper not found")
         
-        space_id = paper["space_id"]
+        space_id = str(paper["space_id"])
     finally:
         conn.close()
 

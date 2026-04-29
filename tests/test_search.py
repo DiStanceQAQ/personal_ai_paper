@@ -276,6 +276,75 @@ async def test_search_api_passes_mode_to_search(
 
 
 @pytest.mark.asyncio
+async def test_search_api_forwards_explicit_space_id(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Search route preserves explicit space scoping supported by the service."""
+    captured: dict[str, Any] = {}
+
+    async def fake_search_literature(
+        q: str,
+        space_id: str | None,
+        limit: int,
+        mode: str | None,
+    ) -> list[dict[str, Any]]:
+        captured.update(
+            {
+                "q": q,
+                "space_id": space_id,
+                "limit": limit,
+                "mode": mode,
+            }
+        )
+        return [{"passage_id": "passage-1"}]
+
+    monkeypatch.setattr(
+        "paper_engine.retrieval.service.search_literature",
+        fake_search_literature,
+    )
+
+    resp = await client.get(
+        "/api/search",
+        params={
+            "q": "transformer",
+            "space_id": "space-explicit",
+            "mode": "hybrid",
+            "limit": 123,
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == [{"passage_id": "passage-1"}]
+    assert captured == {
+        "q": "transformer",
+        "space_id": "space-explicit",
+        "limit": 123,
+        "mode": "hybrid",
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_api_rejects_explicit_non_active_space(
+    client: AsyncClient,
+) -> None:
+    """Search must not allow a caller to hop into an inactive space."""
+    active_resp = await client.post("/api/spaces", json={"name": "Active Search"})
+    active_space_id = active_resp.json()["id"]
+    await client.put(f"/api/spaces/active/{active_space_id}")
+    other_resp = await client.post("/api/spaces", json={"name": "Other Search"})
+    other_space_id = other_resp.json()["id"]
+
+    resp = await client.get(
+        "/api/search",
+        params={"q": "transformer", "space_id": other_space_id},
+    )
+
+    assert resp.status_code == 403
+    assert "active space" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
 async def test_search_api_rejects_invalid_mode(client: AsyncClient) -> None:
     """Search API accepts only the supported FTS and hybrid modes."""
     space_resp = await client.post("/api/spaces", json={"name": "Mode Test"})

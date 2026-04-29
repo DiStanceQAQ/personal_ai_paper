@@ -17,6 +17,16 @@ from paper_engine.retrieval.lexical import FTS_TABLE
 router = APIRouter(prefix="/api/papers", tags=["papers"])
 
 ACTIVE_SPACE_KEY = "active_space"
+RELATION_TO_IDEA_VALUES = {
+    "supports",
+    "refutes",
+    "inspires",
+    "baseline",
+    "method_source",
+    "background",
+    "result_comparison",
+    "unclassified",
+}
 
 
 def _get_active_space_id_from_conn(conn: Any) -> str:
@@ -42,6 +52,16 @@ def _get_active_space_id() -> str:
         return _get_active_space_id_from_conn(conn)
     finally:
         conn.close()
+
+
+def _resolve_active_space_scope(space_id: str | None = None) -> str:
+    active_space_id = _get_active_space_id()
+    if space_id is not None and space_id != active_space_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Access is limited to the active space.",
+        )
+    return active_space_id
 
 
 def _paper_row_to_dict(row: Any) -> dict[str, Any]:
@@ -212,8 +232,7 @@ async def upload_paper(file: UploadFile) -> dict[str, Any]:
 @router.get("")
 async def list_papers(space_id: str | None = None) -> list[dict[str, Any]]:
     """List papers in a space. Defaults to active space."""
-    if space_id is None:
-        space_id = _get_active_space_id()
+    space_id = _resolve_active_space_scope(space_id)
 
     conn = get_connection()
     try:
@@ -346,6 +365,18 @@ async def update_paper(
     relation_to_idea: str | None = Body(None),
 ) -> dict[str, Any]:
     """Update paper metadata fields."""
+    if (
+        relation_to_idea is not None
+        and relation_to_idea not in RELATION_TO_IDEA_VALUES
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "relation_to_idea must be one of: "
+                + ", ".join(sorted(RELATION_TO_IDEA_VALUES))
+            ),
+        )
+
     conn = get_connection()
     try:
         row = _get_paper_in_active_space(conn, paper_id)

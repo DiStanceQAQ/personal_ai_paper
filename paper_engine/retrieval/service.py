@@ -35,6 +35,16 @@ def _get_active_space_id() -> str:
         conn.close()
 
 
+def _resolve_search_space_id(space_id: str | None) -> str:
+    active_space_id = _get_active_space_id()
+    if space_id is not None and space_id != active_space_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Search is limited to the active space.",
+        )
+    return active_space_id
+
+
 @router.get("")
 async def search_literature(
     q: str = Query(..., min_length=1, description="Search query"),
@@ -46,8 +56,7 @@ async def search_literature(
     ),
 ) -> list[dict[str, Any]]:
     """Full-text search across passages in a space."""
-    if space_id is None:
-        space_id = _get_active_space_id()
+    space_id = _resolve_search_space_id(space_id)
 
     results = search_passages(q, space_id, limit, mode=mode)
     return results

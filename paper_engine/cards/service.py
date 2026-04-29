@@ -16,6 +16,14 @@ CARD_TYPES = [
 ]
 
 
+def _validate_confidence(confidence: float) -> None:
+    if not 0.0 <= confidence <= 1.0:
+        raise HTTPException(
+            status_code=422,
+            detail="confidence must be between 0 and 1",
+        )
+
+
 def _get_active_space_id_from_conn(conn: Any) -> str:
     row = conn.execute(
         """SELECT s.id
@@ -71,6 +79,7 @@ async def create_card(
             status_code=422,
             detail=f"Invalid card type. Must be one of: {', '.join(CARD_TYPES)}",
         )
+    _validate_confidence(confidence)
 
     space_id = _get_active_space_id()
     card_id = str(uuid.uuid4())
@@ -173,6 +182,8 @@ async def update_card(
     """Update a knowledge card."""
     if card_type is not None and card_type not in CARD_TYPES:
         raise HTTPException(status_code=422, detail=f"Invalid card type: {card_type}")
+    if confidence is not None:
+        _validate_confidence(confidence)
 
     conn = get_connection()
     try:

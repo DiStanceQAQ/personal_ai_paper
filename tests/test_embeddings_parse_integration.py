@@ -173,7 +173,6 @@ def _build_parse_worker(
         ),
         inspect_pdf=lambda file_path: quality,
         chunk_parse_document=_fake_chunk_parse_document,
-        grobid_enricher=lambda file_path: None,
     )
 
 

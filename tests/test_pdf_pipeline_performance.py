@@ -112,7 +112,6 @@ def test_local_pymupdf4llm_route_stays_within_20_page_budget(
         docling=None,
         llamaparse=None,
         legacy=None,
-        grobid_client=None,
     ).parse_pdf(
         pdf_path,
         paper_id="paper-performance",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from html.parser import HTMLParser
 import json
 from pathlib import Path
 import time
@@ -17,6 +18,7 @@ from paper_engine.pdf.models import (
     ElementType,
     ParseDocument,
     ParseElement,
+    ParseAsset,
     ParseTable,
     PdfQualityReport,
 )
@@ -127,7 +129,8 @@ class MinerUBackend:
                         "name": file_path.name,
                         "data_id": data_id,
                     }
-                ]
+                ],
+                "model_version": "vlm",
             },
         )
         upload_data = _official_response_data(upload_response)
@@ -159,6 +162,7 @@ class MinerUBackend:
         )
         payload["backend"] = "precise"
         payload["version"] = "api/v4"
+        payload["model_version"] = "vlm"
         return payload
 
     def _poll_official_precise_batch_result(
@@ -219,14 +223,26 @@ def _payload_to_document(
     content_list = _content_list(result)
     elements: list[ParseElement] = []
     tables: list[ParseTable] = []
+    assets: list[ParseAsset] = []
+    heading_path: list[str] = []
+    saw_title = False
 
     for index, item in enumerate(content_list):
-        element_type = _element_type(str(item.get("type", "text")))
-        text = str(item.get("text") or item.get("content") or "")
+        element_type = _element_type(item, saw_title=saw_title)
+        text = _item_text(item, element_type)
         if not text:
             continue
         page_number = int(item.get("page_idx", item.get("page", 0))) + 1
         element_id = f"p{page_number:04d}-e{len(elements):04d}"
+        item_heading_path = list(heading_path)
+        metadata = {
+            "source": "mineru_content_list",
+            "raw_index": index,
+            "raw_type": str(item.get("type", "")),
+        }
+        text_level = item.get("text_level")
+        if text_level is not None:
+            metadata["text_level"] = text_level
         elements.append(
             ParseElement(
                 id=element_id,
@@ -234,10 +250,15 @@ def _payload_to_document(
                 element_type=cast(ElementType, element_type),
                 text=text,
                 page_number=page_number,
+                heading_path=item_heading_path,
                 extraction_method="layout_model",
-                metadata={"source": "mineru_content_list", "raw_index": index},
+                metadata=metadata,
             )
         )
+        if element_type == "title":
+            saw_title = True
+        elif element_type == "heading":
+            heading_path = _updated_heading_path(heading_path, text, item.get("text_level"))
         if element_type == "table":
             table_index = len(tables)
             tables.append(
@@ -247,7 +268,18 @@ def _payload_to_document(
                     table_index=table_index,
                     page_number=page_number,
                     caption="",
-                    cells=_markdown_table_cells(text),
+                    cells=_table_cells(item, text),
+                    metadata={"source": "mineru_content_list"},
+                )
+            )
+        elif element_type == "figure":
+            assets.append(
+                ParseAsset(
+                    id=f"asset-{len(assets):04d}",
+                    element_id=element_id,
+                    asset_type="image",
+                    page_number=page_number,
+                    uri=str(item.get("img_path") or item.get("image_path") or ""),
                     metadata={"source": "mineru_content_list"},
                 )
             )
@@ -269,10 +301,12 @@ def _payload_to_document(
         quality=quality_report,
         elements=elements,
         tables=tables,
+        assets=assets,
         metadata={
             "mineru": {
                 "backend": payload.get("backend"),
                 "version": payload.get("version"),
+                "model_version": payload.get("model_version"),
             }
         },
     )
@@ -295,7 +329,18 @@ def _content_list(result: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return raw if isinstance(raw, list) else []
 
 
-def _element_type(value: str) -> str:
+def _element_type(
+    item: Mapping[str, Any] | str,
+    *,
+    saw_title: bool = False,
+) -> str:
+    if isinstance(item, Mapping):
+        value = str(item.get("type", "text"))
+        if item.get("text_level") is not None:
+            level = _int_value(item.get("text_level"), default=1)
+            return "title" if level <= 1 and not saw_title else "heading"
+    else:
+        value = item
     mapping = {
         "title": "title",
         "text": "paragraph",
@@ -307,6 +352,34 @@ def _element_type(value: str) -> str:
         "formula": "equation",
     }
     return mapping.get(value.lower(), "paragraph")
+
+
+def _item_text(item: Mapping[str, Any], element_type: str) -> str:
+    if element_type == "table":
+        return str(
+            item.get("table_body")
+            or item.get("text")
+            or item.get("content")
+            or ""
+        ).strip()
+    return str(item.get("text") or item.get("content") or "").strip()
+
+
+def _updated_heading_path(
+    current: list[str],
+    text: str,
+    raw_level: Any,
+) -> list[str]:
+    level = _int_value(raw_level, default=len(current) + 1)
+    depth = max(level - 1, 0)
+    return [*current[:depth], text]
+
+
+def _int_value(value: Any, *, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _markdown_to_elements(markdown: str) -> list[ParseElement]:
@@ -336,6 +409,54 @@ def _markdown_table_cells(text: str) -> list[list[str]]:
         if cells and not all(set(cell) <= {"-", ":"} for cell in cells):
             rows.append(cells)
     return rows
+
+
+def _table_cells(item: Mapping[str, Any], text: str) -> list[list[str]]:
+    html = str(item.get("table_body") or "")
+    if html.strip():
+        rows = _html_table_cells(html)
+        if rows:
+            return rows
+    return _markdown_table_cells(text)
+
+
+def _html_table_cells(html: str) -> list[list[str]]:
+    parser = _TableHTMLParser()
+    parser.feed(html)
+    return parser.rows
+
+
+class _TableHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[list[str]] = []
+        self._current_row: list[str] | None = None
+        self._current_cell: list[str] | None = None
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        if tag.lower() == "tr":
+            self._current_row = []
+        elif tag.lower() in {"td", "th"} and self._current_row is not None:
+            self._current_cell = []
+
+    def handle_data(self, data: str) -> None:
+        if self._current_cell is not None:
+            self._current_cell.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        lowered = tag.lower()
+        if lowered in {"td", "th"} and self._current_cell is not None:
+            if self._current_row is not None:
+                self._current_row.append(" ".join("".join(self._current_cell).split()))
+            self._current_cell = None
+        elif lowered == "tr" and self._current_row is not None:
+            if any(cell for cell in self._current_row):
+                self.rows.append(self._current_row)
+            self._current_row = None
 
 
 def _official_response_data(response: httpx.Response) -> Mapping[str, Any]:

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import os
+import threading
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +23,29 @@ from paper_engine.pdf.models import (
 
 
 _BACKEND_NAME = "docling"
+_CONVERTER_LOCK = threading.Lock()
+_CONVERTER_CACHE: dict["DoclingPerformanceOptions | None", Any] = {}
+_CONVERTER_FACTORY: Any | None = None
+_ENV_DOCLING_THREADS = "PAPER_ENGINE_DOCLING_THREADS"
+_ENV_DOCLING_DEVICE = "PAPER_ENGINE_DOCLING_DEVICE"
+_ENV_DOCLING_OCR = "PAPER_ENGINE_DOCLING_OCR"
+_ENV_DOCLING_TABLE_STRUCTURE = "PAPER_ENGINE_DOCLING_TABLE_STRUCTURE"
+_ENV_DOCLING_TABLE_MODE = "PAPER_ENGINE_DOCLING_TABLE_MODE"
+_ENV_DOCLING_BATCH_SIZE = "PAPER_ENGINE_DOCLING_BATCH_SIZE"
+
+
+@dataclass(frozen=True)
+class DoclingPerformanceOptions:
+    """Runtime knobs for Docling's heavier PDF pipeline stages."""
+
+    num_threads: int
+    device: str
+    do_ocr: bool
+    do_table_structure: bool
+    table_mode: str
+    ocr_batch_size: int
+    layout_batch_size: int
+    table_batch_size: int
 
 
 def _ensure_docling_parse_resources() -> None:
@@ -47,26 +73,140 @@ def _ensure_docling_parse_resources() -> None:
         )
 
 
-def _load_docling_components() -> tuple[Any, Any, Any, Any]:
+def _load_docling_components() -> tuple[Any, Any, Any, Any, Any]:
     """Import Docling lazily so startup does not require the optional extra."""
     if importlib.util.find_spec("docling") is None:
         raise ParserBackendUnavailable(_BACKEND_NAME, "docling is not installed")
     _ensure_docling_parse_resources()
     converter_module = importlib.import_module("docling.document_converter")
     pipeline_options_module = importlib.import_module("docling.datamodel.pipeline_options")
+    accelerator_options_module = importlib.import_module(
+        "docling.datamodel.accelerator_options"
+    )
     return (
         converter_module.DocumentConverter,
         converter_module.InputFormat,
         converter_module.PdfFormatOption,
         pipeline_options_module.PdfPipelineOptions,
+        accelerator_options_module.AcceleratorOptions,
     )
 
 
-def _create_docling_converter() -> Any:
-    converter_class, _input_format, _pdf_format_option, _pdf_pipeline_options = (
-        _load_docling_components()
+def _create_docling_converter(
+    options: DoclingPerformanceOptions | None = None,
+) -> Any:
+    (
+        converter_class,
+        input_format,
+        pdf_format_option,
+        pdf_pipeline_options,
+        accelerator_options,
+    ) = _load_docling_components()
+    if options is None:
+        return converter_class()
+
+    pipeline_options = pdf_pipeline_options(
+        accelerator_options=accelerator_options(
+            num_threads=options.num_threads,
+            device=options.device,
+        ),
     )
-    return converter_class()
+    pipeline_options.do_ocr = options.do_ocr
+    pipeline_options.do_table_structure = options.do_table_structure
+    pipeline_options.ocr_batch_size = options.ocr_batch_size
+    pipeline_options.layout_batch_size = options.layout_batch_size
+    pipeline_options.table_batch_size = options.table_batch_size
+    table_structure_options = getattr(
+        pipeline_options,
+        "table_structure_options",
+        None,
+    )
+    if table_structure_options is not None:
+        table_structure_options.mode = options.table_mode
+    return converter_class(
+        format_options={
+            input_format.PDF: pdf_format_option(pipeline_options=pipeline_options),
+        },
+    )
+
+
+def _shared_docling_converter(
+    options: DoclingPerformanceOptions | None = None,
+) -> Any:
+    global _CONVERTER_CACHE, _CONVERTER_FACTORY
+    with _CONVERTER_LOCK:
+        current_factory = _create_docling_converter
+        if _CONVERTER_FACTORY is not current_factory:
+            _CONVERTER_CACHE = {}
+            _CONVERTER_FACTORY = current_factory
+        if options not in _CONVERTER_CACHE:
+            _CONVERTER_CACHE[options] = _create_docling_converter(options)
+        return _CONVERTER_CACHE[options]
+
+
+def _docling_performance_options(
+    quality_report: PdfQualityReport,
+) -> DoclingPerformanceOptions:
+    """Choose a safe fast Docling profile for the current PDF."""
+    cpu_count = os.cpu_count() or 4
+    default_threads = max(4, min(cpu_count, 12))
+    num_threads = _env_int(_ENV_DOCLING_THREADS, default_threads, minimum=1, maximum=64)
+    default_batch_size = max(4, min(num_threads, 16))
+    batch_size = _env_int(
+        _ENV_DOCLING_BATCH_SIZE,
+        default_batch_size,
+        minimum=1,
+        maximum=64,
+    )
+    do_ocr = _env_bool(_ENV_DOCLING_OCR, quality_report.needs_ocr)
+    do_table_structure = _env_bool(_ENV_DOCLING_TABLE_STRUCTURE, True)
+    table_mode = _env_choice(
+        _ENV_DOCLING_TABLE_MODE,
+        default="fast",
+        choices={"fast", "accurate"},
+    )
+    return DoclingPerformanceOptions(
+        num_threads=num_threads,
+        device=_env_choice(
+            _ENV_DOCLING_DEVICE,
+            default="auto",
+            choices={"auto", "cpu", "cuda", "mps", "xpu"},
+        ),
+        do_ocr=do_ocr,
+        do_table_structure=do_table_structure,
+        table_mode=table_mode,
+        ocr_batch_size=batch_size,
+        layout_batch_size=batch_size,
+        table_batch_size=batch_size,
+    )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_choice(name: str, *, default: str, choices: set[str]) -> str:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized in choices:
+        return normalized
+    return default
+
+
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, parsed))
 
 
 class DoclingBackend:
@@ -90,7 +230,8 @@ class DoclingBackend:
             raise ParserBackendUnavailable(self.name, "docling is not installed")
 
         try:
-            converter = _create_docling_converter()
+            options = _docling_performance_options(quality_report)
+            converter = _shared_docling_converter(options)
             result = converter.convert(str(file_path))
         except ParserBackendUnavailable:
             raise
@@ -103,6 +244,7 @@ class DoclingBackend:
                 paper_id=paper_id,
                 space_id=space_id,
                 quality_report=quality_report,
+                performance_options=options,
             )
         except Exception as exc:
             raise ParserBackendError(
@@ -121,12 +263,14 @@ class _DocumentBuilder:
         quality_report: PdfQualityReport,
         docling_document: Any,
         items: list[Any],
+        performance_options: DoclingPerformanceOptions | None = None,
     ) -> None:
         self.paper_id = paper_id
         self.space_id = space_id
         self.quality_report = quality_report
         self.docling_document = docling_document
         self.items = items
+        self.performance_options = performance_options
         self.elements: list[ParseElement] = []
         self.tables: list[ParseTable] = []
         self.assets: list[ParseAsset] = []
@@ -148,6 +292,7 @@ class _DocumentBuilder:
             metadata={
                 "item_count": len(self.items),
                 "parser": "docling.DocumentConverter",
+                "performance_options": _json_safe(self.performance_options),
                 "docling_metadata": _json_safe(_get(self.docling_document, "metadata")),
             },
         )
@@ -317,6 +462,7 @@ def _docling_result_to_document(
     paper_id: str,
     space_id: str,
     quality_report: PdfQualityReport,
+    performance_options: DoclingPerformanceOptions | None = None,
 ) -> ParseDocument:
     document = _get_any(result, ("document", "doc")) or result
     items = _reading_order_items(document)
@@ -330,6 +476,7 @@ def _docling_result_to_document(
         quality_report=quality_report,
         docling_document=document,
         items=items,
+        performance_options=performance_options,
     ).build()
 
 

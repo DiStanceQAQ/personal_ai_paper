@@ -47,21 +47,22 @@ def test_backend_posts_pdf_to_file_parse_and_normalizes_markdown(
                         "md_content": "# Parsed Title\n\nParsed paragraph.",
                         "content_list": json.dumps(
                             [
-                                {
-                                    "type": "title",
-                                    "text": "Parsed Title",
-                                    "page_idx": 0,
-                                },
+	                                {
+	                                    "type": "title",
+	                                    "text": "Parsed Title",
+	                                    "page_idx": 0,
+	                                    "text_level": 1,
+	                                },
                                 {
                                     "type": "text",
                                     "text": "Parsed paragraph.",
                                     "page_idx": 0,
                                 },
-                                {
-                                    "type": "table",
-                                    "text": "A | B\n1 | 2",
-                                    "page_idx": 0,
-                                },
+	                                {
+	                                    "type": "table",
+	                                    "table_body": "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>",
+	                                    "page_idx": 0,
+	                                },
                             ]
                         ),
                     }
@@ -125,11 +126,32 @@ def test_backend_uses_official_precise_upload_and_batch_polling_flow(
         archive.writestr(
             "paper_content_list.json",
             json.dumps(
-                [
-                    {"type": "title", "text": "Precise Parsed Title", "page_idx": 0},
-                    {"type": "text", "text": "Precise parsed paragraph.", "page_idx": 0},
-                    {"type": "table", "text": "A | B\n1 | 2", "page_idx": 0},
-                ]
+	                [
+	                    {
+	                        "type": "text",
+	                        "text": "Precise Parsed Title",
+	                        "text_level": 1,
+	                        "page_idx": 0,
+	                    },
+	                    {
+	                        "type": "text",
+	                        "text": "Precise Heading",
+	                        "text_level": 2,
+	                        "page_idx": 0,
+	                    },
+	                    {"type": "text", "text": "Precise parsed paragraph.", "page_idx": 0},
+	                    {
+	                        "type": "table",
+	                        "table_body": "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>",
+	                        "page_idx": 0,
+	                    },
+	                    {
+	                        "type": "image",
+	                        "text": "Figure 1",
+	                        "img_path": "images/fig1.png",
+	                        "page_idx": 0,
+	                    },
+	                ]
             ),
         )
         archive.writestr("full.md", "# Precise Parsed Title\n\nPrecise parsed paragraph.")
@@ -141,7 +163,8 @@ def test_backend_uses_official_precise_upload_and_batch_polling_flow(
         if request.method == "POST" and request.url.path == "/api/v4/file-urls/batch":
             assert request.headers["authorization"] == "Bearer mineru-secret"
             assert json.loads(request.content.decode("utf-8")) == {
-                "files": [{"name": "paper.pdf", "data_id": "paper-1"}]
+                "files": [{"name": "paper.pdf", "data_id": "paper-1"}],
+                "model_version": "vlm",
             }
             return httpx.Response(
                 200,
@@ -223,7 +246,11 @@ def test_backend_uses_official_precise_upload_and_batch_polling_flow(
     assert document.backend == "mineru"
     assert [element.element_type for element in document.elements] == [
         "title",
+        "heading",
         "paragraph",
         "table",
+        "figure",
     ]
     assert document.tables[0].cells == [["A", "B"], ["1", "2"]]
+    assert document.assets[0].uri == "images/fig1.png"
+    assert document.metadata["mineru"]["model_version"] == "vlm"

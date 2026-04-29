@@ -10,12 +10,6 @@ from typing import Any, Literal
 import pytest
 
 from paper_engine.pdf.backends.base import ParserBackendError, ParserBackendUnavailable
-from paper_engine.pdf.backends.grobid import (
-    GrobidMetadata,
-    GrobidParseResult,
-    GrobidReference,
-    GrobidSection,
-)
 from paper_engine.pdf.models import ParseDocument, PdfQualityReport
 
 
@@ -83,55 +77,6 @@ def extraction_method_for(name: str, preferred: str) -> Any:
     return "native_text"
 
 
-class FakeGrobidClient:
-    def __init__(
-        self,
-        *,
-        alive: bool = True,
-        fail: bool = False,
-        failure_message: str = "grobid exploded",
-    ) -> None:
-        self.alive = alive
-        self.fail = fail
-        self.failure_message = failure_message
-        self.closed = False
-        self.processed: list[Path] = []
-
-    def is_alive(self) -> bool:
-        return self.alive
-
-    def process_fulltext(self, file_path: Path) -> GrobidParseResult:
-        self.processed.append(file_path)
-        if self.fail:
-            raise RuntimeError(self.failure_message)
-        return GrobidParseResult(
-            metadata=GrobidMetadata(
-                title="GROBID Title",
-                authors=["Ada Lovelace"],
-                year=1843,
-                venue="Notes",
-                doi="10.0000/example",
-                abstract="GROBID abstract",
-            ),
-            sections=[GrobidSection(heading="Intro", text="Section text")],
-            references=[
-                GrobidReference(
-                    id="b1",
-                    title="Reference Title",
-                    authors=["Grace Hopper"],
-                    year=1952,
-                    venue="Compiler Conf",
-                    doi="10.0000/ref",
-                    raw_text="Reference raw text",
-                )
-            ],
-            raw_tei="<tei>large</tei>",
-        )
-
-    def close(self) -> None:
-        self.closed = True
-
-
 def _router_module() -> Any:
     return importlib.import_module("paper_engine.pdf.router")
 
@@ -197,7 +142,6 @@ def test_default_digital_parse_does_not_resolve_llamaparse_provider(
         pymupdf4llm=pymupdf,
         docling=None,
         legacy=FakeBackend("legacy-pymupdf", extraction_method="legacy"),
-        grobid_client=None,
     )
     document = router.parse_pdf(tmp_path / "clean.pdf", "paper-1", "space-1", _quality())
 
@@ -222,7 +166,6 @@ def test_layout_fallback_resolves_lazy_llamaparse_only_when_reached(
         docling=docling,
         llamaparse=llamaparse_provider,
         legacy=FakeBackend("legacy-pymupdf", extraction_method="legacy"),
-        grobid_client=None,
     )
     assert provider_calls == 0
 
@@ -249,7 +192,6 @@ def test_lazy_llamaparse_provider_backend_is_closed_after_success(
         docling=docling,
         llamaparse=lambda: llamaparse,
         legacy=FakeBackend("legacy-pymupdf", extraction_method="legacy"),
-        grobid_client=None,
     )
     document = router.parse_pdf(
         tmp_path / "layout.pdf",
@@ -279,7 +221,6 @@ def test_lazy_llamaparse_provider_backend_is_closed_after_failure(
         docling=FakeBackend("docling", available=False, extraction_method="layout_model"),
         llamaparse=lambda: llamaparse,
         legacy=legacy,
-        grobid_client=None,
     )
     document = router.parse_pdf(
         tmp_path / "layout.pdf",
@@ -303,7 +244,6 @@ def test_injected_llamaparse_backend_instance_is_not_closed(tmp_path: Path) -> N
         docling=FakeBackend("docling", available=False, extraction_method="layout_model"),
         llamaparse=llamaparse,
         legacy=FakeBackend("legacy-pymupdf", extraction_method="legacy"),
-        grobid_client=None,
     )
     document = router.parse_pdf(
         tmp_path / "layout.pdf",
@@ -538,69 +478,6 @@ def test_clean_digital_pdf_can_fallback_to_legacy_without_degraded_warning(
     )
 
 
-def test_grobid_healthy_client_merges_metadata_and_references(tmp_path: Path) -> None:
-    router_module = _router_module()
-    grobid = FakeGrobidClient()
-    router = router_module.PdfBackendRouter(
-        **_backends(),
-        grobid_client=grobid,
-    )
-    pdf_path = tmp_path / "paper.pdf"
-
-    document = router.parse_pdf(pdf_path, "paper-1", "space-1", _quality())
-
-    assert grobid.processed == [pdf_path]
-    assert document.metadata["grobid"] == {
-        "metadata": {
-            "title": "GROBID Title",
-            "authors": ["Ada Lovelace"],
-            "year": 1843,
-            "venue": "Notes",
-            "doi": "10.0000/example",
-            "abstract": "GROBID abstract",
-        },
-        "references": [
-            {
-                "id": "b1",
-                "title": "Reference Title",
-                "authors": ["Grace Hopper"],
-                "year": 1952,
-                "venue": "Compiler Conf",
-                "doi": "10.0000/ref",
-                "raw_text": "Reference raw text",
-            }
-        ],
-    }
-    assert "sections" not in document.metadata["grobid"]
-    assert "router_grobid_merged" in document.quality.warnings
-    assert grobid.closed is False
-
-
-@pytest.mark.parametrize(
-    ("grobid", "expected_warning"),
-    [
-        (None, None),
-        (FakeGrobidClient(alive=False), "router_grobid_unavailable:is_alive returned false"),
-        (FakeGrobidClient(fail=True), "router_grobid_failed:grobid exploded"),
-    ],
-)
-def test_grobid_absent_unhealthy_or_failing_does_not_fail_primary_parse(
-    tmp_path: Path,
-    grobid: FakeGrobidClient | None,
-    expected_warning: str | None,
-) -> None:
-    router_module = _router_module()
-    router = router_module.PdfBackendRouter(**_backends(), grobid_client=grobid)
-
-    document = router.parse_pdf(tmp_path / "paper.pdf", "paper-1", "space-1", _quality())
-
-    assert document.backend == "pymupdf4llm"
-    if expected_warning is None:
-        assert not any(warning.startswith("router_grobid") for warning in document.quality.warnings)
-    else:
-        assert expected_warning in document.quality.warnings
-
-
 def test_llamaparse_provider_error_does_not_break_local_fallback(tmp_path: Path) -> None:
     router_module = _router_module()
 
@@ -614,7 +491,6 @@ def test_llamaparse_provider_error_does_not_break_local_fallback(tmp_path: Path)
         docling=FakeBackend("docling", available=False, extraction_method="layout_model"),
         llamaparse=broken_llamaparse_provider,
         legacy=legacy,
-        grobid_client=None,
     )
     document = router.parse_pdf(
         tmp_path / "layout.pdf",
@@ -627,51 +503,6 @@ def test_llamaparse_provider_error_does_not_break_local_fallback(tmp_path: Path)
     assert len(pymupdf.calls) == 1
     assert legacy.calls == []
     assert "router_llamaparse_config_failed:sqlite unavailable" in document.quality.warnings
-
-
-def test_grobid_provider_error_does_not_break_primary_parse(tmp_path: Path) -> None:
-    router_module = _router_module()
-
-    def broken_grobid_provider() -> None:
-        raise RuntimeError("db locked")
-
-    router = router_module.PdfBackendRouter(
-        **_backends(),
-        grobid_client=broken_grobid_provider,
-    )
-    document = router.parse_pdf(tmp_path / "paper.pdf", "paper-1", "space-1", _quality())
-
-    assert document.backend == "pymupdf4llm"
-    assert "router_grobid_config_failed:db locked" in document.quality.warnings
-
-
-def test_grobid_failure_warning_is_bounded(tmp_path: Path) -> None:
-    router_module = _router_module()
-    grobid = FakeGrobidClient(fail=True, failure_message="x" * 500)
-    router = router_module.PdfBackendRouter(**_backends(), grobid_client=grobid)
-
-    document = router.parse_pdf(tmp_path / "paper.pdf", "paper-1", "space-1", _quality())
-    warning = next(
-        warning
-        for warning in document.quality.warnings
-        if warning.startswith("router_grobid_failed:")
-    )
-
-    assert len(warning) <= 160
-
-
-def test_router_closes_configured_grobid_client_it_owns(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    router_module = _router_module()
-    grobid = FakeGrobidClient()
-    monkeypatch.setattr(router_module, "get_configured_grobid_client", lambda: grobid)
-
-    router = router_module.PdfBackendRouter(**_backends())
-    router.parse_pdf(tmp_path / "paper.pdf", "paper-1", "space-1", _quality())
-
-    assert grobid.closed is True
 
 
 def test_parse_pdf_convenience_inspects_when_quality_missing(
@@ -688,8 +519,6 @@ def test_parse_pdf_convenience_inspects_when_quality_missing(
         lambda: backend,
     )
     monkeypatch.setattr(router_module, "get_configured_llamaparse_backend", lambda: None)
-    monkeypatch.setattr(router_module, "get_configured_grobid_client", lambda: None)
-
     document = router_module.parse_pdf(tmp_path / "paper.pdf", "paper-1", "space-1")
 
     assert document.backend == "pymupdf4llm"

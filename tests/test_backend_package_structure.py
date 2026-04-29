@@ -23,7 +23,6 @@ ROOT_BACKEND_MODULES = {
     "parser.py",
     "pdf_backend_base.py",
     "pdf_backend_docling.py",
-    "pdf_backend_grobid.py",
     "pdf_backend_legacy.py",
     "pdf_backend_llamaparse.py",
     "pdf_backend_pymupdf4llm.py",

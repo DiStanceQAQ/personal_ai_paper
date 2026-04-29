@@ -152,7 +152,6 @@ def test_api_sidecar_target_includes_upgraded_pdf_pipeline_modules() -> None:
         "paper_engine.retrieval.hybrid",
         "paper_engine.pdf.backends.base",
         "paper_engine.pdf.backends.docling",
-        "paper_engine.pdf.backends.grobid",
         "paper_engine.pdf.backends.legacy",
         "paper_engine.pdf.backends.llamaparse",
         "paper_engine.pdf.backends.pymupdf4llm",

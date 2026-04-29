@@ -8,7 +8,6 @@ local scripts during migration.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, Final, cast
 
@@ -19,7 +18,6 @@ from paper_engine.pdf.backends.base import (
     PdfParserBackend,
 )
 from paper_engine.pdf.backends.docling import DoclingBackend
-from paper_engine.pdf.backends.grobid import GrobidClient, get_configured_grobid_client
 from paper_engine.pdf.backends.legacy import LegacyPyMuPDFBackend
 from paper_engine.pdf.backends.llamaparse import get_configured_llamaparse_backend
 from paper_engine.pdf.backends.pymupdf4llm import PyMuPDF4LLMBackend
@@ -30,7 +28,6 @@ FORCED_BACKEND_KEY: Final = "pdf_forced_backend"
 WARNING_DETAIL_LIMIT: Final = 120
 _UNSET: Final = object()
 BackendProvider = Callable[[], PdfParserBackend | None]
-GrobidProvider = Callable[[], GrobidClient | None]
 
 
 class PdfBackendRouter:
@@ -44,7 +41,6 @@ class PdfBackendRouter:
         llamaparse: PdfParserBackend | BackendProvider | None | object = _UNSET,
         legacy: PdfParserBackend | None | object = _UNSET,
         forced_backend: str | None | object = _UNSET,
-        grobid_client: GrobidClient | GrobidProvider | None | object = _UNSET,
     ) -> None:
         self._pymupdf4llm = (
             PyMuPDF4LLMBackend() if pymupdf4llm is _UNSET else _as_backend(pymupdf4llm)
@@ -57,7 +53,6 @@ class PdfBackendRouter:
             if forced_backend is _UNSET
             else _normalize_backend_key(str(forced_backend or ""))
         )
-        self._grobid_client = grobid_client
 
     def parse_pdf(
         self,
@@ -70,9 +65,7 @@ class PdfBackendRouter:
         pdf_path = Path(file_path)
         quality = (quality_report or inspect_pdf(pdf_path)).model_copy(deep=True)
 
-        document = self._parse_with_candidates(pdf_path, paper_id, space_id, quality)
-        document = self._merge_grobid(pdf_path, document)
-        return document
+        return self._parse_with_candidates(pdf_path, paper_id, space_id, quality)
 
     def _parse_with_candidates(
         self,
@@ -216,49 +209,6 @@ class PdfBackendRouter:
                 )
             return None
 
-    def _merge_grobid(self, file_path: Path, document: ParseDocument) -> ParseDocument:
-        try:
-            grobid_client, owns_client = self._resolve_grobid_client()
-        except Exception as exc:
-            document.quality.warnings.append(
-                f"router_grobid_config_failed:{_warning_detail(exc)}"
-            )
-            return document
-        if grobid_client is None:
-            return document
-
-        try:
-            if not grobid_client.is_alive():
-                document.quality.warnings.append(
-                    "router_grobid_unavailable:is_alive returned false"
-                )
-                return document
-
-            result = grobid_client.process_fulltext(file_path)
-            metadata = dict(document.metadata)
-            metadata["grobid"] = {
-                "metadata": _json_safe_dataclass(result.metadata),
-                "references": [_json_safe_dataclass(ref) for ref in result.references],
-            }
-            document.quality.warnings.append("router_grobid_merged")
-            return document.model_copy(update={"metadata": metadata})
-        except Exception as exc:
-            document.quality.warnings.append(
-                f"router_grobid_failed:{_warning_detail(exc)}"
-            )
-            return document
-        finally:
-            if owns_client and hasattr(grobid_client, "close"):
-                grobid_client.close()
-
-    def _resolve_grobid_client(self) -> tuple[GrobidClient | None, bool]:
-        if self._grobid_client is _UNSET:
-            return get_configured_grobid_client(), True
-        if callable(self._grobid_client):
-            return self._grobid_client(), True
-        return cast(GrobidClient | None, self._grobid_client), False
-
-
 def parse_pdf(
     file_path: Path | str,
     paper_id: str,
@@ -341,18 +291,3 @@ def _is_degraded_legacy_selection(name: str, quality: PdfQualityReport) -> bool:
         or quality.estimated_table_pages > 0
         or quality.estimated_two_column_pages > 0
     )
-
-
-def _json_safe_dataclass(value: Any) -> Any:
-    if is_dataclass(value) and not isinstance(value, type):
-        return {
-            field.name: _json_safe_dataclass(getattr(value, field.name))
-            for field in fields(value)
-        }
-    if isinstance(value, list):
-        return [_json_safe_dataclass(item) for item in value]
-    if isinstance(value, tuple):
-        return [_json_safe_dataclass(item) for item in value]
-    if isinstance(value, dict):
-        return {str(key): _json_safe_dataclass(item) for key, item in value.items()}
-    return value

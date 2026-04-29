@@ -227,7 +227,6 @@ def _parse_and_chunk(
     router = PdfBackendRouter(
         forced_backend="",
         llamaparse=None,
-        grobid_client=None,
     )
     paper_id = f"eval-{fixture_name}"
     try:

@@ -59,7 +59,8 @@ export default function App(): JSX.Element {
   const { spaces, activeSpace, loadSpaces, switchSpace, createOrUpdateSpace, deleteSpace } = useSpaces(setNotice);
   const {
     papers, selectedPaper, setSelectedPaper, passages, cards, setCards, agentStatus, setAgentStatus,
-    loadPapers, openPaper, deletePaper: handleDeletePaper, uploadPaper, runDeepAnalysis, backgroundTasks
+    loadPapers, openPaper, deletePaper: handleDeletePaper, uploadPaper, runDeepAnalysis,
+    cancelAnalysisRun, backgroundTasks
   } = usePapers(activeSpace?.id, setNotice, setIsProcessing);
   const {
     llmConfig,
@@ -154,23 +155,21 @@ export default function App(): JSX.Element {
   };
 
   const handleDeleteCard = async (cardId: string) => {
+    if (!selectedPaper) return;
     try {
-      await api.deleteCard(cardId);
+      await api.deleteCard(selectedPaper.id, cardId);
       setNotice({ message: '卡片已移除。', type: 'success' });
-      if (selectedPaper) {
-        const paperCards = await api.listCards(selectedPaper.id);
-        setCards(paperCards);
-      }
+      const paperCards = await api.listCards(selectedPaper.id);
+      setCards(paperCards);
     } catch { setNotice({ message: '移除卡片失败。', type: 'error' }); }
   };
 
   const handleUpdateCard = async (cardId: string, summary: string) => {
+    if (!selectedPaper) return;
     try {
-      await api.updateCard(cardId, { summary });
-      if (selectedPaper) {
-        const paperCards = await api.listCards(selectedPaper.id);
-        setCards(paperCards);
-      }
+      await api.updateCard(selectedPaper.id, cardId, { summary });
+      const paperCards = await api.listCards(selectedPaper.id);
+      setCards(paperCards);
     } catch {
       setNotice({ message: '更新卡片失败。', type: 'error' });
       throw new Error('Update failed');
@@ -180,7 +179,7 @@ export default function App(): JSX.Element {
   const handleAddManualCard = async (type: string, summary: string) => {
     if (!selectedPaper) return;
     try {
-      await api.createCard({ paper_id: selectedPaper.id, card_type: type, summary, confidence: 1.0 });
+      await api.createCard(selectedPaper.id, { card_type: type, summary, confidence: 1.0 });
       setNotice({ message: '已手动添加知识卡片。', type: 'success' });
       const paperCards = await api.listCards(selectedPaper.id);
       setCards(paperCards);
@@ -243,6 +242,7 @@ export default function App(): JSX.Element {
           agentStatus={agentStatus}
           onToggleAgent={handleToggleAgent}
           onExtract={() => selectedPaper && runDeepAnalysis(selectedPaper.id)}
+          onCancelAnalysis={(runId) => selectedPaper && cancelAnalysisRun(selectedPaper.id, runId)}
           onDeleteCard={handleDeleteCard}
           onUpdateCard={handleUpdateCard}
           onAddManualCard={handleAddManualCard}

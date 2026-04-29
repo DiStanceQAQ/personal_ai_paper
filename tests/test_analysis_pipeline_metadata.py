@@ -50,10 +50,10 @@ def _element(
 
 
 @pytest.mark.asyncio
-async def test_metadata_stage_prefers_grobid_fields_and_first_page_title(
+async def test_metadata_stage_prefers_rule_fields_and_first_page_title(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """GROBID scholarly fields should beat LLM guesses, title element beats LLM."""
+    """Deterministic source fields should beat conflicting LLM guesses."""
     import paper_engine.analysis.pipeline as analysis_pipeline
 
     async def fake_call_llm_schema(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -77,31 +77,29 @@ async def test_metadata_stage_prefers_grobid_fields_and_first_page_title(
         passages=[
             _passage(
                 "passage-abstract",
-                "Abstract: This paper studies local paper knowledge engines.",
+                (
+                    "Abstract: This paper studies local paper knowledge engines. "
+                    "DOI: https://doi.org/10.1234/source.2026"
+                ),
                 section="Abstract",
             ),
         ],
         elements=[_element("title-1", "Source-Prioritized Paper Metadata")],
-        grobid_metadata={
-            "authors": ["Ada Lovelace", "Grace Hopper"],
-            "year": "2026",
-            "doi": "https://doi.org/10.1234/grobid.2026",
-        },
     )
 
     assert isinstance(result, PaperMetadataExtraction)
     assert result.title == "Source-Prioritized Paper Metadata"
-    assert result.authors == ["Ada Lovelace", "Grace Hopper"]
-    assert result.year == 2026
-    assert result.doi == "10.1234/grobid.2026"
+    assert result.authors == ["Wrong Author"]
+    assert result.year == 1999
+    assert result.doi == "10.1234/source.2026"
     assert result.venue == "LLM Venue"
 
 
 @pytest.mark.asyncio
-async def test_metadata_stage_uses_llm_fallback_when_grobid_is_absent(
+async def test_metadata_stage_uses_llm_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Missing GROBID metadata should be filled by the strict LLM fallback."""
+    """Missing deterministic metadata should be filled by the strict LLM fallback."""
     import paper_engine.analysis.pipeline as analysis_pipeline
 
     calls: list[dict[str, Any]] = []
@@ -146,7 +144,6 @@ async def test_metadata_stage_uses_llm_fallback_when_grobid_is_absent(
             ),
         ],
         elements=[_element("title-1", "A Local-First Analysis Pipeline")],
-        grobid_metadata=None,
     )
 
     assert result.title == "A Local-First Analysis Pipeline"
@@ -193,7 +190,6 @@ async def test_metadata_stage_extracts_doi_and_arxiv_from_source_text(
             )
         ],
         elements=[],
-        grobid_metadata={},
     )
 
     assert result.doi == "10.5555/example.2026"
@@ -221,11 +217,66 @@ async def test_metadata_stage_returns_rule_based_values_when_llm_unavailable(
             )
         ],
         elements=[_element("title-1", "Metadata Without Network Calls")],
-        grobid_metadata=None,
     )
 
     assert result.title == "Metadata Without Network Calls"
     assert result.doi == "10.7777/no-llm-needed"
+
+
+@pytest.mark.asyncio
+async def test_metadata_stage_limits_llm_prompt_and_survives_request_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Optional LLM metadata enrichment should not block AI analysis startup."""
+    import paper_engine.analysis.pipeline as analysis_pipeline
+
+    calls: list[str] = []
+
+    async def timeout_llm(
+        system_prompt: str,
+        user_prompt: str,
+        schema_name: str,
+        schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        calls.append(user_prompt)
+        raise analysis_pipeline.LLMRequestError("metadata timeout")
+
+    monkeypatch.setattr(analysis_pipeline, "call_llm_schema", timeout_llm)
+
+    passages = [
+        _passage(
+            "frontmatter",
+            "Title line. DOI: 10.8888/frontmatter",
+            page_number=1,
+        ),
+        _passage(
+            "abstract",
+            "Abstract: This is the source-grounded abstract.",
+            page_number=1,
+            section="A B S T R A C T",
+        ),
+        *[
+            _passage(
+                f"late-{index}",
+                f"Late body passage {index}.",
+                page_number=10 + index,
+            )
+            for index in range(20)
+        ],
+    ]
+
+    result = await analysis_pipeline.extract_metadata_stage(
+        "paper-1",
+        passages=passages,
+        elements=[_element("title-1", "Timeout-Tolerant Metadata")],
+    )
+
+    assert result.title == "Timeout-Tolerant Metadata"
+    assert result.doi == "10.8888/frontmatter"
+    assert result.metadata["llm_error"] == "metadata timeout"
+    assert "frontmatter" in calls[0]
+    assert "abstract" in calls[0]
+    assert "late-19" not in calls[0]
 
 
 def test_analysis_pipeline_is_in_packaged_runtime_modules() -> None:

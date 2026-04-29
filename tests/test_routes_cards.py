@@ -84,8 +84,8 @@ async def setup_space_and_paper(client: AsyncClient) -> tuple[str, str]:
 @pytest.mark.asyncio
 async def test_create_and_get_card(client: AsyncClient, setup_space_and_paper: tuple[str, str]) -> None:
     space_id, paper_id = setup_space_and_paper
-    resp = await client.post("/api/cards", json={
-        "paper_id": paper_id, "card_type": "Method",
+    resp = await client.post(f"/api/papers/{paper_id}/cards", json={
+        "card_type": "Method",
         "summary": "Uses transformer architecture", "confidence": 0.9
     })
     assert resp.status_code == 200
@@ -95,7 +95,7 @@ async def test_create_and_get_card(client: AsyncClient, setup_space_and_paper: t
     assert card["card_type"] == "Method"
     assert card["paper_id"] == paper_id
 
-    resp = await client.get(f"/api/cards/{card['id']}")
+    resp = await client.get(f"/api/papers/{paper_id}/cards/{card['id']}")
     assert resp.status_code == 200
     fetched_card = resp.json()
     assert_prior_card_fields(fetched_card)
@@ -111,9 +111,8 @@ async def test_card_routes_reject_invalid_confidence(
     _space_id, paper_id = setup_space_and_paper
 
     create_resp = await client.post(
-        "/api/cards",
+        f"/api/papers/{paper_id}/cards",
         json={
-            "paper_id": paper_id,
             "card_type": "Method",
             "summary": "Bad confidence",
             "confidence": 1.5,
@@ -123,9 +122,8 @@ async def test_card_routes_reject_invalid_confidence(
     assert "confidence" in create_resp.json()["detail"]
 
     valid_resp = await client.post(
-        "/api/cards",
+        f"/api/papers/{paper_id}/cards",
         json={
-            "paper_id": paper_id,
             "card_type": "Method",
             "summary": "Valid confidence",
             "confidence": 0.5,
@@ -135,7 +133,7 @@ async def test_card_routes_reject_invalid_confidence(
     card_id = valid_resp.json()["id"]
 
     patch_resp = await client.patch(
-        f"/api/cards/{card_id}",
+        f"/api/papers/{paper_id}/cards/{card_id}",
         json={"confidence": -0.1},
     )
     assert patch_resp.status_code == 422
@@ -145,16 +143,23 @@ async def test_card_routes_reject_invalid_confidence(
 @pytest.mark.asyncio
 async def test_list_cards(client: AsyncClient, setup_space_and_paper: tuple[str, str]) -> None:
     space_id, paper_id = setup_space_and_paper
-    await client.post("/api/cards", json={"paper_id": paper_id, "card_type": "Method", "summary": "M1"})
-    await client.post("/api/cards", json={"paper_id": paper_id, "card_type": "Result", "summary": "R1"})
+    await client.post(f"/api/papers/{paper_id}/cards", json={"card_type": "Method", "summary": "M1"})
+    await client.post(f"/api/papers/{paper_id}/cards", json={"card_type": "Result", "summary": "R1"})
 
-    resp = await client.get("/api/cards")
+    resp = await client.get(f"/api/papers/{paper_id}/cards")
     assert resp.status_code == 200
     cards = resp.json()
     assert len(cards) == 2
     for card in cards:
         assert_prior_card_fields(card)
         assert_manual_provenance(card)
+
+    filtered = await client.get(
+        f"/api/papers/{paper_id}/cards",
+        params={"card_type": "Method"},
+    )
+    assert filtered.status_code == 200
+    assert [card["summary"] for card in filtered.json()] == ["M1"]
 
 
 @pytest.mark.asyncio
@@ -165,8 +170,8 @@ async def test_card_routes_are_scoped_to_active_space(
     """Card HTTP routes must not expose cards from inactive spaces."""
     original_space_id, paper_id = setup_space_and_paper
     create_resp = await client.post(
-        "/api/cards",
-        json={"paper_id": paper_id, "card_type": "Method", "summary": "Private card"},
+        f"/api/papers/{paper_id}/cards",
+        json={"card_type": "Method", "summary": "Private card"},
     )
     assert create_resp.status_code == 200
     card_id = create_resp.json()["id"]
@@ -180,22 +185,21 @@ async def test_card_routes_are_scoped_to_active_space(
     assert other_space_id != original_space_id
     assert (await client.put(f"/api/spaces/active/{other_space_id}")).status_code == 200
 
-    get_resp = await client.get(f"/api/cards/{card_id}")
+    get_resp = await client.get(f"/api/papers/{paper_id}/cards/{card_id}")
     patch_resp = await client.patch(
-        f"/api/cards/{card_id}",
+        f"/api/papers/{paper_id}/cards/{card_id}",
         json={"summary": "Should not change from another space"},
     )
-    delete_resp = await client.delete(f"/api/cards/{card_id}")
+    delete_resp = await client.delete(f"/api/papers/{paper_id}/cards/{card_id}")
     override_resp = await client.get(
-        "/api/cards",
+        f"/api/papers/{paper_id}/cards",
         params={"space_id_override": original_space_id},
     )
 
     assert get_resp.status_code == 404
     assert patch_resp.status_code == 404
     assert delete_resp.status_code == 404
-    assert override_resp.status_code == 200
-    assert override_resp.json() == []
+    assert override_resp.status_code == 404
 
     conn = get_connection()
     try:
@@ -212,10 +216,10 @@ async def test_card_routes_are_scoped_to_active_space(
 @pytest.mark.asyncio
 async def test_update_card(client: AsyncClient, setup_space_and_paper: tuple[str, str]) -> None:
     space_id, paper_id = setup_space_and_paper
-    resp = await client.post("/api/cards", json={"paper_id": paper_id, "card_type": "Method", "summary": "Old"})
+    resp = await client.post(f"/api/papers/{paper_id}/cards", json={"card_type": "Method", "summary": "Old"})
     card_id = resp.json()["id"]
 
-    resp = await client.patch(f"/api/cards/{card_id}", json={"summary": "New"})
+    resp = await client.patch(f"/api/papers/{paper_id}/cards/{card_id}", json={"summary": "New"})
     assert resp.status_code == 200
     card = resp.json()
     assert_prior_card_fields(card)
@@ -227,13 +231,13 @@ async def test_update_card(client: AsyncClient, setup_space_and_paper: tuple[str
 @pytest.mark.asyncio
 async def test_delete_card(client: AsyncClient, setup_space_and_paper: tuple[str, str]) -> None:
     space_id, paper_id = setup_space_and_paper
-    resp = await client.post("/api/cards", json={"paper_id": paper_id, "card_type": "Claim", "summary": "C1"})
+    resp = await client.post(f"/api/papers/{paper_id}/cards", json={"card_type": "Claim", "summary": "C1"})
     card_id = resp.json()["id"]
 
-    resp = await client.delete(f"/api/cards/{card_id}")
+    resp = await client.delete(f"/api/papers/{paper_id}/cards/{card_id}")
     assert resp.status_code == 200
 
-    resp = await client.get(f"/api/cards/{card_id}")
+    resp = await client.get(f"/api/papers/{paper_id}/cards/{card_id}")
     assert resp.status_code == 404
 
 
@@ -248,6 +252,24 @@ async def test_heuristic_extract_endpoint_is_removed(
     resp = await client.post(f"/api/cards/extract/{paper_id}")
 
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_top_level_cards_routes_are_removed(
+    client: AsyncClient,
+    setup_space_and_paper: tuple[str, str],
+) -> None:
+    """Cards are exposed only through paper-scoped routes."""
+    _space_id, paper_id = setup_space_and_paper
+
+    get_resp = await client.get("/api/cards")
+    post_resp = await client.post(
+        "/api/cards",
+        json={"paper_id": paper_id, "card_type": "Method", "summary": "M1"},
+    )
+
+    assert get_resp.status_code == 404
+    assert post_resp.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -274,9 +296,8 @@ async def test_create_card_rejects_source_passage_from_other_paper(
         conn.close()
 
     resp = await client.post(
-        "/api/cards",
+        f"/api/papers/{paper_id}/cards",
         json={
-            "paper_id": paper_id,
             "card_type": "Method",
             "summary": "Uses a method",
             "source_passage_id": "foreign-passage",
@@ -299,9 +320,8 @@ async def test_create_card_rejects_deleted_active_space(
     assert delete_resp.status_code == 200
 
     resp = await client.post(
-        "/api/cards",
+        f"/api/papers/{paper_id}/cards",
         json={
-            "paper_id": paper_id,
             "card_type": "Method",
             "summary": "Should not be written",
         },

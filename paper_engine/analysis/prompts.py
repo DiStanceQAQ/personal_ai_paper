@@ -123,8 +123,6 @@ CARD_MERGE_DEDUP_SCHEMA: dict[str, Any] = {
 
 def build_metadata_extraction_prompt(
     passages: Sequence[SourcePassageLike],
-    *,
-    grobid_metadata: Mapping[str, Any] | None = None,
 ) -> AnalysisPrompt:
     """Build a source-grounded prompt for scholarly metadata extraction."""
     source_passages = _coerce_source_passages(passages)
@@ -133,14 +131,6 @@ def build_metadata_extraction_prompt(
             "Task: Extract paper metadata from the source passages.",
             GROUNDING_RULES,
             "Return empty strings or arrays for metadata not directly supported.",
-            "Use GROBID hints only when consistent with cited source passages.",
-            _context_json(
-                {
-                    "grobid_metadata_hints": _sanitize_metadata_hints(
-                        grobid_metadata or {}
-                    ),
-                }
-            ),
             "Source passages (JSONL):",
             _render_source_passages(source_passages),
         ]
@@ -350,19 +340,6 @@ def _truncate_text(text: str) -> str:
     if len(normalized) <= MAX_SOURCE_TEXT_CHARS:
         return normalized
     return f"{normalized[:MAX_SOURCE_TEXT_CHARS].rstrip()}... [truncated]"
-
-
-def _sanitize_metadata_hints(metadata: Mapping[str, Any]) -> dict[str, Any]:
-    allowed_keys = (
-        "title",
-        "authors",
-        "year",
-        "venue",
-        "doi",
-        "arxiv_id",
-        "abstract",
-    )
-    return {key: metadata[key] for key in allowed_keys if key in metadata}
 
 
 def _context_json(payload: Mapping[str, Any]) -> str:

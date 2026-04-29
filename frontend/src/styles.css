@@ -535,6 +535,11 @@ button {
   background: #ecfdf5;
 }
 
+.task-progress-card.cancelled {
+  border-color: #e5e7eb;
+  background: #f9fafb;
+}
+
 .task-progress-header {
   display: flex;
   align-items: center;
@@ -543,6 +548,27 @@ button {
   font-size: 12px;
   font-weight: 800;
   color: var(--text-secondary);
+}
+
+.task-progress-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-task-cancel {
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #dc2626;
+  background: #fff;
+}
+
+.btn-task-cancel:hover {
+  background: #fef2f2;
 }
 
 .task-progress-bar {
@@ -565,6 +591,10 @@ button {
 
 .task-progress-fill.failed {
   background: linear-gradient(90deg, #fca5a5, #ef4444);
+}
+
+.task-progress-fill.cancelled {
+  background: linear-gradient(90deg, #d1d5db, #9ca3af);
 }
 
 .task-progress-message {
@@ -1185,6 +1215,13 @@ button {
   color: var(--text-primary);
 }
 
+.paper-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: calc(100% - 40px);
+}
+
 .paper-status-tag {
   font-size: 10px;
   font-weight: 800;
@@ -1193,6 +1230,41 @@ button {
   color: var(--accent);
   border-radius: var(--radius-full);
   text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.paper-status-tag.parse-parsed,
+.paper-status-tag.metadata-extracted,
+.paper-status-tag.metadata-enriched,
+.paper-status-tag.ai-completed {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.paper-status-tag.parse-pending,
+.paper-status-tag.parse-parsing,
+.paper-status-tag.metadata-empty,
+.paper-status-tag.ai-parsing,
+.paper-status-tag.ai-analyzing,
+.paper-status-tag.ai-idle {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.paper-status-tag.parse-error,
+.paper-status-tag.ai-failed {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.paper-status-tag.ai-cancelled {
+  background: #f9fafb;
+  color: #6b7280;
+}
+
+.paper-status-tag.metadata-user_edited {
+  background: #f5f3ff;
+  color: #6d28d9;
 }
 
 .paper-authors {

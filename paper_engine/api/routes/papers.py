@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from fastapi import APIRouter, Body, Query, UploadFile
+from fastapi import APIRouter, Body, Query, UploadFile, status
 
 from paper_engine.papers import service
 
@@ -24,9 +24,34 @@ async def get_paper(paper_id: str) -> dict[str, Any]:
     return await service.get_paper(paper_id)
 
 
+@router.get("/{paper_id}/metadata")
+async def get_paper_metadata(paper_id: str) -> dict[str, Any]:
+    return await service.get_paper_metadata(paper_id)
+
+
 @router.get("/{paper_id}/parse-runs")
 async def list_parse_runs(paper_id: str) -> list[dict[str, Any]]:
     return await service.list_parse_runs(paper_id)
+
+
+@router.post("/{paper_id}/analysis-runs", status_code=status.HTTP_202_ACCEPTED)
+async def create_analysis_run(paper_id: str) -> dict[str, Any]:
+    return await service.create_analysis_run(paper_id)
+
+
+@router.get("/{paper_id}/analysis-runs")
+async def list_analysis_runs(paper_id: str) -> list[dict[str, Any]]:
+    return await service.list_analysis_runs(paper_id)
+
+
+@router.get("/{paper_id}/analysis-runs/{run_id}")
+async def get_analysis_run(paper_id: str, run_id: str) -> dict[str, Any]:
+    return await service.get_analysis_run(paper_id, run_id)
+
+
+@router.post("/{paper_id}/analysis-runs/{run_id}/cancel")
+async def cancel_analysis_run(paper_id: str, run_id: str) -> dict[str, Any]:
+    return await service.cancel_analysis_run(paper_id, run_id)
 
 
 @router.get("/{paper_id}/elements")
@@ -88,6 +113,58 @@ async def parse_paper(paper_id: str) -> dict[str, Any]:
 @router.get("/{paper_id}/passages")
 async def list_passages(paper_id: str) -> list[dict[str, Any]]:
     return await service.list_passages(paper_id)
+
+
+@router.get("/{paper_id}/cards")
+async def list_paper_cards(
+    paper_id: str,
+    card_type: str | None = None,
+) -> list[dict[str, Any]]:
+    return await service.list_paper_cards(paper_id, card_type=card_type)
+
+
+@router.post("/{paper_id}/cards")
+async def create_paper_card(
+    paper_id: str,
+    card_type: str = Body(...),
+    summary: str = Body(""),
+    source_passage_id: str | None = Body(None),
+    confidence: float = Body(1.0),
+) -> dict[str, Any]:
+    return await service.create_paper_card(
+        paper_id=paper_id,
+        card_type=card_type,
+        summary=summary,
+        source_passage_id=source_passage_id,
+        confidence=confidence,
+    )
+
+
+@router.get("/{paper_id}/cards/{card_id}")
+async def get_paper_card(paper_id: str, card_id: str) -> dict[str, Any]:
+    return await service.get_paper_card(paper_id, card_id)
+
+
+@router.patch("/{paper_id}/cards/{card_id}")
+async def update_paper_card(
+    paper_id: str,
+    card_id: str,
+    summary: str | None = Body(None),
+    card_type: str | None = Body(None),
+    confidence: float | None = Body(None),
+) -> dict[str, Any]:
+    return await service.update_paper_card(
+        paper_id=paper_id,
+        card_id=card_id,
+        summary=summary,
+        card_type=card_type,
+        confidence=confidence,
+    )
+
+
+@router.delete("/{paper_id}/cards/{card_id}")
+async def delete_paper_card(paper_id: str, card_id: str) -> dict[str, str]:
+    return await service.delete_paper_card(paper_id, card_id)
 
 
 @router.delete("/{paper_id}")

@@ -2,6 +2,8 @@ export type SpaceStatus = 'active' | 'archived' | 'deleted';
 export type ParseStatus = 'pending' | 'parsing' | 'parsed' | 'error';
 export type ParsePaperStatus = 'queued' | Extract<ParseStatus, 'parsed' | 'error'>;
 export type PdfParserBackend = 'mineru' | 'docling';
+export type MetadataStatus = 'empty' | 'extracted' | 'enriched' | 'user_edited';
+export type AnalysisRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type KnowledgeCardOrigin = 'user' | 'heuristic' | 'ai';
 export type SearchStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 export type DocumentElementType =
@@ -52,6 +54,7 @@ export interface AgentConfig {
   llm_provider: string;
   llm_base_url: string;
   llm_model: string;
+  llm_timeout_seconds: number;
   llm_api_key: string;
   has_api_key: boolean;
   pdf_parser_backend: PdfParserBackend;
@@ -93,6 +96,10 @@ export interface Paper {
   file_hash: string;
   imported_at: string;
   parse_status: ParseStatus;
+  metadata_status: MetadataStatus;
+  metadata_sources_json: string;
+  metadata_confidence_json: string;
+  user_edited_fields_json: string;
   queued_parse_run_id?: string;
   parse_diagnostics?: PaperParseDiagnostics;
 }
@@ -146,7 +153,7 @@ export interface ParseRun {
   metadata_json: string;
 }
 
-export type PaperTaskPhase = 'parsing' | 'analyzing' | 'completed' | 'failed';
+export type PaperTaskPhase = 'parsing' | 'analyzing' | 'completed' | 'failed' | 'cancelled';
 
 export interface PaperBackgroundTask {
   paper_id: string;
@@ -154,6 +161,7 @@ export interface PaperBackgroundTask {
   progress: number;
   message: string;
   parse_run_id: string | null;
+  analysis_run_id?: string | null;
   error_detail: string | null;
 }
 
@@ -211,13 +219,40 @@ export interface KnowledgeCard {
   updated_at: string;
 }
 
-export interface RunDeepAnalysisResponse {
-  status: 'success';
-  card_count: number;
-  analysis_run_id: string;
+export interface AnalysisRun {
+  id: string;
+  paper_id: string;
+  space_id: string;
+  status: AnalysisRunStatus;
+  model: string;
+  provider: string;
+  extractor_version: string;
   accepted_card_count: number;
   rejected_card_count: number;
-  metadata_confidence: number;
+  metadata_json: string;
+  warnings_json: string;
+  diagnostics_json: string;
+  started_at: string;
+  completed_at: string | null;
+  last_error: string | null;
+}
+
+export interface PaperMetadata {
+  paper_id: string;
+  space_id: string;
+  title: string;
+  authors: string;
+  year: number | null;
+  doi: string;
+  arxiv_id: string;
+  pubmed_id: string;
+  venue: string;
+  abstract: string;
+  parse_status: ParseStatus;
+  metadata_status: MetadataStatus;
+  metadata_sources: Record<string, unknown>;
+  metadata_confidence: Record<string, unknown>;
+  user_edited_fields: string[];
 }
 
 export interface AgentStatus {

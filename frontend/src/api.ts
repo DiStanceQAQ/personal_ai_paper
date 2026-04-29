@@ -2,16 +2,17 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import type {
   AgentConfig,
   AgentStatus,
+  AnalysisRun,
   DocumentElement,
   DocumentElementType,
   DocumentTable,
   KnowledgeCard,
   MinerUTestResult,
   Paper,
+  PaperMetadata,
   ParsePaperResponse,
   ParseRun,
   Passage,
-  RunDeepAnalysisResponse,
   SearchResult,
   Space,
 } from './types';
@@ -88,6 +89,7 @@ export const api = {
   getActiveSpace: () => request<Space>('/api/spaces/active'),
   listPapers: () => request<Paper[]>('/api/papers'),
   getPaper: (paperId: string) => request<Paper>(`/api/papers/${paperId}`),
+  getPaperMetadata: (paperId: string) => request<PaperMetadata>(`/api/papers/${paperId}/metadata`),
   deletePaper: (paperId: string) => request<{ status: string; paper_id: string }>(`/api/papers/${paperId}`, { method: 'DELETE' }),
   updatePaper: (paperId: string, body: Partial<Paper>) =>
     request<Paper>(`/api/papers/${paperId}`, { method: 'PATCH', body: JSON.stringify(body) }),
@@ -99,6 +101,14 @@ export const api = {
   parsePaper: (paperId: string) =>
     request<ParsePaperResponse>(`/api/papers/${paperId}/parse`, { method: 'POST' }),
   listParseRuns: (paperId: string) => request<ParseRun[]>(`/api/papers/${paperId}/parse-runs`),
+  createAnalysisRun: (paperId: string) =>
+    request<AnalysisRun>(`/api/papers/${paperId}/analysis-runs`, { method: 'POST' }),
+  listAnalysisRuns: (paperId: string) =>
+    request<AnalysisRun[]>(`/api/papers/${paperId}/analysis-runs`),
+  getAnalysisRun: (paperId: string, runId: string) =>
+    request<AnalysisRun>(`/api/papers/${paperId}/analysis-runs/${runId}`),
+  cancelAnalysisRun: (paperId: string, runId: string) =>
+    request<AnalysisRun>(`/api/papers/${paperId}/analysis-runs/${runId}/cancel`, { method: 'POST' }),
   listDocumentElements: (
     paperId: string,
     filters: { type?: DocumentElementType; page?: number; limit?: number } = {},
@@ -112,19 +122,18 @@ export const api = {
   },
   listDocumentTables: (paperId: string) => request<DocumentTable[]>(`/api/papers/${paperId}/tables`),
   listPassages: (paperId: string) => request<Passage[]>(`/api/papers/${paperId}/passages`),
-  listCards: (paperId?: string, cardType?: string) => {
+  listCards: (paperId: string, cardType?: string) => {
     const params = new URLSearchParams();
-    if (paperId) params.set('paper_id', paperId);
     if (cardType) params.set('card_type', cardType);
     const query = params.toString();
-    return request<KnowledgeCard[]>(`/api/cards${query ? `?${query}` : ''}`);
+    return request<KnowledgeCard[]>(`/api/papers/${paperId}/cards${query ? `?${query}` : ''}`);
   },
-  createCard: (card: Partial<KnowledgeCard>) =>
-    request<KnowledgeCard>('/api/cards', { method: 'POST', body: JSON.stringify(card) }),
-  updateCard: (cardId: string, card: Partial<KnowledgeCard>) =>
-    request<KnowledgeCard>(`/api/cards/${cardId}`, { method: 'PATCH', body: JSON.stringify(card) }),
-  deleteCard: (cardId: string) =>
-    request<{ status: string; card_id: string }>(`/api/cards/${cardId}`, { method: 'DELETE' }),
+  createCard: (paperId: string, card: Partial<KnowledgeCard>) =>
+    request<KnowledgeCard>(`/api/papers/${paperId}/cards`, { method: 'POST', body: JSON.stringify(card) }),
+  updateCard: (paperId: string, cardId: string, card: Partial<KnowledgeCard>) =>
+    request<KnowledgeCard>(`/api/papers/${paperId}/cards/${cardId}`, { method: 'PATCH', body: JSON.stringify(card) }),
+  deleteCard: (paperId: string, cardId: string) =>
+    request<{ status: string; card_id: string }>(`/api/papers/${paperId}/cards/${cardId}`, { method: 'DELETE' }),
   search: (q: string) => request<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}&limit=30`),
   agentStatus: () => request<AgentStatus>('/api/agent/status'),
   setAgentStatus: (enabled: boolean) =>
@@ -136,6 +145,4 @@ export const api = {
     request<{ status: string }>('/api/agent/config', { method: 'PUT', body: JSON.stringify(config) }),
   testMineruConnection: () =>
     request<MinerUTestResult>('/api/agent/config/mineru/test', { method: 'POST' }),
-  runDeepAnalysis: (paperId: string) =>
-    request<RunDeepAnalysisResponse>(`/api/agent/analyze/${paperId}`, { method: 'POST' }),
 };

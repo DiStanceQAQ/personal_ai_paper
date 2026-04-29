@@ -189,6 +189,8 @@ def test_persist_analysis_result_replaces_only_unedited_ai_cards() -> None:
     assert json.loads(analysis_run["diagnostics_json"]) == {
         "rejected_cards": [{"reason": "evidence_mismatch"}]
     }
+    metadata_json = json.loads(analysis_run["metadata_json"])
+    assert metadata_json["metadata_extra"]["route"] == "unit"
 
     card_rows = conn.execute(
         """
@@ -314,4 +316,35 @@ def test_update_paper_metadata_only_fills_empty_fields() -> None:
         "venue": "Manual Venue",
         "doi": "10.0000/manual",
         "arxiv_id": "2601.00001",
+    }
+
+
+def test_persist_analysis_result_keeps_metadata_extra_timings() -> None:
+    conn = _test_conn()
+    _seed_space_paper_and_passages(conn)
+
+    result = _analysis_result().model_copy(
+        update={
+            "metadata_extra": {
+                "route": "unit",
+                "timings": {
+                    "load_inputs_seconds": 0.1,
+                    "card_extraction_seconds": 1.2,
+                    "total_seconds": 1.5,
+                },
+            }
+        }
+    )
+
+    analysis_run_id = persist_analysis_result(conn, result)
+    row = conn.execute(
+        "SELECT metadata_json FROM analysis_runs WHERE id = ?",
+        (analysis_run_id,),
+    ).fetchone()
+    metadata = json.loads(row["metadata_json"])
+
+    assert metadata["metadata_extra"]["timings"] == {
+        "load_inputs_seconds": 0.1,
+        "card_extraction_seconds": 1.2,
+        "total_seconds": 1.5,
     }

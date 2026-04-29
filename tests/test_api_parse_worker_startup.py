@@ -45,6 +45,7 @@ async def test_lifespan_recovers_stale_parse_runs(
         conn.close()
 
         monkeypatch.setenv("PAPER_ENGINE_PARSE_WORKER_ENABLED", "0")
+        monkeypatch.setenv("PAPER_ENGINE_ANALYSIS_WORKER_ENABLED", "0")
         async with app_module.app.router.lifespan_context(app_module.app):
             async with AsyncClient(
                 transport=ASGITransport(app=app_module.app),
@@ -80,6 +81,7 @@ async def test_lifespan_starts_parse_worker_when_enabled(
 
     monkeypatch.setattr(app_module, "run_worker_loop", fake_run_worker_loop)
     monkeypatch.setattr(app_module, "run_parse_recovery_loop", fake_run_worker_loop)
+    monkeypatch.setenv("PAPER_ENGINE_ANALYSIS_WORKER_ENABLED", "0")
     monkeypatch.setenv("PAPER_ENGINE_PARSE_WORKER_ENABLED", "1")
     monkeypatch.setenv("PAPER_ENGINE_PARSE_POLL_SECONDS", "0.01")
     monkeypatch.setenv("PAPER_ENGINE_PARSE_RECOVERY_POLL_SECONDS", "0.02")

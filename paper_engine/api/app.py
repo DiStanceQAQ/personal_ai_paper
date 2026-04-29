@@ -16,10 +16,11 @@ from fastapi.staticfiles import StaticFiles
 from paper_engine.storage.database import init_db
 from paper_engine.core.startup import StartupTracer
 from paper_engine.api.routes.agent import router as agent_router
-from paper_engine.api.routes.cards import router as cards_router
 from paper_engine.api.routes.papers import router as papers_router
 from paper_engine.api.routes.search import router as search_router
 from paper_engine.api.routes.spaces import router as spaces_router
+from paper_engine.analysis.jobs import recover_stale_analysis_runs
+from paper_engine.analysis.worker import AnalysisWorker, run_analysis_worker_loop
 from paper_engine.pdf.jobs import recover_stale_parse_runs
 from paper_engine.pdf.worker import ParseWorker, run_worker_loop
 from paper_engine.storage.database import get_connection
@@ -48,6 +49,25 @@ def run_parse_recovery_loop(
         time.sleep(poll_interval_seconds)
 
 
+def run_analysis_recovery_loop(
+    *,
+    poll_interval_seconds: float,
+    stop: Callable[[], bool] | None = None,
+) -> None:
+    """Requeue or fail stale analysis runs while the API stays online."""
+    while stop is None or not stop():
+        conn = get_connection()
+        try:
+            recover_stale_analysis_runs(
+                conn,
+                stale_after_seconds=int(os.getenv("PAPER_ENGINE_ANALYSIS_STALE_SECONDS", "900")),
+                max_attempts=int(os.getenv("PAPER_ENGINE_ANALYSIS_MAX_ATTEMPTS", "2")),
+            )
+        finally:
+            conn.close()
+        time.sleep(poll_interval_seconds)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Initialize the database on startup."""
@@ -67,12 +87,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             max_attempts=int(os.getenv("PAPER_ENGINE_PARSE_MAX_ATTEMPTS", "3")),
         )
         startup_trace("parse_runs_recovered", count=str(recovered))
+        analysis_recovered = recover_stale_analysis_runs(
+            conn,
+            stale_after_seconds=int(os.getenv("PAPER_ENGINE_ANALYSIS_STALE_SECONDS", "900")),
+            max_attempts=int(os.getenv("PAPER_ENGINE_ANALYSIS_MAX_ATTEMPTS", "2")),
+        )
+        startup_trace("analysis_runs_recovered", count=str(analysis_recovered))
     finally:
         conn.close()
 
     stop_event = threading.Event()
     worker_thread: threading.Thread | None = None
     recovery_thread: threading.Thread | None = None
+    analysis_worker_thread: threading.Thread | None = None
+    analysis_recovery_thread: threading.Thread | None = None
     if os.getenv("PAPER_ENGINE_PARSE_WORKER_ENABLED", "1") == "1":
         worker = ParseWorker(worker_id=f"api-worker-{os.getpid()}")
         worker_thread = threading.Thread(
@@ -100,6 +128,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         recovery_thread.start()
         startup_trace("parse_recovery_started")
+    if os.getenv("PAPER_ENGINE_ANALYSIS_WORKER_ENABLED", "1") == "1":
+        analysis_worker = AnalysisWorker(worker_id=f"api-analysis-worker-{os.getpid()}")
+        analysis_worker_thread = threading.Thread(
+            target=run_analysis_worker_loop,
+            kwargs={
+                "worker": analysis_worker,
+                "poll_interval_seconds": float(
+                    os.getenv("PAPER_ENGINE_ANALYSIS_POLL_SECONDS", "2")
+                ),
+                "stop": stop_event.is_set,
+            },
+            daemon=True,
+        )
+        analysis_worker_thread.start()
+        startup_trace("analysis_worker_started", worker_id=analysis_worker.worker_id)
+        analysis_recovery_thread = threading.Thread(
+            target=run_analysis_recovery_loop,
+            kwargs={
+                "poll_interval_seconds": float(
+                    os.getenv("PAPER_ENGINE_ANALYSIS_RECOVERY_POLL_SECONDS", "30")
+                ),
+                "stop": stop_event.is_set,
+            },
+            daemon=True,
+        )
+        analysis_recovery_thread.start()
+        startup_trace("analysis_recovery_started")
 
     startup_trace("lifespan_ready")
     try:
@@ -112,6 +167,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if recovery_thread is not None:
             recovery_thread.join(timeout=5)
             startup_trace("parse_recovery_stopped")
+        if analysis_worker_thread is not None:
+            analysis_worker_thread.join(timeout=5)
+            startup_trace("analysis_worker_stopped")
+        if analysis_recovery_thread is not None:
+            analysis_recovery_thread.join(timeout=5)
+            startup_trace("analysis_recovery_stopped")
 
 
 app = FastAPI(
@@ -141,7 +202,6 @@ if STATIC_DIR.exists():
 app.include_router(spaces_router)
 app.include_router(papers_router)
 app.include_router(search_router)
-app.include_router(cards_router)
 app.include_router(agent_router)
 
 

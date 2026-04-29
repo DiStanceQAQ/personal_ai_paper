@@ -54,7 +54,11 @@ def test_metadata_prompt_lists_source_ids_pages_and_grounding_rules() -> None:
             SourcePassageInput(
                 id="passage-title",
                 page_number=1,
-                text="Grounded PDF Analysis\nAda Lovelace and Grace Hopper",
+                text=(
+                    "Grounded PDF Analysis\n"
+                    "Ada Lovelace and Grace Hopper\n"
+                    "DOI: 10.1234/example"
+                ),
                 section="title",
                 heading_path=["Title"],
             ),
@@ -66,7 +70,6 @@ def test_metadata_prompt_lists_source_ids_pages_and_grounding_rules() -> None:
                 heading_path=["Abstract"],
             ),
         ],
-        grobid_metadata={"doi": "10.1234/example", "authors": ["Ada Lovelace"]},
     )
 
     combined = f"{prompt.system_prompt}\n{prompt.user_prompt}"

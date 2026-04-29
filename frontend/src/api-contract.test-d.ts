@@ -1,6 +1,7 @@
 import { api } from './api';
 import type {
   AgentConfig,
+  AnalysisRun,
   DocumentElement,
   DocumentElementType,
   DocumentTable,
@@ -9,10 +10,10 @@ import type {
   KnowledgeCardOrigin,
   MinerUTestResult,
   Paper,
+  PaperMetadata,
   PaperParseDiagnostics,
   ParsePaperResponse,
   ParseRun,
-  RunDeepAnalysisResponse,
 } from './types';
 
 type Assert<T extends true> = T;
@@ -38,6 +39,21 @@ type _MinerUTestReturnsStatus = Assert<
 type _ListParseRunsReturnsRuns = Assert<
   IsEqual<AsyncReturn<typeof api.listParseRuns>, ParseRun[]>
 >;
+type _CreateAnalysisRunReturnsRun = Assert<
+  IsEqual<AsyncReturn<typeof api.createAnalysisRun>, AnalysisRun>
+>;
+type _ListAnalysisRunsReturnsRuns = Assert<
+  IsEqual<AsyncReturn<typeof api.listAnalysisRuns>, AnalysisRun[]>
+>;
+type _GetAnalysisRunReturnsRun = Assert<
+  IsEqual<AsyncReturn<typeof api.getAnalysisRun>, AnalysisRun>
+>;
+type _CancelAnalysisRunReturnsRun = Assert<
+  IsEqual<AsyncReturn<typeof api.cancelAnalysisRun>, AnalysisRun>
+>;
+type _GetPaperMetadataReturnsParsedProvenance = Assert<
+  IsEqual<AsyncReturn<typeof api.getPaperMetadata>, PaperMetadata>
+>;
 type _ListElementsReturnsElements = Assert<
   IsEqual<AsyncReturn<typeof api.listDocumentElements>, DocumentElement[]>
 >;
@@ -46,9 +62,6 @@ type _ListTablesReturnsTables = Assert<
 >;
 type _ListCardsReturnsCardsWithProvenance = Assert<
   IsEqual<AsyncReturn<typeof api.listCards>, KnowledgeCard[]>
->;
-type _RunDeepAnalysisReturnsAnalysisSummary = Assert<
-  IsEqual<AsyncReturn<typeof api.runDeepAnalysis>, RunDeepAnalysisResponse>
 >;
 type _PaperCarriesOptionalParseDiagnostics = Assert<
   IsEqual<Paper['parse_diagnostics'], PaperParseDiagnostics | undefined>

@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { api } from '../api';
 import type {
   AgentStatus,
+  AnalysisRun,
   KnowledgeCard,
   PaperBackgroundTask,
   Paper,
@@ -104,6 +105,132 @@ function parseRunFailureMessage(run: ParseRun): string {
   return run.last_error || 'PDF 解析失败，请检查解析配置或稍后重试。';
 }
 
+function findLatestActiveAnalysisRun(runs: AnalysisRun[]): AnalysisRun | undefined {
+  return runs.find((run) => run.status === 'queued' || run.status === 'running');
+}
+
+function analysisRunFailureMessage(run: AnalysisRun): string {
+  return run.last_error || 'AI 深度分析失败，请检查模型配置后重试。';
+}
+
+interface AnalysisRunProgress {
+  stage: string;
+  total_batches: number;
+  completed_batches: number;
+  current_batch_index: number | null;
+  accepted_card_count: number;
+  rejected_card_count: number;
+}
+
+function numericProgressValue(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function parseAnalysisRunProgress(run: AnalysisRun): AnalysisRunProgress | null {
+  if (!run.diagnostics_json) return null;
+
+  try {
+    const diagnostics = JSON.parse(run.diagnostics_json) as Record<string, unknown>;
+    const rawProgress = diagnostics.progress;
+    if (!rawProgress || typeof rawProgress !== 'object') return null;
+
+    const progress = rawProgress as Record<string, unknown>;
+    return {
+      stage: typeof progress.stage === 'string' ? progress.stage : '',
+      total_batches: numericProgressValue(progress.total_batches) ?? 0,
+      completed_batches: numericProgressValue(progress.completed_batches) ?? 0,
+      current_batch_index: numericProgressValue(progress.current_batch_index),
+      accepted_card_count: numericProgressValue(progress.accepted_card_count) ?? 0,
+      rejected_card_count: numericProgressValue(progress.rejected_card_count) ?? 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function analysisRunProgressPercent(run: AnalysisRun, progress: AnalysisRunProgress | null): number {
+  if (run.status === 'queued') return 82;
+  if (!progress) return 92;
+  if (progress.stage === 'metadata') return 84;
+  if (progress.stage === 'ranking') return 98;
+  if (progress.total_batches <= 0) return 92;
+
+  const completedRatio = Math.min(
+    1,
+    Math.max(0, progress.completed_batches / progress.total_batches),
+  );
+  return Math.min(98, Math.max(84, Math.round(84 + completedRatio * 14)));
+}
+
+function analysisRunProgressMessage(
+  run: AnalysisRun,
+  progress: AnalysisRunProgress | null,
+): string {
+  if (run.status === 'queued') {
+    return 'AI 分析任务已进入队列，等待后台处理...';
+  }
+  if (!progress) return 'AI 深度分析正在后台运行...';
+  if (progress.stage === 'metadata') return 'AI 深度分析正在识别论文元数据...';
+
+  const total = progress.total_batches;
+  if (progress.stage === 'ranking' && total > 0) {
+    return `AI 深度分析正在去重排序，已完成 ${total}/${total} 批。`;
+  }
+  if (total <= 0) return 'AI 深度分析正在后台运行...';
+
+  const completed = Math.min(progress.completed_batches, total);
+  if (completed >= total) {
+    return `AI 深度分析已完成 ${total}/${total} 批，正在整理结果...`;
+  }
+
+  const currentBatch = progress.current_batch_index == null
+    ? completed + 1
+    : progress.current_batch_index + 1;
+  const safeCurrentBatch = Math.min(Math.max(currentBatch, 1), total);
+  const candidateCount = run.accepted_card_count || progress.accepted_card_count;
+  const rejectedCount = run.rejected_card_count || progress.rejected_card_count;
+  const candidateText = candidateCount > 0 ? `，已得到 ${candidateCount} 张候选卡` : '';
+  const rejectedText = rejectedCount > 0 ? `，${rejectedCount} 条候选被拒绝` : '';
+  return `AI 深度分析正在处理第 ${safeCurrentBatch}/${total} 批，已完成 ${completed} 批${candidateText}${rejectedText}。`;
+}
+
+function taskFromAnalysisRun(
+  run: AnalysisRun,
+  parseRunId: string | null = null,
+): Omit<PaperBackgroundTask, 'paper_id'> {
+  if (run.status === 'completed') {
+    return {
+      phase: 'completed',
+      progress: 100,
+      message: `AI 深度分析完成，生成 ${run.accepted_card_count} 张卡片。`,
+      parse_run_id: parseRunId,
+      analysis_run_id: run.id,
+      error_detail: null,
+    };
+  }
+
+  if (run.status === 'failed' || run.status === 'cancelled') {
+    return {
+      phase: run.status === 'cancelled' ? 'cancelled' : 'failed',
+      progress: 100,
+      message: run.status === 'cancelled' ? 'AI 深度分析已取消。' : 'AI 深度分析失败。',
+      parse_run_id: parseRunId,
+      analysis_run_id: run.id,
+      error_detail: run.status === 'cancelled' ? null : analysisRunFailureMessage(run),
+    };
+  }
+
+  const progress = parseAnalysisRunProgress(run);
+  return {
+    phase: 'analyzing',
+    progress: analysisRunProgressPercent(run, progress),
+    message: analysisRunProgressMessage(run, progress),
+    parse_run_id: parseRunId,
+    analysis_run_id: run.id,
+    error_detail: null,
+  };
+}
+
 export function usePapers(
   activeSpaceId: string | undefined,
   setNotice: (n: { message: string, type: 'success' | 'error' } | null) => void,
@@ -187,12 +314,13 @@ export function usePapers(
       paperId: string,
       parseResult?: ParsePaperResponse,
     ) => {
-      const [updatedPaper, paperCards, paperPassages, parseRuns, paperTables] = await Promise.all([
+      const [updatedPaper, paperCards, paperPassages, parseRuns, paperTables, analysisRuns] = await Promise.all([
         api.getPaper(paperId),
         api.listCards(paperId),
         api.listPassages(paperId),
         api.listParseRuns(paperId),
         api.listDocumentTables(paperId),
+        api.listAnalysisRuns(paperId),
       ]);
       const diagnostics = mergeDiagnostics(
         diagnosticsFromRun(parseRuns[0], {
@@ -215,9 +343,15 @@ export function usePapers(
             : paper,
         ),
       );
+      if (analysisRuns[0]) {
+        setBackgroundTask(
+          paperId,
+          taskFromAnalysisRun(analysisRuns[0], backgroundTasksRef.current[paperId]?.parse_run_id || null),
+        );
+      }
       await loadPapers();
     },
-    [loadPapers, selectedPaper],
+    [loadPapers, selectedPaper, setBackgroundTask],
   );
 
   const startBackgroundAnalysis = useCallback(
@@ -228,21 +362,18 @@ export function usePapers(
       setBackgroundTask(paperId, {
         phase: 'analyzing',
         progress: 82,
-        message: '正在后台执行 AI 深度分析...',
+        message: '正在提交 AI 深度分析任务...',
         parse_run_id: backgroundTasksRef.current[paperId]?.parse_run_id || null,
+        analysis_run_id: backgroundTasksRef.current[paperId]?.analysis_run_id || null,
         error_detail: null,
       });
       try {
-        const result = await api.runDeepAnalysis(paperId);
-        setBackgroundTask(paperId, {
-          phase: 'completed',
-          progress: 100,
-          message: `AI 深度分析完成，生成 ${result.card_count} 张卡片。`,
-          parse_run_id: backgroundTasksRef.current[paperId]?.parse_run_id || null,
-          error_detail: null,
-        });
-        setNotice({ message: `AI 解析成功！识别了元数据并提取了 ${result.card_count} 张卡片。`, type: 'success' });
-        await refreshPaperDetails(paperId);
+        const run = await api.createAnalysisRun(paperId);
+        setBackgroundTask(
+          paperId,
+          taskFromAnalysisRun(run, backgroundTasksRef.current[paperId]?.parse_run_id || null),
+        );
+        setNotice({ message: 'AI 深度分析任务已提交，将在后台运行。', type: 'success' });
       } catch (err: any) {
         const detail = err.message || 'AI 深度分析失败，请检查模型配置。';
         setBackgroundTask(paperId, {
@@ -250,6 +381,7 @@ export function usePapers(
           progress: 100,
           message: 'AI 深度分析失败。',
           parse_run_id: backgroundTasksRef.current[paperId]?.parse_run_id || null,
+          analysis_run_id: backgroundTasksRef.current[paperId]?.analysis_run_id || null,
           error_detail: detail,
         });
         setNotice({ message: `AI 解析失败: ${detail}`, type: 'error' });
@@ -257,7 +389,7 @@ export function usePapers(
         analysisInFlightRef.current.delete(paperId);
       }
     },
-    [refreshPaperDetails, setBackgroundTask, setNotice],
+    [setBackgroundTask, setNotice],
   );
 
   // 状态轮询逻辑：如果有论文正在解析，每 3 秒刷新一次列表
@@ -285,13 +417,16 @@ export function usePapers(
     if (monitorInFlightRef.current) return;
     monitorInFlightRef.current = true;
     try {
-      const activeTasks = Object.values(backgroundTasksRef.current).filter(
+      const parseTasks = Object.values(backgroundTasksRef.current).filter(
         (task) => task.phase === 'parsing',
       );
-      if (activeTasks.length > 0) {
+      const analysisTasks = Object.values(backgroundTasksRef.current).filter(
+        (task) => task.phase === 'analyzing',
+      );
+      if (parseTasks.length > 0 || analysisTasks.length > 0) {
         await loadPapers();
       }
-      for (const task of activeTasks) {
+      for (const task of parseTasks) {
         const runs = await api.listParseRuns(task.paper_id);
         const matchedRun = task.parse_run_id
           ? runs.find((run) => run.id === task.parse_run_id) || runs[0]
@@ -303,6 +438,7 @@ export function usePapers(
             progress: 100,
             message: '未找到解析任务记录。',
             parse_run_id: task.parse_run_id,
+            analysis_run_id: task.analysis_run_id || null,
             error_detail: '未找到解析任务记录。',
           });
           continue;
@@ -314,6 +450,7 @@ export function usePapers(
             progress: 76,
             message: 'PDF 解析完成，准备执行 AI 深度分析...',
             parse_run_id: matchedRun.id,
+            analysis_run_id: task.analysis_run_id || null,
             error_detail: null,
           });
           void startBackgroundAnalysis(task.paper_id);
@@ -327,6 +464,7 @@ export function usePapers(
             progress: 100,
             message: 'PDF 解析失败。',
             parse_run_id: matchedRun.id,
+            analysis_run_id: task.analysis_run_id || null,
             error_detail: detail,
           });
           setNotice({ message: `PDF 解析失败: ${detail}`, type: 'error' });
@@ -340,17 +478,61 @@ export function usePapers(
             ? '解析任务已进入队列，等待后台处理...'
             : 'PDF 解析正在后台运行...',
           parse_run_id: matchedRun.id,
+          analysis_run_id: task.analysis_run_id || null,
           error_detail: null,
         });
+      }
+
+      for (const task of analysisTasks) {
+        const runs = await api.listAnalysisRuns(task.paper_id);
+        const matchedRun = task.analysis_run_id
+          ? runs.find((run) => run.id === task.analysis_run_id) || runs[0]
+          : runs[0];
+
+        if (!matchedRun) {
+          setBackgroundTask(task.paper_id, {
+            phase: 'failed',
+            progress: 100,
+            message: '未找到 AI 分析任务记录。',
+            parse_run_id: task.parse_run_id,
+            analysis_run_id: task.analysis_run_id || null,
+            error_detail: '未找到 AI 分析任务记录。',
+          });
+          continue;
+        }
+
+        setBackgroundTask(
+          task.paper_id,
+          taskFromAnalysisRun(matchedRun, task.parse_run_id),
+        );
+
+        if (matchedRun.status === 'completed') {
+          setNotice({
+            message: `AI 解析成功！提取了 ${matchedRun.accepted_card_count} 张卡片。`,
+            type: 'success',
+          });
+          await refreshPaperDetails(task.paper_id);
+        }
+
+        if (matchedRun.status === 'failed') {
+          setNotice({
+            message: `AI 解析失败: ${analysisRunFailureMessage(matchedRun)}`,
+            type: 'error',
+          });
+        }
+        if (matchedRun.status === 'cancelled') {
+          setNotice({ message: 'AI 深度分析已取消。', type: 'success' });
+          await refreshPaperDetails(task.paper_id);
+        }
       }
     } finally {
       monitorInFlightRef.current = false;
     }
-  }, [loadPapers, setBackgroundTask, setNotice, startBackgroundAnalysis]);
+  }, [loadPapers, refreshPaperDetails, setBackgroundTask, setNotice, startBackgroundAnalysis]);
 
   useEffect(() => {
     const hasActiveBackgroundTask = Object.values(backgroundTasks).some(
-      (task) => task.phase === 'parsing',
+      (task) => task.phase === 'parsing' || task.phase === 'analyzing',
     );
 
     if (hasActiveBackgroundTask && !backgroundPollingRef.current) {
@@ -373,11 +555,12 @@ export function usePapers(
   const openPaper = async (paper: Paper) => {
     setSelectedPaper(paper);
     try {
-      const [paperPassages, paperCards, parseRuns, paperTables] = await Promise.all([
+      const [paperPassages, paperCards, parseRuns, paperTables, analysisRuns] = await Promise.all([
         api.listPassages(paper.id),
         api.listCards(paper.id),
         api.listParseRuns(paper.id),
         api.listDocumentTables(paper.id),
+        api.listAnalysisRuns(paper.id),
       ]);
       const diagnostics = diagnosticsFromRun(parseRuns[0], {
         passageCount: paperPassages.length,
@@ -398,6 +581,15 @@ export function usePapers(
             : item,
         ),
       );
+      if (analysisRuns[0]) {
+        setBackgroundTask(
+          paper.id,
+          taskFromAnalysisRun(
+            analysisRuns[0],
+            backgroundTasksRef.current[paper.id]?.parse_run_id || null,
+          ),
+        );
+      }
     } catch {
       setNotice({ message: '获取论文详情失败。', type: 'error' });
     }
@@ -450,6 +642,7 @@ export function usePapers(
             ? '解析任务已进入队列，等待后台处理...'
             : 'PDF 解析正在后台运行...',
           parse_run_id: existingActiveRun.id,
+          analysis_run_id: null,
           error_detail: null,
         });
         setNotice({ message: '已在后台继续等待 PDF 解析完成。', type: 'success' });
@@ -457,11 +650,23 @@ export function usePapers(
       }
 
       if (currentPaper?.parse_status === 'parsed') {
+        const analysisRuns = await api.listAnalysisRuns(paperId);
+        const activeAnalysisRun = findLatestActiveAnalysisRun(analysisRuns);
+        if (activeAnalysisRun) {
+          setBackgroundTask(
+            paperId,
+            taskFromAnalysisRun(activeAnalysisRun, backgroundTasksRef.current[paperId]?.parse_run_id || null),
+          );
+          setNotice({ message: '已在后台继续等待 AI 深度分析完成。', type: 'success' });
+          return;
+        }
+
         setBackgroundTask(paperId, {
           phase: 'analyzing',
           progress: 82,
           message: '已在后台启动 AI 深度分析。',
           parse_run_id: null,
+          analysis_run_id: null,
           error_detail: null,
         });
         setNotice({ message: '已在后台启动 AI 深度分析。', type: 'success' });
@@ -475,12 +680,27 @@ export function usePapers(
         progress: 18,
         message: '已在后台提交 PDF 解析任务。',
         parse_run_id: parseResult.parse_run_id,
+        analysis_run_id: null,
         error_detail: null,
       });
       setNotice({ message: '已在后台提交 PDF 解析任务。', type: 'success' });
       await loadPapers();
     } catch (err: any) {
       setNotice({ message: `AI 解析失败: ${err.message || '请检查模型配置'}`, type: 'error' });
+    }
+  };
+
+  const cancelAnalysisRun = async (paperId: string, runId: string) => {
+    try {
+      const run = await api.cancelAnalysisRun(paperId, runId);
+      setBackgroundTask(
+        paperId,
+        taskFromAnalysisRun(run, backgroundTasksRef.current[paperId]?.parse_run_id || null),
+      );
+      setNotice({ message: 'AI 深度分析已取消。', type: 'success' });
+      await refreshPaperDetails(paperId);
+    } catch (err: any) {
+      setNotice({ message: `取消 AI 分析失败: ${err.message || '请稍后重试'}`, type: 'error' });
     }
   };
 
@@ -498,6 +718,7 @@ export function usePapers(
     deletePaper,
     uploadPaper,
     runDeepAnalysis,
+    cancelAnalysisRun,
     backgroundTasks,
   };
 }

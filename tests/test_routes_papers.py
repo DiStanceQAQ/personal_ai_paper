@@ -107,6 +107,56 @@ async def test_upload_pdf_to_active_space(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_paper_metadata_returns_parsed_provenance(client: AsyncClient) -> None:
+    """The metadata endpoint returns core fields with parsed source diagnostics."""
+    await _create_and_activate_space(client)
+
+    resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+    assert resp.status_code == 200
+    paper_id = resp.json()["id"]
+
+    import paper_engine.storage.database as db_module
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        conn.execute(
+            """
+            UPDATE papers
+            SET title = 'Parsed Title',
+                authors = 'Ada Lovelace',
+                year = 2026,
+                doi = '10.1234/example',
+                metadata_status = 'extracted',
+                metadata_sources_json = '{"title":"document.title","doi":"regex.doi"}',
+                metadata_confidence_json = '{"title":0.9,"doi":0.98}',
+                user_edited_fields_json = '["authors"]'
+            WHERE id = ?
+            """,
+            (paper_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    metadata = await client.get(f"/api/papers/{paper_id}/metadata")
+
+    assert metadata.status_code == 200
+    data = metadata.json()
+    assert data["paper_id"] == paper_id
+    assert data["title"] == "Parsed Title"
+    assert data["authors"] == "Ada Lovelace"
+    assert data["year"] == 2026
+    assert data["doi"] == "10.1234/example"
+    assert data["metadata_status"] == "extracted"
+    assert data["metadata_sources"] == {"title": "document.title", "doi": "regex.doi"}
+    assert data["metadata_confidence"] == {"title": 0.9, "doi": 0.98}
+    assert data["user_edited_fields"] == ["authors"]
+
+
+@pytest.mark.asyncio
 async def test_upload_rejects_non_pdf(client: AsyncClient) -> None:
     """Test that non-PDF files are rejected."""
     await _create_and_activate_space(client)
@@ -309,7 +359,7 @@ async def test_single_paper_routes_are_scoped_to_active_space(
             (paper_id, original_space_id),
         ).fetchone()
         assert row is not None
-        assert row["title"] == ""
+        assert row["title"] == "test"
     finally:
         conn.close()
 
@@ -421,6 +471,178 @@ async def test_parse_paper(client: AsyncClient) -> None:
     assert data["parse_run_id"]
     assert data["backend"] in {"docling", "mineru"}
     assert data["quality_score"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_analysis_run_queues_and_reuses_active_run(
+    client: AsyncClient,
+) -> None:
+    """Analysis runs are durable background jobs and duplicate active posts reuse one."""
+    await _create_and_activate_space(client)
+
+    upload_resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+    paper_id = upload_resp.json()["id"]
+
+    import paper_engine.storage.database as db_module
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        conn.execute(
+            "UPDATE papers SET parse_status = 'parsed' WHERE id = ?",
+            (paper_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO passages (id, paper_id, space_id, original_text)
+            VALUES ('passage-1', ?, ?, 'Parsed text')
+            """,
+            (paper_id, upload_resp.json()["space_id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    first = await client.post(f"/api/papers/{paper_id}/analysis-runs")
+    second = await client.post(f"/api/papers/{paper_id}/analysis-runs")
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    first_data = first.json()
+    second_data = second.json()
+    assert first_data["id"] == second_data["id"]
+    assert first_data["status"] == "queued"
+    assert first_data["paper_id"] == paper_id
+
+    listed = await client.get(f"/api/papers/{paper_id}/analysis-runs")
+    assert listed.status_code == 200
+    assert listed.json()[0]["id"] == first_data["id"]
+
+    fetched = await client.get(
+        f"/api/papers/{paper_id}/analysis-runs/{first_data['id']}"
+    )
+    assert fetched.status_code == 200
+    assert fetched.json()["id"] == first_data["id"]
+
+
+@pytest.mark.asyncio
+async def test_create_analysis_run_requires_parsed_passages(client: AsyncClient) -> None:
+    """AI analysis cannot start before PDF parsing produces passages."""
+    await _create_and_activate_space(client)
+
+    upload_resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+    paper_id = upload_resp.json()["id"]
+
+    resp = await client.post(f"/api/papers/{paper_id}/analysis-runs")
+
+    assert resp.status_code == 409
+    assert "PDF parsing has not completed" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_analysis_run_status_transitions(client: AsyncClient) -> None:
+    """Queued analysis runs can be cancelled and repeated cancels are idempotent."""
+    await _create_and_activate_space(client)
+
+    upload_resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+    paper_id = upload_resp.json()["id"]
+    space_id = upload_resp.json()["space_id"]
+
+    import paper_engine.storage.database as db_module
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        conn.execute(
+            "UPDATE papers SET parse_status = 'parsed' WHERE id = ?",
+            (paper_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO passages (id, paper_id, space_id, original_text)
+            VALUES ('passage-1', ?, ?, 'Parsed text')
+            """,
+            (paper_id, space_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    run_resp = await client.post(f"/api/papers/{paper_id}/analysis-runs")
+    assert run_resp.status_code == 202
+    run_id = run_resp.json()["id"]
+
+    cancel_resp = await client.post(
+        f"/api/papers/{paper_id}/analysis-runs/{run_id}/cancel"
+    )
+    repeat_resp = await client.post(
+        f"/api/papers/{paper_id}/analysis-runs/{run_id}/cancel"
+    )
+
+    assert cancel_resp.status_code == 200
+    assert repeat_resp.status_code == 200
+    assert cancel_resp.json()["status"] == "cancelled"
+    assert cancel_resp.json()["last_error"] == "cancelled_by_user"
+    assert repeat_resp.json()["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancel_analysis_run_rejects_terminal_status(client: AsyncClient) -> None:
+    """Completed or failed analysis runs cannot be cancelled."""
+    await _create_and_activate_space(client)
+
+    upload_resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("test.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+    paper_id = upload_resp.json()["id"]
+    space_id = upload_resp.json()["space_id"]
+
+    import paper_engine.storage.database as db_module
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        conn.execute(
+            "UPDATE papers SET parse_status = 'parsed' WHERE id = ?",
+            (paper_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO passages (id, paper_id, space_id, original_text)
+            VALUES ('passage-1', ?, ?, 'Parsed text')
+            """,
+            (paper_id, space_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    run_resp = await client.post(f"/api/papers/{paper_id}/analysis-runs")
+    assert run_resp.status_code == 202
+    run_id = run_resp.json()["id"]
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        conn.execute(
+            "UPDATE analysis_runs SET status = 'completed' WHERE id = ?",
+            (run_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    cancel_resp = await client.post(
+        f"/api/papers/{paper_id}/analysis-runs/{run_id}/cancel"
+    )
+
+    assert cancel_resp.status_code == 409
 
 
 @pytest.mark.asyncio
@@ -785,8 +1007,8 @@ async def test_delete_paper_removes_database_rows_fts_index_and_pdf(
     assert parse_resp.json()["status"] == "queued"
 
     card_resp = await client.post(
-        "/api/cards",
-        json={"paper_id": paper_id, "card_type": "Method", "summary": "uses attention"},
+        f"/api/papers/{paper_id}/cards",
+        json={"card_type": "Method", "summary": "uses attention"},
     )
     assert card_resp.status_code == 200
 

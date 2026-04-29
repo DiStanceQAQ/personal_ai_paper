@@ -12,6 +12,7 @@ import {
   Plus,
   Server,
   Table2,
+  XCircle,
 } from 'lucide-react';
 import type { Paper, KnowledgeCard, AgentStatus, PaperBackgroundTask, Space } from '../../types';
 import { api } from '../../api';
@@ -25,6 +26,7 @@ export interface InspectorProps {
   agentStatus: AgentStatus | null;
   onToggleAgent: () => Promise<void>;
   onExtract: () => void;
+  onCancelAnalysis: (runId: string) => void;
   onDeleteCard: (id: string) => void;
   onUpdateCard: (id: string, summary: string) => Promise<void>;
   onAddManualCard: (type: string, summary: string) => void;
@@ -72,6 +74,25 @@ function formatDateTime(value: string | null | undefined): string {
   }).format(date);
 }
 
+function metadataLabel(status: Paper['metadata_status']): string {
+  const labels: Record<Paper['metadata_status'], string> = {
+    empty: '元数据待提取',
+    extracted: '元数据已提取',
+    enriched: '元数据已增强',
+    user_edited: '用户已编辑',
+  };
+  return labels[status] || status;
+}
+
+function aiStatusLabel(task: PaperBackgroundTask | null): string {
+  if (!task) return 'AI 未开始';
+  if (task.phase === 'parsing') return '等待 PDF';
+  if (task.phase === 'analyzing') return 'AI 运行中';
+  if (task.phase === 'completed') return 'AI 已完成';
+  if (task.phase === 'cancelled') return 'AI 已取消';
+  return 'AI 失败';
+}
+
 export const Inspector: React.FC<InspectorProps> = ({
   isOpen,
   onToggle,
@@ -80,6 +101,7 @@ export const Inspector: React.FC<InspectorProps> = ({
   agentStatus,
   onToggleAgent,
   onExtract,
+  onCancelAnalysis,
   onDeleteCard,
   onUpdateCard,
   onAddManualCard,
@@ -98,6 +120,7 @@ export const Inspector: React.FC<InspectorProps> = ({
   const parseDiagnostics = selectedPaper?.parse_diagnostics;
   const selectedPaperId = selectedPaper?.id;
   const extractBusy = analysisTask?.phase === 'parsing' || analysisTask?.phase === 'analyzing';
+  const canCancelAnalysis = analysisTask?.phase === 'analyzing' && !!analysisTask.analysis_run_id;
   const ToggleIcon = isOpen ? PanelRightClose : PanelRightOpen;
   const toggleLabel = isOpen ? '收起详情栏' : '展开详情栏';
 
@@ -152,7 +175,17 @@ export const Inspector: React.FC<InspectorProps> = ({
             <>
               <div className="inspector-header">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div className="paper-status-tag">{parseLabel(selectedPaper.parse_status)}</div>
+                  <div className="paper-status-strip">
+                    <div className={`paper-status-tag parse-${selectedPaper.parse_status}`}>
+                      PDF {parseLabel(selectedPaper.parse_status)}
+                    </div>
+                    <div className={`paper-status-tag metadata-${selectedPaper.metadata_status}`}>
+                      {metadataLabel(selectedPaper.metadata_status)}
+                    </div>
+                    <div className={`paper-status-tag ai-${analysisTask?.phase || 'idle'}`}>
+                      {aiStatusLabel(analysisTask)}
+                    </div>
+                  </div>
                   <button
                     className="btn-icon-secondary"
                     onClick={onOpenEditPaper}
@@ -191,7 +224,24 @@ export const Inspector: React.FC<InspectorProps> = ({
                 <div className={`task-progress-card ${analysisTask.phase}`}>
                   <div className="task-progress-header">
                     <span>后台任务</span>
-                    <span>{analysisTask.progress}%</span>
+                    <div className="task-progress-actions">
+                      {canCancelAnalysis && analysisTask.analysis_run_id && (
+                        <button
+                          type="button"
+                          className="btn-task-cancel"
+                          onClick={() => {
+                            if (analysisTask.analysis_run_id) {
+                              onCancelAnalysis(analysisTask.analysis_run_id);
+                            }
+                          }}
+                          title="取消 AI 深度分析"
+                          aria-label="取消 AI 深度分析"
+                        >
+                          <XCircle size={14} />
+                        </button>
+                      )}
+                      <span>{analysisTask.progress}%</span>
+                    </div>
                   </div>
                   <div className="task-progress-bar" aria-hidden="true">
                     <div

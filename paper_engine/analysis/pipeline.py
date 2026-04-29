@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+import os
 import json
 import re
 import sqlite3
+import time
 import uuid
 from typing import Any, TypeAlias
 
@@ -19,6 +22,10 @@ from paper_engine.analysis.models import (
     MergedAnalysisResult,
     PaperMetadataExtraction,
 )
+from paper_engine.analysis.jobs import (
+    AnalysisRunCancelled,
+    is_analysis_run_cancelled,
+)
 from paper_engine.analysis.prompts import (
     build_card_batch_extraction_prompt,
     build_metadata_extraction_prompt,
@@ -28,8 +35,18 @@ from paper_engine.analysis.verifier import (
     SourceVerificationResult,
     verify_extraction_batch_sources,
 )
+from paper_engine.papers.metadata import (
+    extract_core_metadata_candidates,
+    merge_metadata_candidates,
+    metadata_candidates_from_ai,
+    promote_core_metadata_from_ai,
+)
 from paper_engine.storage.database import get_connection
-from paper_engine.agent.llm_client import LLMStructuredOutputError, call_llm_schema
+from paper_engine.agent.llm_client import (
+    LLMRequestError,
+    LLMStructuredOutputError,
+    call_llm_schema,
+)
 from paper_engine.pdf.chunking import count_text_tokens
 
 
@@ -45,8 +62,11 @@ SECTION_NUMBER_RE = re.compile(
     r"^\s*(?:(?:\d+(?:\.\d+)*)|(?:[ivxlcdm]+))(?:[\).:\-]\s*|\s+)",
     re.IGNORECASE,
 )
-DEFAULT_ANALYSIS_BATCH_TOKEN_BUDGET = 3500
+DEFAULT_ANALYSIS_BATCH_TOKEN_BUDGET = 8000
 DEFAULT_FINAL_AI_CARD_LIMIT = 20
+DEFAULT_CARD_EXTRACTION_CONCURRENCY = 3
+METADATA_LLM_MAX_PASSAGES = 10
+METADATA_LLM_FRONTMATTER_PAGES = 3
 SUMMARY_DUPLICATE_SIMILARITY_THRESHOLD = 0.75
 SECTION_PRIORITIES: dict[str, int] = {
     "abstract": 0,
@@ -119,6 +139,14 @@ class PaperAnalysisRunResult:
 
     analysis_run_id: str
     result: MergedAnalysisResult
+
+
+@dataclass(frozen=True)
+class _CardBatchResult:
+    batch: AnalysisPassageBatch
+    accepted_cards: list[CardExtraction]
+    rejected_cards: list[RejectedCardDiagnostic]
+    progress: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -210,7 +238,93 @@ def select_analysis_passage_batches(
 
         flush_current()
 
-    return batches
+    return _merge_low_priority_body_batches(
+        batches,
+        max_batch_tokens=max_batch_tokens,
+    )
+
+
+def _merge_low_priority_body_batches(
+    batches: Sequence[AnalysisPassageBatch],
+    *,
+    max_batch_tokens: int,
+) -> list[AnalysisPassageBatch]:
+    merged: list[AnalysisPassageBatch] = []
+    current: AnalysisPassageBatch | None = None
+
+    for batch in batches:
+        if (
+            current is None
+            or current.passage_type != "body"
+            or batch.passage_type != "body"
+            or _merged_batch_token_count(current, batch) > max_batch_tokens
+        ):
+            if current is not None:
+                merged.append(current)
+            current = batch
+            continue
+
+        current = AnalysisPassageBatch(
+            batch_index=current.batch_index,
+            group_key=_analysis_group_key("body", ()),
+            heading_path=(),
+            passage_type="body",
+            passages=(*current.passages, *batch.passages),
+            source_passage_ids=tuple(
+                _dedupe_strings([*current.source_passage_ids, *batch.source_passage_ids])
+            ),
+            token_count=current.token_count + batch.token_count,
+        )
+
+    if current is not None:
+        merged.append(current)
+
+    return [
+        batch if batch.batch_index == index else AnalysisPassageBatch(
+            batch_index=index,
+            group_key=batch.group_key,
+            heading_path=batch.heading_path,
+            passage_type=batch.passage_type,
+            passages=batch.passages,
+            source_passage_ids=batch.source_passage_ids,
+            token_count=batch.token_count,
+        )
+        for index, batch in enumerate(merged)
+    ]
+
+
+def _merged_batch_token_count(
+    left: AnalysisPassageBatch,
+    right: AnalysisPassageBatch,
+) -> int:
+    payload = "\n\n".join(
+        _analysis_passage_payload(
+            source_id=_optional_string(_object_to_mapping(passage), "id", "source_id"),
+            page_number=_int_value(
+                _object_to_mapping(passage).get("page_number"),
+                default=0,
+            ),
+            heading_path=tuple(
+                _heading_path_for_analysis(
+                    _object_to_mapping(passage),
+                    _optional_string(_object_to_mapping(passage), "section"),
+                )
+            ),
+            passage_type=_analysis_passage_type(
+                _optional_string(_object_to_mapping(passage), "passage_type", "type"),
+                _optional_string(_object_to_mapping(passage), "section"),
+                tuple(
+                    _heading_path_for_analysis(
+                        _object_to_mapping(passage),
+                        _optional_string(_object_to_mapping(passage), "section"),
+                    )
+                ),
+            ),
+            text=_optional_string(_object_to_mapping(passage), "original_text", "text"),
+        )
+        for passage in (*left.passages, *right.passages)
+    )
+    return count_text_tokens(payload)
 
 
 def _prepare_analysis_passages(
@@ -514,27 +628,88 @@ def _normalized_section_label(value: str) -> str:
     return text.strip(" .:-)\t")
 
 
+def _select_metadata_llm_passages(
+    passages: Sequence[PipelineInput],
+    *,
+    max_passages: int = METADATA_LLM_MAX_PASSAGES,
+) -> list[PipelineInput]:
+    """Keep metadata enrichment prompts focused on frontmatter evidence."""
+    if len(passages) <= max_passages:
+        return list(passages)
+
+    ranked: list[tuple[int, int, int, PipelineInput]] = []
+    for position, passage in enumerate(passages):
+        data = _object_to_mapping(passage)
+        page_number = _int_value(data.get("page_number"), default=999)
+        section = _optional_string(data, "section")
+        heading_path = _heading_path_for_analysis(data, section)
+        passage_type = _analysis_passage_type(
+            _optional_string(data, "passage_type", "type"),
+            section,
+            heading_path,
+        )
+        labels = [section, passage_type, *heading_path]
+        normalized_labels = " ".join(_normalized_section_label(label) for label in labels)
+        compact_labels = normalized_labels.replace(" ", "")
+        text_prefix = _clean_text(
+            _optional_string(data, "text", "original_text")[:240]
+        ).lower()
+        compact_text_prefix = text_prefix.replace(" ", "")
+
+        rank = 100
+        if page_number <= METADATA_LLM_FRONTMATTER_PAGES:
+            rank = min(rank, 10 + page_number)
+        if "abstract" in compact_labels or "abstract" in compact_text_prefix:
+            rank = min(rank, 0)
+        if any(term in normalized_labels for term in ("article info", "keywords")):
+            rank = min(rank, 1)
+        if page_number <= 1:
+            rank = min(rank, 2)
+        if passage_type == "introduction" or "introduction" in normalized_labels:
+            rank = min(rank, 30)
+        if _is_reference_passage(
+            _optional_string(data, "passage_type", "type"),
+            section,
+            heading_path,
+        ):
+            rank = 200
+
+        ranked.append((rank, page_number, position, passage))
+
+    selected = [
+        passage
+        for rank, _page_number, _position, passage in sorted(ranked)
+        if rank < 200
+    ][:max_passages]
+    return selected or list(passages[:max_passages])
+
+
 async def extract_metadata_stage(
     paper_id: str,
     passages: Sequence[PipelineInput],
     elements: Sequence[PipelineInput],
-    grobid_metadata: Mapping[str, Any] | None,
 ) -> PaperMetadataExtraction:
     """Extract scholarly metadata with deterministic sources before LLM fallback."""
-    grobid = _metadata_from_grobid(grobid_metadata or {})
-    llm = await _llm_metadata(passages, grobid_metadata or {})
-
-    first_page_title = _first_page_title(elements)
-    doi_hit = _first_doi_hit(passages, elements)
-    arxiv_hit = _first_arxiv_hit(passages, elements)
-    abstract_hit = _first_abstract_hit(passages)
+    rule_candidates = extract_core_metadata_candidates(
+        passages=passages,
+        elements=elements,
+    )
+    llm = await _llm_metadata(
+        _select_metadata_llm_passages(passages),
+    )
+    merged_candidates = merge_metadata_candidates(
+        rule_candidates,
+        metadata_candidates_from_ai(llm),
+    )
 
     source_passage_ids = _dedupe_strings(
         [
             *llm.source_passage_ids,
-            doi_hit.source_id,
-            arxiv_hit.source_id,
-            abstract_hit.source_id,
+            *[
+                candidate.source_id
+                for candidate in merged_candidates.values()
+                if candidate.source_id
+            ],
         ]
     )
 
@@ -542,38 +717,40 @@ async def extract_metadata_stage(
         **llm.metadata,
         "paper_id": paper_id,
         "metadata_stage": {
-            "title": first_page_title.source_name
-            if first_page_title.value
-            else _source_name(grobid.title, "grobid.title")
-            or _source_name(llm.title, "llm.title"),
-            "authors": _source_name(grobid.authors, "grobid.authors")
-            or _source_name(llm.authors, "llm.authors"),
-            "year": _source_name(grobid.year, "grobid.year")
-            or _source_name(llm.year, "llm.year"),
-            "doi": _source_name(grobid.doi, "grobid.doi")
-            or doi_hit.source_name
-            or _source_name(llm.doi, "llm.doi"),
-            "arxiv_id": _source_name(grobid.arxiv_id, "grobid.arxiv_id")
-            or arxiv_hit.source_name
-            or _source_name(llm.arxiv_id, "llm.arxiv_id"),
-            "venue": _source_name(grobid.venue, "grobid.venue")
-            or _source_name(llm.venue, "llm.venue"),
-            "abstract": _source_name(grobid.abstract, "grobid.abstract")
-            or abstract_hit.source_name
-            or _source_name(llm.abstract, "llm.abstract"),
+            field: candidate.source
+            for field, candidate in merged_candidates.items()
         },
     }
     if llm.metadata.get("llm_error"):
         metadata["llm_error"] = llm.metadata["llm_error"]
 
+    authors_value = merged_candidates.get("authors")
+    authors = (
+        [str(author) for author in authors_value.value]
+        if authors_value is not None and isinstance(authors_value.value, list)
+        else []
+    )
+    year_value = merged_candidates.get("year")
+    year = int(year_value.value) if year_value is not None and year_value.value is not None else None
+
     return PaperMetadataExtraction(
-        title=first_page_title.value or grobid.title or llm.title,
-        authors=grobid.authors or llm.authors,
-        year=grobid.year if grobid.year is not None else llm.year,
-        venue=grobid.venue or llm.venue,
-        doi=grobid.doi or doi_hit.value or _normalize_doi(llm.doi),
-        arxiv_id=grobid.arxiv_id or arxiv_hit.value or _normalize_arxiv_id(llm.arxiv_id),
-        abstract=grobid.abstract or abstract_hit.value or llm.abstract,
+        title=str(merged_candidates.get("title").value)
+        if merged_candidates.get("title") is not None
+        else "",
+        authors=authors,
+        year=year,
+        venue=str(merged_candidates.get("venue").value)
+        if merged_candidates.get("venue") is not None
+        else "",
+        doi=str(merged_candidates.get("doi").value)
+        if merged_candidates.get("doi") is not None
+        else "",
+        arxiv_id=str(merged_candidates.get("arxiv_id").value)
+        if merged_candidates.get("arxiv_id") is not None
+        else "",
+        abstract=str(merged_candidates.get("abstract").value)
+        if merged_candidates.get("abstract") is not None
+        else "",
         source_passage_ids=source_passage_ids,
         confidence=llm.confidence,
         metadata=metadata,
@@ -584,55 +761,272 @@ async def extract_card_batches_stage(
     paper_id: str,
     space_id: str,
     batches: Sequence[AnalysisPassageBatch],
+    *,
+    analysis_run_id: str | None = None,
 ) -> SourceVerificationResult:
     """Extract and source-verify AI cards for selected passage batches."""
+    batch_progress: list[dict[str, Any]] = []
+    completed_results: dict[int, _CardBatchResult] = {}
+    concurrency = _card_extraction_concurrency()
+    semaphore = asyncio.Semaphore(concurrency)
+    _record_analysis_progress(
+        analysis_run_id,
+        stage="card_extraction",
+        total_batches=len(batches),
+        completed_batches=0,
+        current_batch_index=batches[0].batch_index if batches else None,
+        accepted_card_count=0,
+        rejected_card_count=0,
+        batch_progress=batch_progress,
+    )
+
+    async def run_batch(batch: AnalysisPassageBatch) -> _CardBatchResult:
+        async with semaphore:
+            return await _extract_and_verify_card_batch(
+                paper_id=paper_id,
+                space_id=space_id,
+                batch=batch,
+            )
+
+    tasks: dict[asyncio.Task[_CardBatchResult], AnalysisPassageBatch] = {
+        asyncio.create_task(run_batch(batch)): batch for batch in batches
+    }
+
+    try:
+        while tasks:
+            _raise_if_analysis_cancelled(analysis_run_id)
+            pending_batches = sorted(
+                batch.batch_index
+                for task, batch in tasks.items()
+                if not task.done()
+            )
+            running_batches = set(pending_batches[:concurrency])
+            _record_analysis_progress(
+                analysis_run_id,
+                stage="card_extraction",
+                total_batches=len(batches),
+                completed_batches=len(batch_progress),
+                current_batch_index=min(running_batches) if running_batches else None,
+                accepted_card_count=sum(
+                    len(result.accepted_cards)
+                    for result in completed_results.values()
+                ),
+                rejected_card_count=sum(
+                    len(result.rejected_cards)
+                    for result in completed_results.values()
+                ),
+                batch_progress=batch_progress,
+            )
+
+            done, _pending = await asyncio.wait(
+                tasks.keys(),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                batch = tasks.pop(task)
+                result = task.result()
+                completed_results[batch.batch_index] = result
+                batch_progress.append(result.progress)
+                batch_progress.sort(key=_batch_progress_sort_key)
+                _record_analysis_progress(
+                    analysis_run_id,
+                    stage="card_extraction",
+                    total_batches=len(batches),
+                    completed_batches=len(batch_progress),
+                    current_batch_index=None,
+                    accepted_card_count=sum(
+                        len(item.accepted_cards)
+                        for item in completed_results.values()
+                    ),
+                    rejected_card_count=sum(
+                        len(item.rejected_cards)
+                        for item in completed_results.values()
+                    ),
+                    batch_progress=batch_progress,
+                )
+    except Exception:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks.keys(), return_exceptions=True)
+        raise
+
     accepted_cards: list[CardExtraction] = []
     rejected_cards: list[RejectedCardDiagnostic] = []
+    for batch in batches:
+        result = completed_results.get(batch.batch_index)
+        if result is None:
+            continue
+        accepted_cards.extend(result.accepted_cards)
+        rejected_cards.extend(result.rejected_cards)
+
+    return SourceVerificationResult(
+        accepted_cards=accepted_cards,
+        rejected_cards=rejected_cards,
+    )
+
+
+async def _extract_and_verify_card_batch(
+    *,
+    paper_id: str,
+    space_id: str,
+    batch: AnalysisPassageBatch,
+) -> _CardBatchResult:
+    accepted_cards: list[CardExtraction] = []
+    rejected_cards: list[RejectedCardDiagnostic] = []
+    try:
+        extraction_batch = await _call_card_batch_extraction(
+            paper_id=paper_id,
+            space_id=space_id,
+            batch=batch,
+        )
+    except (LLMRequestError, LLMStructuredOutputError, ValidationError, ValueError) as exc:
+        diagnostic = _card_batch_failure_diagnostic(
+            batch,
+            stage="initial",
+            exc=exc,
+        )
+        rejected_cards.append(diagnostic)
+        return _CardBatchResult(
+            batch=batch,
+            accepted_cards=accepted_cards,
+            rejected_cards=rejected_cards,
+            progress=_analysis_batch_progress_payload(
+                batch,
+                status="failed",
+                accepted_card_count=0,
+                rejected_card_count=1,
+                error=str(exc),
+            ),
+        )
+
+    verification = verify_extraction_batch_sources(
+        extraction_batch,
+        batch.passages,
+    )
+    accepted_cards.extend(verification.accepted_cards)
+    if not verification.rejected_cards:
+        return _CardBatchResult(
+            batch=batch,
+            accepted_cards=accepted_cards,
+            rejected_cards=rejected_cards,
+            progress=_analysis_batch_progress_payload(
+                batch,
+                status="completed",
+                accepted_card_count=len(verification.accepted_cards),
+                rejected_card_count=0,
+            ),
+        )
+
+    try:
+        repaired_batch = await _call_card_batch_extraction(
+            paper_id=paper_id,
+            space_id=space_id,
+            batch=batch,
+            repair_diagnostics=verification.rejected_cards,
+        )
+    except (LLMRequestError, LLMStructuredOutputError, ValidationError, ValueError) as exc:
+        repair_diagnostics = _diagnostics_with_repair_error(
+            verification.rejected_cards,
+            exc,
+        )
+        rejected_cards.extend(repair_diagnostics)
+        return _CardBatchResult(
+            batch=batch,
+            accepted_cards=accepted_cards,
+            rejected_cards=rejected_cards,
+            progress=_analysis_batch_progress_payload(
+                batch,
+                status="repair_failed",
+                accepted_card_count=len(verification.accepted_cards),
+                rejected_card_count=len(repair_diagnostics),
+                repair_attempted=True,
+                error=str(exc),
+            ),
+        )
+
+    repaired_verification = verify_extraction_batch_sources(
+        repaired_batch,
+        batch.passages,
+    )
+    accepted_cards.extend(repaired_verification.accepted_cards)
+    rejected_cards.extend(repaired_verification.rejected_cards)
+    return _CardBatchResult(
+        batch=batch,
+        accepted_cards=accepted_cards,
+        rejected_cards=rejected_cards,
+        progress=_analysis_batch_progress_payload(
+            batch,
+            status="repaired"
+            if not repaired_verification.rejected_cards
+            else "partially_repaired",
+            accepted_card_count=(
+                len(verification.accepted_cards)
+                + len(repaired_verification.accepted_cards)
+            ),
+            rejected_card_count=len(repaired_verification.rejected_cards),
+            repair_attempted=True,
+        ),
+    )
+
+
+def _card_extraction_concurrency() -> int:
+    raw_value = os.getenv("PAPER_ENGINE_CARD_EXTRACTION_CONCURRENCY", "")
+    try:
+        value = int(raw_value)
+    except ValueError:
+        value = DEFAULT_CARD_EXTRACTION_CONCURRENCY
+    return min(8, max(1, value))
+
+
+def _batch_progress_sort_key(progress: Mapping[str, Any]) -> int:
+    try:
+        return int(progress.get("batch_index", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _extract_card_batches_stage_serial(
+    paper_id: str,
+    space_id: str,
+    batches: Sequence[AnalysisPassageBatch],
+    *,
+    analysis_run_id: str | None = None,
+) -> SourceVerificationResult:
+    """Legacy serial implementation kept for targeted debugging."""
+    accepted_cards: list[CardExtraction] = []
+    rejected_cards: list[RejectedCardDiagnostic] = []
+    batch_progress: list[dict[str, Any]] = []
 
     for batch in batches:
-        try:
-            extraction_batch = await _call_card_batch_extraction(
-                paper_id=paper_id,
-                space_id=space_id,
-                batch=batch,
-            )
-        except (LLMStructuredOutputError, ValidationError, ValueError) as exc:
-            rejected_cards.append(
-                _card_batch_failure_diagnostic(
-                    batch,
-                    stage="initial",
-                    exc=exc,
-                )
-            )
-            continue
-
-        verification = verify_extraction_batch_sources(
-            extraction_batch,
-            batch.passages,
+        _raise_if_analysis_cancelled(analysis_run_id)
+        _record_analysis_progress(
+            analysis_run_id,
+            stage="card_extraction",
+            total_batches=len(batches),
+            completed_batches=len(batch_progress),
+            current_batch_index=batch.batch_index,
+            accepted_card_count=len(accepted_cards),
+            rejected_card_count=len(rejected_cards),
+            batch_progress=batch_progress,
         )
-        accepted_cards.extend(verification.accepted_cards)
-        if not verification.rejected_cards:
-            continue
-
-        try:
-            repaired_batch = await _call_card_batch_extraction(
-                paper_id=paper_id,
-                space_id=space_id,
-                batch=batch,
-                repair_diagnostics=verification.rejected_cards,
-            )
-        except (LLMStructuredOutputError, ValidationError, ValueError) as exc:
-            rejected_cards.extend(
-                _diagnostics_with_repair_error(verification.rejected_cards, exc)
-            )
-            continue
-
-        repaired_verification = verify_extraction_batch_sources(
-            repaired_batch,
-            batch.passages,
+        result = await _extract_and_verify_card_batch(
+            paper_id=paper_id,
+            space_id=space_id,
+            batch=batch,
         )
-        accepted_cards.extend(repaired_verification.accepted_cards)
-        rejected_cards.extend(repaired_verification.rejected_cards)
+        accepted_cards.extend(result.accepted_cards)
+        rejected_cards.extend(result.rejected_cards)
+        batch_progress.append(result.progress)
+        _record_analysis_progress(
+            analysis_run_id,
+            stage="card_extraction",
+            total_batches=len(batches),
+            completed_batches=len(batch_progress),
+            current_batch_index=None,
+            accepted_card_count=len(accepted_cards),
+            rejected_card_count=len(rejected_cards),
+            batch_progress=batch_progress,
+        )
 
     return SourceVerificationResult(
         accepted_cards=accepted_cards,
@@ -718,8 +1112,15 @@ def deduplicate_and_rank_cards_stage(
     )
 
 
-async def run_paper_analysis(paper_id: str, space_id: str) -> PaperAnalysisRunResult:
+async def run_paper_analysis(
+    paper_id: str,
+    space_id: str,
+    *,
+    analysis_run_id: str | None = None,
+) -> PaperAnalysisRunResult:
     """Run metadata extraction, card extraction, ranking, and persistence."""
+    timings: dict[str, float] = {}
+    load_started = time.perf_counter()
     conn = get_connection()
     try:
         _ensure_analysis_paper_exists(conn, paper_id, space_id)
@@ -727,24 +1128,69 @@ async def run_paper_analysis(paper_id: str, space_id: str) -> PaperAnalysisRunRe
         if not passages:
             raise ValueError("No passages found. Please parse PDF first.")
         elements = _load_analysis_elements(conn, paper_id, space_id)
-        grobid_metadata = _load_latest_grobid_metadata(conn, paper_id, space_id)
         provider, model = _load_llm_identity(conn)
     finally:
         conn.close()
+    timings["load_inputs_seconds"] = time.perf_counter() - load_started
 
+    _record_analysis_progress(
+        analysis_run_id,
+        stage="metadata",
+        total_batches=0,
+        completed_batches=0,
+        current_batch_index=None,
+        accepted_card_count=0,
+        rejected_card_count=0,
+    )
+    _raise_if_analysis_cancelled(analysis_run_id)
+    metadata_started = time.perf_counter()
     metadata = await extract_metadata_stage(
         paper_id,
         passages,
         elements,
-        grobid_metadata,
     )
+    timings["metadata_seconds"] = time.perf_counter() - metadata_started
+    _raise_if_analysis_cancelled(analysis_run_id)
+    batch_select_started = time.perf_counter()
     batches = select_analysis_passage_batches(passages)
-    card_result = await extract_card_batches_stage(paper_id, space_id, batches)
+    timings["batch_selection_seconds"] = time.perf_counter() - batch_select_started
+    _record_analysis_progress(
+        analysis_run_id,
+        stage="card_extraction",
+        total_batches=len(batches),
+        completed_batches=0,
+        current_batch_index=batches[0].batch_index if batches else None,
+        accepted_card_count=0,
+        rejected_card_count=0,
+        batch_progress=[],
+    )
+    card_extraction_started = time.perf_counter()
+    card_result = await extract_card_batches_stage(
+        paper_id,
+        space_id,
+        batches,
+        analysis_run_id=analysis_run_id,
+    )
+    timings["card_extraction_seconds"] = (
+        time.perf_counter() - card_extraction_started
+    )
+    _raise_if_analysis_cancelled(analysis_run_id)
+    _record_analysis_progress(
+        analysis_run_id,
+        stage="ranking",
+        total_batches=len(batches),
+        completed_batches=len(batches),
+        current_batch_index=None,
+        accepted_card_count=len(card_result.accepted_cards),
+        rejected_card_count=len(card_result.rejected_cards),
+    )
+    ranking_started = time.perf_counter()
     ranked_cards = deduplicate_and_rank_cards_stage(
         card_result.accepted_cards,
         rejected_cards=card_result.rejected_cards,
         batches=batches,
     )
+    timings["ranking_seconds"] = time.perf_counter() - ranking_started
     result = _merged_analysis_result(
         paper_id=paper_id,
         space_id=space_id,
@@ -754,21 +1200,185 @@ async def run_paper_analysis(paper_id: str, space_id: str) -> PaperAnalysisRunRe
         ranked_cards=ranked_cards,
         provider=provider,
         model=model,
-        grobid_metadata_present=bool(grobid_metadata),
     )
+
+    persist_started = time.perf_counter()
+    conn = get_connection()
+    try:
+        timings["persist_seconds"] = 0.0
+        timings["total_seconds"] = sum(timings.values())
+        result = result.model_copy(
+            update={
+                "metadata_extra": {
+                    **result.metadata_extra,
+                    "timings": {
+                        key: round(value, 4)
+                        for key, value in timings.items()
+                    },
+                }
+            }
+        )
+        if analysis_run_id is not None:
+            conn.execute("BEGIN IMMEDIATE")
+            _raise_if_analysis_cancelled_with_conn(conn, analysis_run_id)
+        _update_paper_metadata(conn, result)
+        persisted_analysis_run_id = persist_analysis_result(
+            conn,
+            result,
+            analysis_run_id=analysis_run_id,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    timings["persist_seconds"] = time.perf_counter() - persist_started
+    timings["total_seconds"] = sum(
+        value for key, value in timings.items() if key != "total_seconds"
+    )
+    result = result.model_copy(
+        update={
+            "metadata_extra": {
+                **result.metadata_extra,
+                "timings": {
+                    key: round(value, 4)
+                    for key, value in timings.items()
+                },
+            }
+        }
+    )
+
+    return PaperAnalysisRunResult(
+        analysis_run_id=persisted_analysis_run_id,
+        result=result,
+    )
+
+
+def _raise_if_analysis_cancelled(analysis_run_id: str | None) -> None:
+    if analysis_run_id is None:
+        return
 
     conn = get_connection()
     try:
-        _update_paper_metadata(conn, result)
-        analysis_run_id = persist_analysis_result(conn, result)
-        conn.commit()
+        _raise_if_analysis_cancelled_with_conn(conn, analysis_run_id)
     finally:
         conn.close()
 
-    return PaperAnalysisRunResult(
-        analysis_run_id=analysis_run_id,
-        result=result,
-    )
+
+def _raise_if_analysis_cancelled_with_conn(
+    conn: sqlite3.Connection,
+    analysis_run_id: str,
+) -> None:
+    if is_analysis_run_cancelled(conn, analysis_run_id):
+        raise AnalysisRunCancelled(f"analysis run {analysis_run_id} was cancelled")
+
+
+def _record_analysis_progress(
+    analysis_run_id: str | None,
+    *,
+    stage: str,
+    total_batches: int,
+    completed_batches: int,
+    current_batch_index: int | None,
+    accepted_card_count: int,
+    rejected_card_count: int,
+    batch_progress: Sequence[Mapping[str, Any]] | None = None,
+) -> None:
+    if analysis_run_id is None:
+        return
+
+    total = max(total_batches, 0)
+    completed = min(max(completed_batches, 0), total) if total else 0
+    progress: dict[str, Any] = {
+        "stage": stage,
+        "total_batches": total,
+        "completed_batches": completed,
+        "current_batch_index": current_batch_index,
+        "accepted_card_count": max(accepted_card_count, 0),
+        "rejected_card_count": max(rejected_card_count, 0),
+    }
+
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT status, diagnostics_json
+            FROM analysis_runs
+            WHERE id = ?
+            """,
+            (analysis_run_id,),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return
+        if row["status"] == "cancelled":
+            raise AnalysisRunCancelled(f"analysis run {analysis_run_id} was cancelled")
+        if row["status"] not in {"queued", "running"}:
+            conn.rollback()
+            return
+
+        diagnostics = _json_object_from_db(row["diagnostics_json"])
+        previous_progress = diagnostics.get("progress")
+        if batch_progress is not None:
+            progress["batches"] = [dict(item) for item in batch_progress]
+        elif isinstance(previous_progress, Mapping) and isinstance(
+            previous_progress.get("batches"),
+            list,
+        ):
+            progress["batches"] = previous_progress["batches"]
+
+        diagnostics["analysis_batch_count"] = total
+        diagnostics["progress"] = progress
+        conn.execute(
+            """
+            UPDATE analysis_runs
+            SET accepted_card_count = ?,
+                rejected_card_count = ?,
+                diagnostics_json = ?,
+                heartbeat_at = datetime('now')
+            WHERE id = ?
+              AND status IN ('queued', 'running')
+            """,
+            (
+                progress["accepted_card_count"],
+                progress["rejected_card_count"],
+                _analysis_json(diagnostics),
+                analysis_run_id,
+            ),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _analysis_batch_progress_payload(
+    batch: AnalysisPassageBatch,
+    *,
+    status: str,
+    accepted_card_count: int,
+    rejected_card_count: int,
+    repair_attempted: bool = False,
+    error: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "batch_index": batch.batch_index,
+        "status": status,
+        "group_key": batch.group_key,
+        "passage_type": batch.passage_type,
+        "source_passage_count": len(batch.source_passage_ids),
+        "token_count": batch.token_count,
+        "accepted_card_count": max(accepted_card_count, 0),
+        "rejected_card_count": max(rejected_card_count, 0),
+        "repair_attempted": repair_attempted,
+    }
+    if error:
+        payload["error"] = error[:500]
+    return payload
 
 
 def _ensure_analysis_paper_exists(
@@ -840,34 +1450,6 @@ def _analysis_element_from_row(row: sqlite3.Row) -> dict[str, Any]:
     return data
 
 
-def _load_latest_grobid_metadata(
-    conn: sqlite3.Connection,
-    paper_id: str,
-    space_id: str,
-) -> dict[str, Any]:
-    row = conn.execute(
-        """
-        SELECT metadata_json
-        FROM parse_runs
-        WHERE paper_id = ? AND space_id = ?
-        ORDER BY completed_at DESC, started_at DESC, id DESC
-        LIMIT 1
-        """,
-        (paper_id, space_id),
-    ).fetchone()
-    if row is None:
-        return {}
-
-    metadata = _json_object_from_db(row["metadata_json"])
-    grobid = metadata.get("grobid")
-    if not isinstance(grobid, Mapping):
-        return {}
-    grobid_metadata = grobid.get("metadata")
-    if not isinstance(grobid_metadata, Mapping):
-        return {}
-    return {str(key): value for key, value in grobid_metadata.items()}
-
-
 def _load_llm_identity(conn: sqlite3.Connection) -> tuple[str, str]:
     rows = conn.execute(
         "SELECT key, value FROM app_state WHERE key IN (?, ?)",
@@ -889,7 +1471,6 @@ def _merged_analysis_result(
     ranked_cards: CardRankingResult,
     provider: str,
     model: str,
-    grobid_metadata_present: bool,
 ) -> MergedAnalysisResult:
     diagnostics = {
         **ranked_cards.diagnostics,
@@ -920,7 +1501,6 @@ def _merged_analysis_result(
         metadata_extra={
             "analysis_batch_count": len(batches),
             "source_passage_count": len(passages),
-            "grobid_metadata_present": grobid_metadata_present,
         },
     )
 
@@ -950,38 +1530,11 @@ def _update_paper_metadata(
     conn: sqlite3.Connection,
     result: MergedAnalysisResult,
 ) -> None:
-    metadata = result.metadata
-    authors = ", ".join(metadata.authors)
-    conn.execute(
-        """
-        UPDATE papers
-        SET title = CASE WHEN title = '' AND ? != '' THEN ? ELSE title END,
-            authors = CASE WHEN authors = '' AND ? != '' THEN ? ELSE authors END,
-            year = CASE WHEN year IS NULL AND ? IS NOT NULL THEN ? ELSE year END,
-            abstract = CASE WHEN abstract = '' AND ? != '' THEN ? ELSE abstract END,
-            venue = CASE WHEN venue = '' AND ? != '' THEN ? ELSE venue END,
-            doi = CASE WHEN doi = '' AND ? != '' THEN ? ELSE doi END,
-            arxiv_id = CASE WHEN arxiv_id = '' AND ? != '' THEN ? ELSE arxiv_id END
-        WHERE id = ? AND space_id = ?
-        """,
-        (
-            metadata.title,
-            metadata.title,
-            authors,
-            authors,
-            metadata.year,
-            metadata.year,
-            metadata.abstract,
-            metadata.abstract,
-            metadata.venue,
-            metadata.venue,
-            metadata.doi,
-            metadata.doi,
-            metadata.arxiv_id,
-            metadata.arxiv_id,
-            result.paper_id,
-            result.space_id,
-        ),
+    promote_core_metadata_from_ai(
+        conn,
+        paper_id=result.paper_id,
+        space_id=result.space_id,
+        metadata=result.metadata,
     )
 
 
@@ -1015,13 +1568,18 @@ def _json_list_from_db(value: Any) -> list[str]:
 def persist_analysis_result(
     conn: sqlite3.Connection,
     result: MergedAnalysisResult,
+    *,
+    analysis_run_id: str | None = None,
 ) -> str:
     """Persist one AI analysis run and replace only prior unedited AI cards."""
-    analysis_run_id = f"analysis-run-{uuid.uuid4()}"
+    storage_analysis_run_id = analysis_run_id or f"analysis-run-{uuid.uuid4()}"
     savepoint = f"persist_analysis_result_{uuid.uuid4().hex}"
     conn.execute(f"SAVEPOINT {savepoint}")
     try:
-        _insert_analysis_run(conn, analysis_run_id, result)
+        if analysis_run_id is None:
+            _insert_analysis_run(conn, storage_analysis_run_id, result)
+        else:
+            _complete_existing_analysis_run(conn, storage_analysis_run_id, result)
         conn.execute(
             """
             DELETE FROM knowledge_cards
@@ -1034,8 +1592,8 @@ def persist_analysis_result(
         )
         for card in result.cards:
             card_id = f"ai-card-{uuid.uuid4()}"
-            _insert_ai_card(conn, analysis_run_id, card_id, result, card)
-            _insert_ai_card_sources(conn, analysis_run_id, card_id, result, card)
+            _insert_ai_card(conn, storage_analysis_run_id, card_id, result, card)
+            _insert_ai_card_sources(conn, storage_analysis_run_id, card_id, result, card)
 
         conn.execute(f"RELEASE SAVEPOINT {savepoint}")
     except Exception:
@@ -1043,7 +1601,7 @@ def persist_analysis_result(
         conn.execute(f"RELEASE SAVEPOINT {savepoint}")
         raise
 
-    return analysis_run_id
+    return storage_analysis_run_id
 
 
 def _analysis_json(value: Any) -> str:
@@ -1091,6 +1649,63 @@ def _insert_analysis_run(
             _analysis_json(result.quality.diagnostics),
         ),
     )
+
+
+def _complete_existing_analysis_run(
+    conn: sqlite3.Connection,
+    analysis_run_id: str,
+    result: MergedAnalysisResult,
+) -> None:
+    accepted_card_count = result.quality.accepted_card_count
+    if accepted_card_count == 0 and result.cards:
+        accepted_card_count = len(result.cards)
+    update = conn.execute(
+        """
+        UPDATE analysis_runs
+        SET status = 'completed',
+            model = ?,
+            provider = ?,
+            extractor_version = ?,
+            accepted_card_count = ?,
+            rejected_card_count = ?,
+            metadata_json = ?,
+            warnings_json = ?,
+            diagnostics_json = ?,
+            completed_at = datetime('now'),
+            heartbeat_at = datetime('now'),
+            worker_id = NULL,
+            last_error = NULL
+        WHERE id = ?
+          AND paper_id = ?
+          AND space_id = ?
+          AND status IN ('queued', 'running')
+        """,
+        (
+            result.model,
+            result.provider,
+            result.extractor_version,
+            accepted_card_count,
+            result.quality.rejected_card_count,
+            _analysis_json(
+                {
+                    "paper_metadata": result.metadata.model_dump(),
+                    "metadata_extra": result.metadata_extra,
+                    "quality": {
+                        "source_coverage": result.quality.source_coverage,
+                        "validation_errors": result.quality.validation_errors,
+                        "quality_flags": result.quality.quality_flags,
+                    },
+                }
+            ),
+            _analysis_json(result.quality.warnings),
+            _analysis_json(result.quality.diagnostics),
+            analysis_run_id,
+            result.paper_id,
+            result.space_id,
+        ),
+    )
+    if update.rowcount != 1:
+        raise RuntimeError(f"analysis run {analysis_run_id} is not queued or running")
 
 
 def _insert_ai_card(
@@ -1418,30 +2033,11 @@ class _SourceValue(BaseModel):
     source_name: str = ""
 
 
-def _metadata_from_grobid(metadata: Mapping[str, Any]) -> PaperMetadataExtraction:
-    return PaperMetadataExtraction(
-        title=_clean_title(_optional_string(metadata, "title")),
-        authors=_author_list(metadata.get("authors")),
-        year=_year_value(metadata.get("year")),
-        venue=_clean_text(_optional_string(metadata, "venue", "journal", "conference")),
-        doi=_normalize_doi(_optional_string(metadata, "doi")),
-        arxiv_id=_normalize_arxiv_id(
-            _optional_string(metadata, "arxiv_id", "arxiv", "arxivId")
-        ),
-        abstract=_clean_abstract(_optional_string(metadata, "abstract")),
-        metadata={"source": "grobid"} if metadata else {},
-    )
-
-
 async def _llm_metadata(
     passages: Sequence[PipelineInput],
-    grobid_metadata: Mapping[str, Any],
 ) -> PaperMetadataExtraction:
     try:
-        prompt = build_metadata_extraction_prompt(
-            passages,
-            grobid_metadata=grobid_metadata,
-        )
+        prompt = build_metadata_extraction_prompt(passages)
         response = await call_llm_schema(
             prompt.system_prompt,
             prompt.user_prompt,
@@ -1449,7 +2045,7 @@ async def _llm_metadata(
             prompt.schema,
         )
         return PaperMetadataExtraction.model_validate(response)
-    except (LLMStructuredOutputError, ValidationError, ValueError) as exc:
+    except (LLMRequestError, LLMStructuredOutputError, ValidationError, ValueError) as exc:
         return PaperMetadataExtraction(metadata={"llm_error": str(exc)})
 
 

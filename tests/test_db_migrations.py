@@ -1,5 +1,6 @@
 """Tests for SQLite schema migration helpers."""
 
+import json
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -21,7 +22,7 @@ from paper_engine.storage.migrations import (
 
 
 SCHEMA_VERSION_KEY = "schema_version"
-EXPECTED_SCHEMA_VERSION = 5
+EXPECTED_SCHEMA_VERSION = 6
 
 
 def schema_version_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -254,6 +255,84 @@ def test_migration_5_adds_parse_run_worker_columns_and_indexes() -> None:
                 "idx_parse_runs_paper_status": ("paper_id", "status"),
             },
         )
+        conn.close()
+
+
+def test_migration_6_adds_metadata_and_analysis_worker_state() -> None:
+    """Papers track metadata provenance and analysis runs can be claimed."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+
+        paper_columns = table_columns(conn, "papers")
+        assert {
+            "metadata_status",
+            "metadata_sources_json",
+            "metadata_confidence_json",
+            "user_edited_fields_json",
+        }.issubset(paper_columns)
+
+        analysis_columns = table_columns(conn, "analysis_runs")
+        assert {
+            "claimed_at",
+            "heartbeat_at",
+            "worker_id",
+            "attempt_count",
+            "last_error",
+        }.issubset(analysis_columns)
+        assert table_column_info(conn, "analysis_runs")["attempt_count"]["dflt_value"] == "0"
+
+        assert {
+            "idx_analysis_runs_status_started",
+            "idx_analysis_runs_paper_status",
+        }.issubset(index_names(conn, "analysis_runs"))
+        assert_index_columns(
+            conn,
+            {
+                "idx_analysis_runs_status_started": ("status", "started_at"),
+                "idx_analysis_runs_paper_status": ("paper_id", "status"),
+            },
+        )
+        conn.close()
+
+
+def test_migration_6_marks_existing_nonempty_metadata_as_user_edited() -> None:
+    """Existing paper metadata should not be overwritten after the migration."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = create_schema_connection(db_path)
+        db_migrations._apply_migration(conn, 1, db_migrations._get_migration(1))
+        db_migrations._apply_migration(conn, 2, db_migrations._get_migration(2))
+        db_migrations._apply_migration(conn, 3, db_migrations._get_migration(3))
+        db_migrations._apply_migration(conn, 4, db_migrations._get_migration(4))
+        db_migrations._apply_migration(conn, 5, db_migrations._get_migration(5))
+        conn.execute("INSERT INTO spaces (id, name) VALUES ('space-1', 'Space')")
+        conn.execute(
+            """
+            INSERT INTO papers (id, space_id, title, authors, year, doi)
+            VALUES ('paper-1', 'space-1', 'Manual Title', 'Manual Author', 2024, '10.1/manual')
+            """
+        )
+
+        db_migrations._apply_migration(conn, 6, db_migrations._get_migration(6))
+
+        row = conn.execute(
+            """
+            SELECT metadata_status, metadata_sources_json,
+                   metadata_confidence_json, user_edited_fields_json
+            FROM papers
+            WHERE id = 'paper-1'
+            """
+        ).fetchone()
+        assert row["metadata_status"] == "user_edited"
+        assert set(json.loads(row["user_edited_fields_json"])) == {
+            "authors",
+            "doi",
+            "title",
+            "year",
+        }
+        assert json.loads(row["metadata_sources_json"])["title"] == "user.edit"
+        assert json.loads(row["metadata_confidence_json"])["title"] == 1.0
         conn.close()
 
 

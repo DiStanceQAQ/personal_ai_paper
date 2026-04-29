@@ -1,5 +1,6 @@
 """Idempotent SQLite schema migration helpers."""
 
+import json
 import sqlite3
 from collections.abc import Callable
 
@@ -12,7 +13,7 @@ __all__ = [
 ]
 
 SCHEMA_VERSION_KEY = "schema_version"
-LATEST_SCHEMA_VERSION = 5
+LATEST_SCHEMA_VERSION = 6
 
 Migration = Callable[[sqlite3.Connection], None]
 
@@ -517,12 +518,124 @@ def _add_parse_run_worker_state(conn: sqlite3.Connection) -> None:
                 raise
 
 
+def _add_metadata_and_analysis_worker_state(conn: sqlite3.Connection) -> None:
+    """Track core paper metadata provenance and durable analysis worker state."""
+    statements = (
+        """
+        ALTER TABLE papers
+        ADD COLUMN metadata_status TEXT NOT NULL DEFAULT 'empty'
+            CHECK(metadata_status IN ('empty', 'extracted', 'enriched', 'user_edited'))
+        """,
+        """
+        ALTER TABLE papers
+        ADD COLUMN metadata_sources_json TEXT NOT NULL DEFAULT '{}'
+        """,
+        """
+        ALTER TABLE papers
+        ADD COLUMN metadata_confidence_json TEXT NOT NULL DEFAULT '{}'
+        """,
+        """
+        ALTER TABLE papers
+        ADD COLUMN user_edited_fields_json TEXT NOT NULL DEFAULT '[]'
+        """,
+        "ALTER TABLE analysis_runs ADD COLUMN claimed_at TEXT",
+        "ALTER TABLE analysis_runs ADD COLUMN heartbeat_at TEXT",
+        "ALTER TABLE analysis_runs ADD COLUMN worker_id TEXT",
+        "ALTER TABLE analysis_runs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE analysis_runs ADD COLUMN last_error TEXT",
+        """
+        CREATE INDEX IF NOT EXISTS idx_analysis_runs_status_started
+            ON analysis_runs(status, started_at)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_analysis_runs_paper_status
+            ON analysis_runs(paper_id, status)
+        """,
+    )
+    for statement in statements:
+        try:
+            conn.execute(statement)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+
+    core_fields = ("title", "authors", "year", "doi", "arxiv_id", "venue", "abstract")
+    rows = conn.execute(
+        """
+        SELECT id, space_id, title, authors, year, doi, arxiv_id, venue, abstract,
+               metadata_sources_json, metadata_confidence_json, user_edited_fields_json
+        FROM papers
+        """
+    ).fetchall()
+    for row in rows:
+        existing_user_fields = _json_list(row["user_edited_fields_json"])
+        existing_sources = _json_object(row["metadata_sources_json"])
+        existing_confidence = _json_object(row["metadata_confidence_json"])
+
+        user_fields = set(existing_user_fields)
+        for field in core_fields:
+            value = row[field]
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            user_fields.add(field)
+            existing_sources.setdefault(field, "user.edit")
+            existing_confidence.setdefault(field, 1.0)
+
+        if not user_fields:
+            continue
+
+        conn.execute(
+            """
+            UPDATE papers
+            SET metadata_status = 'user_edited',
+                metadata_sources_json = ?,
+                metadata_confidence_json = ?,
+                user_edited_fields_json = ?
+            WHERE id = ? AND space_id = ?
+            """,
+            (
+                json.dumps(existing_sources, ensure_ascii=False, sort_keys=True),
+                json.dumps(existing_confidence, ensure_ascii=False, sort_keys=True),
+                json.dumps(sorted(user_fields), ensure_ascii=False),
+                row["id"],
+                row["space_id"],
+            ),
+        )
+
+
+def _json_object(value: object) -> dict[str, object]:
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(key): item for key, item in parsed.items()}
+
+
+def _json_list(value: object) -> list[str]:
+    if not isinstance(value, str) or not value.strip():
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed]
+
+
 MIGRATIONS: dict[int, Migration] = {
     1: _create_parse_run_document_tables,
     2: _extend_passages_with_provenance_columns,
     3: _create_analysis_run_and_card_provenance_schema,
     4: _create_passage_embedding_schema,
     5: _add_parse_run_worker_state,
+    6: _add_metadata_and_analysis_worker_state,
 }
 
 

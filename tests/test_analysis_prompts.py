@@ -10,6 +10,7 @@ from paper_engine.analysis.prompts import (
     build_card_batch_extraction_prompt,
     build_merge_dedup_prompt,
     build_metadata_extraction_prompt,
+    build_paper_understanding_prompt,
     build_section_summary_prompt,
 )
 
@@ -141,6 +142,72 @@ def test_card_batch_prompt_uses_source_grounding_and_card_schema() -> None:
     assert "Problem" in prompt.system_prompt
     assert "Practical Tip" in prompt.system_prompt
     assert_prompt_is_grounded_and_sanitized(combined)
+
+
+def test_paper_understanding_prompt_requests_chinese_whole_paper_summary() -> None:
+    """Whole-paper understanding should be Chinese, compressed, and grounded."""
+    prompt = build_paper_understanding_prompt(
+        [
+            SourcePassageInput(
+                id="passage-abstract",
+                page_number=1,
+                text="We study crop growth simulation with remote sensing data.",
+                section="abstract",
+                heading_path=["Abstract"],
+            ),
+            SourcePassageInput(
+                id="passage-results",
+                page_number=8,
+                text="The coupled model improves yield estimation.",
+                section="Results",
+                heading_path=["Results"],
+            ),
+        ],
+    )
+
+    combined = f"{prompt.system_prompt}\n{prompt.user_prompt}"
+    assert prompt.schema_name == "paper_understanding_extraction"
+    assert prompt.schema["title"] == "PaperUnderstandingExtraction"
+    assert "Simplified Chinese" in prompt.user_prompt
+    assert "Do not copy the original abstract as-is" in prompt.user_prompt
+    assert "research problem" in prompt.user_prompt
+    assert "main results" in prompt.user_prompt
+    assert "passage-abstract" in prompt.user_prompt
+    assert "passage-results" in prompt.user_prompt
+    assert_prompt_is_grounded_and_sanitized(combined)
+
+
+def test_card_batch_prompt_uses_whole_paper_understanding_context() -> None:
+    """Card extraction should create Chinese paper-level cards from global context."""
+    prompt = build_card_batch_extraction_prompt(
+        paper_id="paper-1",
+        space_id="space-1",
+        batch_index=0,
+        paper_understanding={
+            "one_sentence": "这篇论文用遥感数据改进作物生长模拟。",
+            "problem": "传统作物模型缺少实时遥感约束。",
+            "method": "论文耦合 WOFOST 与 SCOPE 模型。",
+            "results": "模型提高了产量估计能力。",
+            "conclusion": "耦合模型适合遥感驱动作物监测。",
+            "source_passage_ids": ["passage-method"],
+            "confidence": 0.8,
+        },
+        passages=[
+            SourcePassageInput(
+                id="passage-method",
+                page_number=4,
+                text="The paper couples WOFOST and SCOPE.",
+                section="Methods",
+                heading_path=["Methods"],
+            ),
+        ],
+    )
+
+    assert "paper_understanding_zh" in prompt.user_prompt
+    assert "whole-paper" in prompt.user_prompt
+    assert "论文级" in prompt.user_prompt
+    assert "这篇论文用遥感数据改进作物生长模拟" in prompt.user_prompt
+    assert "Write card summary and reasoning_summary in Simplified Chinese" in prompt.user_prompt
 
 
 def test_merge_dedup_prompt_includes_candidate_sources_and_source_pages() -> None:

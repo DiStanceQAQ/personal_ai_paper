@@ -11,6 +11,7 @@ from paper_engine.analysis.models import (
     CardExtraction,
     MergedAnalysisResult,
     PaperMetadataExtraction,
+    PaperUnderstandingExtraction,
 )
 from paper_engine.analysis.pipeline import _update_paper_metadata, persist_analysis_result
 from paper_engine.storage.database import init_db
@@ -118,6 +119,15 @@ def _analysis_result() -> MergedAnalysisResult:
             source_passage_ids=["passage-1"],
             confidence=0.77,
         ),
+        understanding=PaperUnderstandingExtraction(
+            one_sentence="这篇论文展示了如何持久化有来源约束的知识卡片。",
+            problem="AI 生成的论文卡片需要可追溯来源。",
+            method="系统把通过校验的卡片和来源一起写入数据库。",
+            results="持久化层会记录每张卡片引用的 passage。",
+            conclusion="来源约束让后续检索和复核更可靠。",
+            source_passage_ids=["passage-1", "passage-2"],
+            confidence=0.9,
+        ),
         cards=[
             CardExtraction(
                 card_type="Method",
@@ -191,6 +201,8 @@ def test_persist_analysis_result_replaces_only_unedited_ai_cards() -> None:
     }
     metadata_json = json.loads(analysis_run["metadata_json"])
     assert metadata_json["metadata_extra"]["route"] == "unit"
+    assert metadata_json["paper_understanding_zh"]["one_sentence"].startswith("这篇论文")
+    assert metadata_json["paper_understanding_zh"]["problem"] == "AI 生成的论文卡片需要可追溯来源。"
 
     card_rows = conn.execute(
         """

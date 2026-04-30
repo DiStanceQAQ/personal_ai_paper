@@ -26,7 +26,17 @@ import { useSpaces } from './hooks/useSpaces';
 import { usePapers } from './hooks/usePapers';
 import { useLlmConfig } from './hooks/useLlmConfig';
 
-const cardTabs = ['Method', 'Metric', 'Result', 'Failure Mode', 'Limitation', 'Claim'] as const;
+const cardTabs = [
+  'Problem',
+  'Method',
+  'Object',
+  'Metric',
+  'Result',
+  'Interpretation',
+  'Limitation',
+  'Practical Tip',
+  'Claim',
+] as const;
 
 function cardLabel(type: string): string {
   const labels: Record<string, string> = {

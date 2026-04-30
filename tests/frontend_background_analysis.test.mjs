@@ -7,6 +7,7 @@ const inspector = readFileSync('frontend/src/components/layout/Inspector.tsx', '
 const usePapers = readFileSync('frontend/src/hooks/usePapers.ts', 'utf8');
 const styles = readFileSync('frontend/src/styles.css', 'utf8');
 const api = readFileSync('frontend/src/api.ts', 'utf8');
+const types = readFileSync('frontend/src/types.ts', 'utf8');
 
 test('app no longer renders a blocking loading overlay for background analysis', () => {
   assert.doesNotMatch(app, /<LoadingOverlay/);
@@ -46,4 +47,14 @@ test('inspector renders an inline task progress panel instead of relying on a mo
   assert.match(styles, /\.task-progress-card/);
   assert.match(styles, /\.task-progress-bar/);
   assert.match(styles, /\.task-progress-fill/);
+});
+
+test('inspector prefers AI Chinese paper understanding over raw abstract', () => {
+  assert.match(types, /interface PaperUnderstandingZh/);
+  assert.match(types, /ai_understanding_zh\?: PaperUnderstandingZh \| null/);
+  assert.match(usePapers, /parsePaperUnderstandingZh/);
+  assert.match(usePapers, /metadata\.paper_understanding_zh/);
+  assert.match(inspector, /AI 中文理解/);
+  assert.match(inspector, /understanding \|\| selectedPaper\.abstract/);
+  assert.match(styles, /\.ai-understanding-card/);
 });

@@ -83,6 +83,20 @@ export interface PaperParseDiagnostics {
   last_parse_time: string | null;
 }
 
+export interface PaperUnderstandingZh {
+  one_sentence: string;
+  problem: string;
+  method: string;
+  results: string;
+  conclusion: string;
+  limitations?: string;
+  reusable_insights?: string[];
+  source_passage_ids?: string[];
+  confidence?: number;
+  warnings?: string[];
+  metadata?: Record<string, unknown>;
+}
+
 export interface Paper {
   id: string;
   space_id: string;
@@ -108,6 +122,7 @@ export interface Paper {
   user_edited_fields_json: string;
   queued_parse_run_id?: string;
   parse_diagnostics?: PaperParseDiagnostics;
+  ai_understanding_zh?: PaperUnderstandingZh | null;
 }
 
 export interface BatchUploadResult {

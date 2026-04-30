@@ -8,6 +8,7 @@ import type {
   PaperBackgroundTask,
   Paper,
   PaperParseDiagnostics,
+  PaperUnderstandingZh,
   ParsePaperResponse,
   ParseRun,
   ParseRunProgress,
@@ -113,6 +114,65 @@ function attachDiagnostics(
   return {
     ...paper,
     parse_diagnostics: diagnostics,
+  };
+}
+
+function nonEmptyString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+}
+
+function parsePaperUnderstandingZh(run: AnalysisRun | undefined): PaperUnderstandingZh | null {
+  if (!run?.metadata_json) return null;
+
+  try {
+    const metadata = JSON.parse(run.metadata_json) as Record<string, unknown>;
+    const rawUnderstanding = metadata.paper_understanding_zh;
+    if (!rawUnderstanding || typeof rawUnderstanding !== 'object' || Array.isArray(rawUnderstanding)) {
+      return null;
+    }
+
+    const payload = rawUnderstanding as Record<string, unknown>;
+    const understanding: PaperUnderstandingZh = {
+      one_sentence: nonEmptyString(payload.one_sentence),
+      problem: nonEmptyString(payload.problem),
+      method: nonEmptyString(payload.method),
+      results: nonEmptyString(payload.results),
+      conclusion: nonEmptyString(payload.conclusion),
+      limitations: nonEmptyString(payload.limitations),
+      reusable_insights: stringList(payload.reusable_insights),
+      source_passage_ids: stringList(payload.source_passage_ids),
+      warnings: stringList(payload.warnings),
+    };
+    if (typeof payload.confidence === 'number' && Number.isFinite(payload.confidence)) {
+      understanding.confidence = payload.confidence;
+    }
+    if (payload.metadata && typeof payload.metadata === 'object' && !Array.isArray(payload.metadata)) {
+      understanding.metadata = payload.metadata as Record<string, unknown>;
+    }
+
+    return Object.values(understanding).some((value) =>
+      typeof value === 'string' ? value.length > 0 : Array.isArray(value) ? value.length > 0 : Boolean(value),
+    )
+      ? understanding
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function attachPaperUnderstanding(
+  paper: Paper,
+  analysisRun: AnalysisRun | undefined,
+): Paper {
+  return {
+    ...paper,
+    ai_understanding_zh: parsePaperUnderstandingZh(analysisRun),
   };
 }
 
@@ -317,6 +377,7 @@ function analysisRunProgressPercent(run: AnalysisRun, progress: AnalysisRunProgr
   if (run.status === 'queued') return 82;
   if (!progress) return 92;
   if (progress.stage === 'metadata') return 84;
+  if (progress.stage === 'understanding') return 88;
   if (progress.stage === 'ranking') return 98;
   if (progress.total_batches <= 0) return 92;
 
@@ -336,6 +397,7 @@ function analysisRunProgressMessage(
   }
   if (!progress) return 'AI 深度分析正在后台运行...';
   if (progress.stage === 'metadata') return 'AI 深度分析正在识别论文元数据...';
+  if (progress.stage === 'understanding') return 'AI 正在建立整篇论文的中文理解...';
 
   const total = progress.total_batches;
   if (progress.stage === 'ranking' && total > 0) {
@@ -492,12 +554,16 @@ export function usePapers(
       setSelectedPaper((current) => {
         if (!current) return null;
         const refreshedPaper = papersWithDiagnostics.find((paper) => paper.id === current.id);
-        return refreshedPaper
+        const paperWithDiagnostics = refreshedPaper
           ? attachDiagnostics(
               refreshedPaper,
               mergeDiagnostics(refreshedPaper.parse_diagnostics, current.parse_diagnostics),
             )
           : current;
+        return {
+          ...paperWithDiagnostics,
+          ai_understanding_zh: current.ai_understanding_zh,
+        };
       });
       setAgentStatus(status);
     } catch (err) {
@@ -562,7 +628,10 @@ export function usePapers(
         }),
         parseResult ? diagnosticsFromParseResponse(parseResult) : undefined,
       );
-      const updatedPaperWithDiagnostics = attachDiagnostics(updatedPaper, diagnostics);
+      const updatedPaperWithDiagnostics = attachPaperUnderstanding(
+        attachDiagnostics(updatedPaper, diagnostics),
+        analysisRuns[0],
+      );
 
       if (selectedPaper?.id === paperId) {
         setSelectedPaper(updatedPaperWithDiagnostics);
@@ -801,9 +870,12 @@ export function usePapers(
         passageCount: paperPassages.length,
         tableCount: paperTables.length,
       });
-      const selectedWithDiagnostics = attachDiagnostics(
-        paper,
-        mergeDiagnostics(diagnostics, paper.parse_diagnostics),
+      const selectedWithDiagnostics = attachPaperUnderstanding(
+        attachDiagnostics(
+          paper,
+          mergeDiagnostics(diagnostics, paper.parse_diagnostics),
+        ),
+        analysisRuns[0],
       );
 
       setSelectedPaper(selectedWithDiagnostics);

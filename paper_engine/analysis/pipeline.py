@@ -21,6 +21,7 @@ from paper_engine.analysis.models import (
     CardExtractionBatch,
     MergedAnalysisResult,
     PaperMetadataExtraction,
+    PaperUnderstandingExtraction,
 )
 from paper_engine.analysis.jobs import (
     AnalysisRunCancelled,
@@ -29,6 +30,7 @@ from paper_engine.analysis.jobs import (
 from paper_engine.analysis.prompts import (
     build_card_batch_extraction_prompt,
     build_metadata_extraction_prompt,
+    build_paper_understanding_prompt,
 )
 from paper_engine.analysis.verifier import (
     RejectedCardDiagnostic,
@@ -67,6 +69,8 @@ DEFAULT_FINAL_AI_CARD_LIMIT = 20
 DEFAULT_CARD_EXTRACTION_CONCURRENCY = 3
 METADATA_LLM_MAX_PASSAGES = 10
 METADATA_LLM_FRONTMATTER_PAGES = 3
+UNDERSTANDING_LLM_MAX_PASSAGES = 24
+UNDERSTANDING_LLM_TOKEN_BUDGET = 12_000
 SUMMARY_DUPLICATE_SIMILARITY_THRESHOLD = 0.75
 SECTION_PRIORITIES: dict[str, int] = {
     "abstract": 0,
@@ -109,6 +113,7 @@ SUMMARY_STOPWORDS = {
     "with",
 }
 SUMMARY_TOKEN_RE = re.compile(r"[a-z0-9]+(?:'[a-z0-9]+)?")
+SUMMARY_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
 @dataclass(frozen=True)
@@ -684,6 +689,68 @@ def _select_metadata_llm_passages(
     return selected or list(passages[:max_passages])
 
 
+def _select_understanding_llm_passages(
+    passages: Sequence[PipelineInput],
+    *,
+    max_passages: int = UNDERSTANDING_LLM_MAX_PASSAGES,
+    token_budget: int = UNDERSTANDING_LLM_TOKEN_BUDGET,
+) -> list[PipelineInput]:
+    """Choose representative passages that help summarize the whole paper."""
+    if max_passages <= 0 or token_budget <= 0:
+        return []
+
+    ranked: list[tuple[int, int, int, PipelineInput]] = []
+    for position, passage in enumerate(passages):
+        data = _object_to_mapping(passage)
+        section = _optional_string(data, "section")
+        heading_path = _heading_path_for_analysis(data, section)
+        raw_passage_type = _optional_string(data, "passage_type", "type")
+        if _is_reference_passage(raw_passage_type, section, heading_path):
+            continue
+
+        passage_type = _analysis_passage_type(raw_passage_type, section, heading_path)
+        page_number = _int_value(data.get("page_number"), default=999)
+        rank = {
+            "abstract": 0,
+            "introduction": 10,
+            "method": 20,
+            "result": 30,
+            "discussion": 40,
+            "limitation": 50,
+            "body": 70,
+            "appendix": 90,
+        }.get(passage_type, 80)
+
+        labels = " ".join([section, passage_type, *heading_path]).lower()
+        if any(term in labels for term in ("conclusion", "summary")):
+            rank = min(rank, 35)
+        if any(term in labels for term in ("limitation", "future work")):
+            rank = min(rank, 45)
+
+        ranked.append((rank, page_number, position, passage))
+
+    selected: list[PipelineInput] = []
+    selected_source_ids: set[str] = set()
+    used_tokens = 0
+    for _rank, _page_number, _position, passage in sorted(ranked):
+        data = _object_to_mapping(passage)
+        source_id = _optional_string(data, "id", "source_id")
+        if not source_id or source_id in selected_source_ids:
+            continue
+        text = _optional_string(data, "original_text", "text")
+        token_count = count_text_tokens(text)
+        if selected and used_tokens + token_count > token_budget:
+            continue
+
+        selected.append(passage)
+        selected_source_ids.add(source_id)
+        used_tokens += token_count
+        if len(selected) >= max_passages:
+            break
+
+    return selected
+
+
 async def extract_metadata_stage(
     paper_id: str,
     passages: Sequence[PipelineInput],
@@ -731,30 +798,40 @@ async def extract_metadata_stage(
         else []
     )
     year_value = merged_candidates.get("year")
-    year = int(year_value.value) if year_value is not None and year_value.value is not None else None
+    year: int | None = None
+    if year_value is not None and year_value.value is not None:
+        try:
+            year = int(str(year_value.value))
+        except (TypeError, ValueError):
+            year = None
+    title_value = merged_candidates.get("title")
+    venue_value = merged_candidates.get("venue")
+    doi_value = merged_candidates.get("doi")
+    arxiv_id_value = merged_candidates.get("arxiv_id")
+    abstract_value = merged_candidates.get("abstract")
 
     return PaperMetadataExtraction(
-        title=str(merged_candidates.get("title").value)
-        if merged_candidates.get("title") is not None
-        else "",
+        title=str(title_value.value) if title_value is not None else "",
         authors=authors,
         year=year,
-        venue=str(merged_candidates.get("venue").value)
-        if merged_candidates.get("venue") is not None
-        else "",
-        doi=str(merged_candidates.get("doi").value)
-        if merged_candidates.get("doi") is not None
-        else "",
-        arxiv_id=str(merged_candidates.get("arxiv_id").value)
-        if merged_candidates.get("arxiv_id") is not None
-        else "",
-        abstract=str(merged_candidates.get("abstract").value)
-        if merged_candidates.get("abstract") is not None
-        else "",
+        venue=str(venue_value.value) if venue_value is not None else "",
+        doi=str(doi_value.value) if doi_value is not None else "",
+        arxiv_id=str(arxiv_id_value.value) if arxiv_id_value is not None else "",
+        abstract=str(abstract_value.value) if abstract_value is not None else "",
         source_passage_ids=source_passage_ids,
         confidence=llm.confidence,
         metadata=metadata,
     )
+
+
+async def extract_paper_understanding_stage(
+    passages: Sequence[PipelineInput],
+) -> PaperUnderstandingExtraction | None:
+    """Synthesize a Chinese whole-paper understanding from representative evidence."""
+    selected_passages = _select_understanding_llm_passages(passages)
+    if not selected_passages:
+        return None
+    return await _llm_paper_understanding(selected_passages)
 
 
 async def extract_card_batches_stage(
@@ -763,6 +840,7 @@ async def extract_card_batches_stage(
     batches: Sequence[AnalysisPassageBatch],
     *,
     analysis_run_id: str | None = None,
+    paper_understanding: PaperUnderstandingExtraction | None = None,
 ) -> SourceVerificationResult:
     """Extract and source-verify AI cards for selected passage batches."""
     batch_progress: list[dict[str, Any]] = []
@@ -786,6 +864,7 @@ async def extract_card_batches_stage(
                 paper_id=paper_id,
                 space_id=space_id,
                 batch=batch,
+                paper_understanding=paper_understanding,
             )
 
     tasks: dict[asyncio.Task[_CardBatchResult], AnalysisPassageBatch] = {
@@ -853,11 +932,11 @@ async def extract_card_batches_stage(
     accepted_cards: list[CardExtraction] = []
     rejected_cards: list[RejectedCardDiagnostic] = []
     for batch in batches:
-        result = completed_results.get(batch.batch_index)
-        if result is None:
+        batch_result = completed_results.get(batch.batch_index)
+        if batch_result is None:
             continue
-        accepted_cards.extend(result.accepted_cards)
-        rejected_cards.extend(result.rejected_cards)
+        accepted_cards.extend(batch_result.accepted_cards)
+        rejected_cards.extend(batch_result.rejected_cards)
 
     return SourceVerificationResult(
         accepted_cards=accepted_cards,
@@ -870,6 +949,7 @@ async def _extract_and_verify_card_batch(
     paper_id: str,
     space_id: str,
     batch: AnalysisPassageBatch,
+    paper_understanding: PaperUnderstandingExtraction | None = None,
 ) -> _CardBatchResult:
     accepted_cards: list[CardExtraction] = []
     rejected_cards: list[RejectedCardDiagnostic] = []
@@ -878,6 +958,7 @@ async def _extract_and_verify_card_batch(
             paper_id=paper_id,
             space_id=space_id,
             batch=batch,
+            paper_understanding=paper_understanding,
         )
     except (LLMRequestError, LLMStructuredOutputError, ValidationError, ValueError) as exc:
         diagnostic = _card_batch_failure_diagnostic(
@@ -922,6 +1003,7 @@ async def _extract_and_verify_card_batch(
             paper_id=paper_id,
             space_id=space_id,
             batch=batch,
+            paper_understanding=paper_understanding,
             repair_diagnostics=verification.rejected_cards,
         )
     except (LLMRequestError, LLMStructuredOutputError, ValidationError, ValueError) as exc:
@@ -991,6 +1073,7 @@ async def _extract_card_batches_stage_serial(
     batches: Sequence[AnalysisPassageBatch],
     *,
     analysis_run_id: str | None = None,
+    paper_understanding: PaperUnderstandingExtraction | None = None,
 ) -> SourceVerificationResult:
     """Legacy serial implementation kept for targeted debugging."""
     accepted_cards: list[CardExtraction] = []
@@ -1013,6 +1096,7 @@ async def _extract_card_batches_stage_serial(
             paper_id=paper_id,
             space_id=space_id,
             batch=batch,
+            paper_understanding=paper_understanding,
         )
         accepted_cards.extend(result.accepted_cards)
         rejected_cards.extend(result.rejected_cards)
@@ -1151,6 +1235,21 @@ async def run_paper_analysis(
     )
     timings["metadata_seconds"] = time.perf_counter() - metadata_started
     _raise_if_analysis_cancelled(analysis_run_id)
+
+    _record_analysis_progress(
+        analysis_run_id,
+        stage="understanding",
+        total_batches=0,
+        completed_batches=0,
+        current_batch_index=None,
+        accepted_card_count=0,
+        rejected_card_count=0,
+    )
+    understanding_started = time.perf_counter()
+    paper_understanding = await extract_paper_understanding_stage(passages)
+    timings["understanding_seconds"] = time.perf_counter() - understanding_started
+    _raise_if_analysis_cancelled(analysis_run_id)
+
     batch_select_started = time.perf_counter()
     batches = select_analysis_passage_batches(passages)
     timings["batch_selection_seconds"] = time.perf_counter() - batch_select_started
@@ -1170,6 +1269,7 @@ async def run_paper_analysis(
         space_id,
         batches,
         analysis_run_id=analysis_run_id,
+        paper_understanding=paper_understanding,
     )
     timings["card_extraction_seconds"] = (
         time.perf_counter() - card_extraction_started
@@ -1195,6 +1295,7 @@ async def run_paper_analysis(
         paper_id=paper_id,
         space_id=space_id,
         metadata=metadata,
+        understanding=paper_understanding,
         passages=passages,
         batches=batches,
         ranked_cards=ranked_cards,
@@ -1466,6 +1567,7 @@ def _merged_analysis_result(
     paper_id: str,
     space_id: str,
     metadata: PaperMetadataExtraction,
+    understanding: PaperUnderstandingExtraction | None,
     passages: Sequence[PipelineInput],
     batches: Sequence[AnalysisPassageBatch],
     ranked_cards: CardRankingResult,
@@ -1487,6 +1589,7 @@ def _merged_analysis_result(
         paper_id=paper_id,
         space_id=space_id,
         metadata=metadata,
+        understanding=understanding,
         cards=ranked_cards.cards,
         quality=AnalysisQualityReport(
             accepted_card_count=len(ranked_cards.cards),
@@ -1501,6 +1604,11 @@ def _merged_analysis_result(
         metadata_extra={
             "analysis_batch_count": len(batches),
             "source_passage_count": len(passages),
+            **(
+                {"paper_understanding_zh": understanding.model_dump()}
+                if understanding is not None
+                else {}
+            ),
         },
     )
 
@@ -1637,6 +1745,9 @@ def _insert_analysis_run(
             _analysis_json(
                 {
                     "paper_metadata": result.metadata.model_dump(),
+                    "paper_understanding_zh": result.understanding.model_dump()
+                    if result.understanding is not None
+                    else None,
                     "metadata_extra": result.metadata_extra,
                     "quality": {
                         "source_coverage": result.quality.source_coverage,
@@ -1689,6 +1800,9 @@ def _complete_existing_analysis_run(
             _analysis_json(
                 {
                     "paper_metadata": result.metadata.model_dump(),
+                    "paper_understanding_zh": result.understanding.model_dump()
+                    if result.understanding is not None
+                    else None,
                     "metadata_extra": result.metadata_extra,
                     "quality": {
                         "source_coverage": result.quality.source_coverage,
@@ -1786,6 +1900,7 @@ async def _call_card_batch_extraction(
     paper_id: str,
     space_id: str,
     batch: AnalysisPassageBatch,
+    paper_understanding: PaperUnderstandingExtraction | None = None,
     repair_diagnostics: Sequence[RejectedCardDiagnostic] | None = None,
 ) -> CardExtractionBatch:
     prompt = build_card_batch_extraction_prompt(
@@ -1793,6 +1908,7 @@ async def _call_card_batch_extraction(
         space_id=space_id,
         batch_index=batch.batch_index,
         passages=batch.passages,
+        paper_understanding=paper_understanding,
     )
     user_prompt = prompt.user_prompt
     if repair_diagnostics:
@@ -1999,15 +2115,25 @@ def _summary_similarity(
 
 
 def _normalized_summary(value: str) -> str:
-    return re.sub(r"[^a-z0-9']+", " ", _clean_text(value).casefold()).strip()
+    cleaned = _clean_text(value).casefold()
+    return re.sub(r"[^a-z0-9'\u4e00-\u9fff]+", " ", cleaned).strip()
 
 
 def _summary_tokens(value: str) -> list[str]:
-    return [
+    normalized = _normalized_summary(value)
+    latin_tokens = [
         token
-        for token in SUMMARY_TOKEN_RE.findall(_normalized_summary(value))
+        for token in SUMMARY_TOKEN_RE.findall(normalized)
         if token not in SUMMARY_STOPWORDS
     ]
+    cjk_tokens = SUMMARY_CJK_RE.findall(normalized)
+    cjk_bigrams = [
+        "".join(cjk_tokens[index : index + 2])
+        for index in range(max(0, len(cjk_tokens) - 1))
+    ]
+    if len(cjk_tokens) == 1:
+        cjk_bigrams = cjk_tokens
+    return [*latin_tokens, *cjk_bigrams]
 
 
 def _card_candidate_diagnostic(
@@ -2047,6 +2173,22 @@ async def _llm_metadata(
         return PaperMetadataExtraction.model_validate(response)
     except (LLMRequestError, LLMStructuredOutputError, ValidationError, ValueError) as exc:
         return PaperMetadataExtraction(metadata={"llm_error": str(exc)})
+
+
+async def _llm_paper_understanding(
+    passages: Sequence[PipelineInput],
+) -> PaperUnderstandingExtraction | None:
+    try:
+        prompt = build_paper_understanding_prompt(passages)
+        response = await call_llm_schema(
+            prompt.system_prompt,
+            prompt.user_prompt,
+            prompt.schema_name,
+            prompt.schema,
+        )
+        return PaperUnderstandingExtraction.model_validate(response)
+    except (LLMRequestError, LLMStructuredOutputError, ValidationError, ValueError):
+        return None
 
 
 def _first_page_title(elements: Sequence[PipelineInput]) -> _SourceValue:

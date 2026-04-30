@@ -14,6 +14,7 @@ from paper_engine.analysis.models import (
     CardExtraction,
     CardExtractionBatch,
     PaperMetadataExtraction,
+    PaperUnderstandingExtraction,
 )
 
 
@@ -143,6 +144,44 @@ def build_metadata_extraction_prompt(
     )
 
 
+def build_paper_understanding_prompt(
+    passages: Sequence[SourcePassageLike],
+) -> AnalysisPrompt:
+    """Build a source-grounded prompt for whole-paper Chinese understanding."""
+    source_passages = _coerce_source_passages(passages)
+    user_prompt = "\n".join(
+        [
+            "Task: Produce a whole-paper understanding summary in Chinese.",
+            GROUNDING_RULES,
+            (
+                "Read the supplied passages as evidence for the entire paper, then "
+                "compress the paper into Chinese reader-facing notes."
+            ),
+            (
+                "All fields except evidence_quote-like source text must be written "
+                "in Simplified Chinese. Do not copy the original abstract as-is."
+            ),
+            (
+                "The summary should explain: the research problem, the methods used "
+                "by the paper, the main results, the conclusion, limitations, and "
+                "reusable insights."
+            ),
+            (
+                "If a field is weakly supported, write the most conservative Chinese "
+                "statement and add a warning instead of guessing."
+            ),
+            "Source passages (JSONL):",
+            _render_source_passages(source_passages),
+        ]
+    )
+    return AnalysisPrompt(
+        system_prompt=BASE_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        schema_name="paper_understanding_extraction",
+        schema=PaperUnderstandingExtraction.model_json_schema(),
+    )
+
+
 def build_section_summary_prompt(
     section_name: str,
     passages: Sequence[SourcePassageLike],
@@ -173,24 +212,46 @@ def build_card_batch_extraction_prompt(
     space_id: str,
     batch_index: int,
     passages: Sequence[SourcePassageLike],
+    paper_understanding: PaperUnderstandingExtraction | Mapping[str, Any] | None = None,
 ) -> AnalysisPrompt:
     """Build a source-grounded prompt for extracting one batch of cards."""
     source_passages = _coerce_source_passages(passages)
+    understanding_payload = _paper_understanding_context(paper_understanding)
     system_prompt = (
         f"{BASE_SYSTEM_PROMPT} Allowed card_type values: "
         f"{', '.join(CARD_TYPES)}."
     )
     user_prompt = "\n".join(
         [
-            "Task: Extract high-value knowledge cards from this passage batch.",
+            (
+                "Task: Extract high-value whole-paper knowledge cards in "
+                "Simplified Chinese from this passage batch."
+            ),
             GROUNDING_RULES,
-            "Create cards only when a concise, useful claim is directly supported.",
+            (
+                "Use the whole-paper understanding as context, but every card must "
+                "still be supported by source_passage_ids from this batch."
+            ),
+            (
+                "Cards should describe paper-level knowledge, not isolated paragraph "
+                "notes (论文级知识，而不是段落摘录). For example, Method cards should summarize the paper's "
+                "methods/steps; Result cards should summarize what the paper found; "
+                "Problem cards should state the research problem."
+            ),
+            (
+                "Write card summary and reasoning_summary in Simplified Chinese. "
+                "Keep evidence_quote copied verbatim from the cited source passage."
+            ),
+            "Prefer card types: Problem, Method, Object, Metric, Result, Interpretation, Limitation, Practical Tip.",
+            "Avoid low-value duplicate Claim/Evidence cards unless they add paper-level value.",
+            "Create cards only when a concise, useful paper-level claim is directly supported.",
             "Each card must include evidence_quote copied from a cited source passage.",
             _context_json(
                 {
                     "paper_id": paper_id,
                     "space_id": space_id,
                     "batch_index": batch_index,
+                    "paper_understanding_zh": understanding_payload,
                     "source_passage_ids": [
                         passage.id for passage in source_passages
                     ],
@@ -383,6 +444,36 @@ def _render_card_candidate(
     )
 
 
+def _paper_understanding_context(
+    understanding: PaperUnderstandingExtraction | Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if understanding is None:
+        return {}
+    data = (
+        understanding.model_dump()
+        if isinstance(understanding, PaperUnderstandingExtraction)
+        else dict(understanding)
+    )
+    return {
+        key: value
+        for key, value in data.items()
+        if key
+        in {
+            "one_sentence",
+            "problem",
+            "method",
+            "results",
+            "conclusion",
+            "limitations",
+            "reusable_insights",
+            "source_passage_ids",
+            "confidence",
+            "warnings",
+        }
+        and value not in ("", [], None)
+    }
+
+
 def _compact_json(payload: Mapping[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -393,5 +484,6 @@ __all__ = [
     "build_card_batch_extraction_prompt",
     "build_merge_dedup_prompt",
     "build_metadata_extraction_prompt",
+    "build_paper_understanding_prompt",
     "build_section_summary_prompt",
 ]

@@ -186,7 +186,7 @@ def cancel_analysis_run(
         return None
 
     if row["status"] == "cancelled":
-        return row
+        return row if isinstance(row, sqlite3.Row) else None
 
     conn.execute(
         """
@@ -206,7 +206,7 @@ def cancel_analysis_run(
     if commit:
         conn.commit()
 
-    return conn.execute(
+    updated_row = conn.execute(
         """
         SELECT *
         FROM analysis_runs
@@ -216,6 +216,7 @@ def cancel_analysis_run(
         """,
         (analysis_run_id, paper_id, space_id),
     ).fetchone()
+    return updated_row if isinstance(updated_row, sqlite3.Row) else None
 
 
 def fail_analysis_run(

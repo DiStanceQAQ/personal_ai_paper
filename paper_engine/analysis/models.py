@@ -91,6 +91,22 @@ class PaperMetadataExtraction(_AnalysisContractModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class PaperUnderstandingExtraction(_AnalysisContractModel):
+    """Whole-paper Chinese understanding synthesized from cited evidence."""
+
+    one_sentence: NonBlankString
+    problem: NonBlankString
+    method: NonBlankString
+    results: NonBlankString
+    conclusion: NonBlankString
+    limitations: StrippedString = ""
+    reusable_insights: list[NonBlankString] = Field(default_factory=list)
+    source_passage_ids: SourcePassageIds = Field(min_length=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+    warnings: list[NonBlankString] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class CardExtraction(_AnalysisContractModel):
     """A strict, source-grounded card proposed by the AI extractor."""
 
@@ -150,6 +166,7 @@ class MergedAnalysisResult(_AnalysisContractModel):
     paper_id: NonBlankString
     space_id: NonBlankString
     metadata: PaperMetadataExtraction = Field(default_factory=PaperMetadataExtraction)
+    understanding: PaperUnderstandingExtraction | None = None
     cards: list[CardExtraction] = Field(default_factory=list)
     quality: AnalysisQualityReport = Field(default_factory=AnalysisQualityReport)
     model: StrippedString = ""
@@ -169,4 +186,5 @@ __all__ = [
     "CardExtractionBatch",
     "MergedAnalysisResult",
     "PaperMetadataExtraction",
+    "PaperUnderstandingExtraction",
 ]

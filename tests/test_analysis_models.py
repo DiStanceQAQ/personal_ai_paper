@@ -16,6 +16,7 @@ from paper_engine.analysis.models import (
     CardExtractionBatch,
     MergedAnalysisResult,
     PaperMetadataExtraction,
+    PaperUnderstandingExtraction,
 )
 
 
@@ -161,13 +162,69 @@ def test_metadata_extraction_and_merged_result_contract() -> None:
         paper_id="paper-1",
         space_id="space-1",
         metadata=metadata,
+        understanding=PaperUnderstandingExtraction(
+            one_sentence="这篇论文提出了一个有来源约束的 PDF 分析流程。",
+            problem="本地论文解析缺少可追溯的结构化理解。",
+            method="论文使用来源切片和结构化模型抽取知识。",
+            results="系统生成了可验证的知识卡片。",
+            conclusion="来源约束可以提升论文知识库的可信度。",
+            source_passage_ids=["passage-1"],
+            confidence=0.8,
+        ),
         cards=[CardExtraction(**_card_payload())],
         quality=quality,
     )
 
     assert result.metadata.title == "Grounded PDF Analysis"
+    assert result.understanding is not None
+    assert result.understanding.one_sentence.startswith("这篇论文")
     assert result.quality.accepted_card_count == 1
     assert result.cards[0].card_type == "Method"
+
+
+def test_paper_understanding_extraction_requires_grounded_chinese_summary() -> None:
+    """Whole-paper understanding requires core Chinese reader-facing fields."""
+    understanding = PaperUnderstandingExtraction(
+        one_sentence="这篇论文研究本地论文解析如何生成可追溯知识。",
+        problem="现有流程难以把 PDF 内容转成可信知识卡片。",
+        method="论文使用来源切片、结构化输出和证据校验。",
+        results="系统能够生成带来源的论文级知识卡片。",
+        conclusion="证据约束有助于减少 AI 摘要幻觉。",
+        limitations="测试集中扫描件仍可能受 OCR 质量影响。",
+        reusable_insights=["先建立全局理解，再生成局部卡片。"],
+        source_passage_ids=["passage-1"],
+        confidence=0.82,
+    )
+
+    assert understanding.method.startswith("论文使用")
+    assert understanding.reusable_insights == ["先建立全局理解，再生成局部卡片。"]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"source_passage_ids": []},
+        {"source_passage_ids": ["passage-1", "passage-1"]},
+        {"confidence": 1.01},
+        {"problem": ""},
+    ],
+)
+def test_paper_understanding_extraction_rejects_invalid_values(
+    kwargs: dict[str, Any],
+) -> None:
+    payload: dict[str, Any] = {
+        "one_sentence": "这篇论文研究本地论文解析。",
+        "problem": "问题是论文理解不够结构化。",
+        "method": "方法是结构化抽取。",
+        "results": "结果是生成知识卡片。",
+        "conclusion": "结论是流程可用。",
+        "source_passage_ids": ["passage-1"],
+        "confidence": 0.8,
+    }
+    payload.update(kwargs)
+
+    with pytest.raises(ValidationError):
+        PaperUnderstandingExtraction(**payload)
 
 
 @pytest.mark.parametrize(

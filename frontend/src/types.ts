@@ -1,11 +1,15 @@
 export type SpaceStatus = 'active' | 'archived' | 'deleted';
 export type ParseStatus = 'pending' | 'parsing' | 'parsed' | 'error';
 export type ParsePaperStatus = 'queued' | Extract<ParseStatus, 'parsed' | 'error'>;
+export type EmbeddingStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+export type EmbeddingRunStatus = 'queued' | 'running' | 'completed' | 'failed';
 export type PdfParserBackend = 'mineru' | 'docling';
 export type MetadataStatus = 'empty' | 'extracted' | 'enriched' | 'user_edited';
 export type AnalysisRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type KnowledgeCardOrigin = 'user' | 'heuristic' | 'ai';
 export type SearchStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
+export type SearchMode = 'fts' | 'hybrid';
+export type UploadQueueStatus = 'uploading' | 'success' | 'failed';
 export type DocumentElementType =
   | 'title'
   | 'heading'
@@ -96,12 +100,36 @@ export interface Paper {
   file_hash: string;
   imported_at: string;
   parse_status: ParseStatus;
+  embedding_status: EmbeddingStatus;
   metadata_status: MetadataStatus;
   metadata_sources_json: string;
   metadata_confidence_json: string;
   user_edited_fields_json: string;
   queued_parse_run_id?: string;
   parse_diagnostics?: PaperParseDiagnostics;
+}
+
+export interface BatchUploadResult {
+  filename: string;
+  status: 'success' | 'failed';
+  paper?: Paper;
+  error?: string;
+}
+
+export interface BatchUploadResponse {
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: BatchUploadResult[];
+}
+
+export interface UploadQueueItem {
+  id: string;
+  filename: string;
+  status: UploadQueueStatus;
+  title?: string;
+  paper_id?: string;
+  error?: string;
 }
 
 export interface Passage {
@@ -151,6 +179,30 @@ export interface ParseRun {
   warnings_json: string;
   config_json: string;
   metadata_json: string;
+}
+
+export interface EmbeddingRun {
+  id: string;
+  paper_id: string;
+  space_id: string;
+  parse_run_id: string;
+  status: EmbeddingRunStatus;
+  provider: string;
+  model: string;
+  passage_count: number;
+  embedded_count: number;
+  reused_count: number;
+  skipped_count: number;
+  batch_count: number;
+  warnings_json: string;
+  metadata_json: string;
+  started_at: string;
+  completed_at: string | null;
+  claimed_at: string | null;
+  heartbeat_at: string | null;
+  worker_id: string | null;
+  attempt_count: number;
+  last_error: string | null;
 }
 
 export type PaperTaskPhase = 'parsing' | 'analyzing' | 'completed' | 'failed' | 'cancelled';
@@ -249,6 +301,7 @@ export interface PaperMetadata {
   venue: string;
   abstract: string;
   parse_status: ParseStatus;
+  embedding_status?: EmbeddingStatus;
   metadata_status: MetadataStatus;
   metadata_sources: Record<string, unknown>;
   metadata_confidence: Record<string, unknown>;

@@ -3,6 +3,7 @@ import { api } from '../api';
 import type {
   AgentStatus,
   AnalysisRun,
+  EmbeddingRun,
   KnowledgeCard,
   PaperBackgroundTask,
   Paper,
@@ -10,10 +11,12 @@ import type {
   ParsePaperResponse,
   ParseRun,
   Passage,
+  UploadQueueItem,
 } from '../types';
 
 const PARSE_POLL_INTERVAL_MS = 1000;
 const BACKGROUND_TASK_POLL_MS = 2000;
+const UPLOAD_QUEUE_RESET_MS = 8000;
 
 function parseWarnings(warningsJson: string | undefined): string[] {
   if (!warningsJson) return [];
@@ -73,6 +76,14 @@ function mergeDiagnostics(
     passage_count: primary.passage_count ?? (sameRun ? fallback.passage_count : null),
     table_count: primary.table_count ?? (sameRun ? fallback.table_count : null),
   };
+}
+
+function isEmbeddingActive(paper: Paper): boolean {
+  return paper.embedding_status === 'pending' || paper.embedding_status === 'running';
+}
+
+function uploadQueueId(file: File, index: number): string {
+  return `${Date.now()}-${index}-${file.name}-${file.size}`;
 }
 
 function attachDiagnostics(
@@ -242,9 +253,12 @@ export function usePapers(
   const [cards, setCards] = useState<KnowledgeCard[]>([]);
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [backgroundTasks, setBackgroundTasks] = useState<Record<string, PaperBackgroundTask>>({});
+  const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
+  const [embeddingRunsByPaperId, setEmbeddingRunsByPaperId] = useState<Record<string, EmbeddingRun | null>>({});
   
   const pollingRef = useRef<number | null>(null);
   const backgroundPollingRef = useRef<number | null>(null);
+  const uploadQueueResetRef = useRef<number | null>(null);
   const backgroundTasksRef = useRef<Record<string, PaperBackgroundTask>>({});
   const monitorInFlightRef = useRef(false);
   const analysisInFlightRef = useRef<Set<string>>(new Set());
@@ -257,7 +271,18 @@ export function usePapers(
     setSelectedPaper(null);
     setPassages([]);
     setCards([]);
+    setUploadQueue([]);
+    setEmbeddingRunsByPaperId({});
   }, [activeSpaceId]);
+
+  useEffect(() => {
+    return () => {
+      if (uploadQueueResetRef.current) {
+        window.clearTimeout(uploadQueueResetRef.current);
+        uploadQueueResetRef.current = null;
+      }
+    };
+  }, []);
 
   const loadPapers = useCallback(async () => {
     if (!activeSpaceId) {
@@ -280,6 +305,14 @@ export function usePapers(
       );
 
       setPapers(papersWithDiagnostics);
+      setEmbeddingRunsByPaperId((current) => {
+        const paperIds = new Set(papersWithDiagnostics.map((paper) => paper.id));
+        const next: Record<string, EmbeddingRun | null> = {};
+        for (const [paperId, run] of Object.entries(current)) {
+          if (paperIds.has(paperId)) next[paperId] = run;
+        }
+        return next;
+      });
       setSelectedPaper((current) => {
         if (!current) return null;
         const refreshedPaper = papersWithDiagnostics.find((paper) => paper.id === current.id);
@@ -308,6 +341,30 @@ export function usePapers(
     },
     [],
   );
+
+  const clearUploadQueueLater = useCallback(() => {
+    if (uploadQueueResetRef.current) {
+      window.clearTimeout(uploadQueueResetRef.current);
+    }
+    uploadQueueResetRef.current = window.setTimeout(() => {
+      setUploadQueue((current) =>
+        current.some((item) => item.status === 'uploading') ? current : [],
+      );
+      uploadQueueResetRef.current = null;
+    }, UPLOAD_QUEUE_RESET_MS);
+  }, []);
+
+  const loadEmbeddingRunSummary = useCallback(async (paperId: string) => {
+    try {
+      const runs = await api.listEmbeddingRuns(paperId);
+      setEmbeddingRunsByPaperId((current) => ({
+        ...current,
+        [paperId]: runs[0] || null,
+      }));
+    } catch (err) {
+      console.error(`Failed to load embedding runs for ${paperId}:`, err);
+    }
+  }, []);
 
   const refreshPaperDetails = useCallback(
     async (
@@ -349,9 +406,10 @@ export function usePapers(
           taskFromAnalysisRun(analysisRuns[0], backgroundTasksRef.current[paperId]?.parse_run_id || null),
         );
       }
+      await loadEmbeddingRunSummary(paperId);
       await loadPapers();
     },
-    [loadPapers, selectedPaper, setBackgroundTask],
+    [loadEmbeddingRunSummary, loadPapers, selectedPaper, setBackgroundTask],
   );
 
   const startBackgroundAnalysis = useCallback(
@@ -394,13 +452,23 @@ export function usePapers(
 
   // 状态轮询逻辑：如果有论文正在解析，每 3 秒刷新一次列表
   useEffect(() => {
+    const selectedPaperId = selectedPaper?.id;
+    if (selectedPaperId) {
+      void loadEmbeddingRunSummary(selectedPaperId);
+    }
+
     const hasParsingPaper = papers.some(p => p.parse_status === 'pending' || p.parse_status === 'parsing');
+    const hasEmbeddingPaper = papers.some(isEmbeddingActive);
+    const hasPollingPaper = hasParsingPaper || hasEmbeddingPaper;
     
-    if (hasParsingPaper && !pollingRef.current) {
+    if (hasPollingPaper && !pollingRef.current) {
       pollingRef.current = window.setInterval(() => {
-        loadPapers();
+        void loadPapers();
+        if (selectedPaperId) {
+          void loadEmbeddingRunSummary(selectedPaperId);
+        }
       }, 3000);
-    } else if (!hasParsingPaper && pollingRef.current) {
+    } else if (!hasPollingPaper && pollingRef.current) {
       window.clearInterval(pollingRef.current);
       pollingRef.current = null;
     }
@@ -411,7 +479,7 @@ export function usePapers(
         pollingRef.current = null;
       }
     };
-  }, [papers, loadPapers]);
+  }, [papers, loadEmbeddingRunSummary, loadPapers, selectedPaper?.id]);
 
   const monitorBackgroundTasks = useCallback(async () => {
     if (monitorInFlightRef.current) return;
@@ -590,6 +658,7 @@ export function usePapers(
           ),
         );
       }
+      await loadEmbeddingRunSummary(paper.id);
     } catch {
       setNotice({ message: '获取论文详情失败。', type: 'error' });
     }
@@ -612,17 +681,94 @@ export function usePapers(
     }
   };
 
-  const uploadPaper = async (file: File) => {
+  const uploadPaper = async (files: File | File[]) => {
+    const selectedFiles = Array.isArray(files) ? files : [files];
+    if (selectedFiles.length === 0) return;
+
+    if (uploadQueueResetRef.current) {
+      window.clearTimeout(uploadQueueResetRef.current);
+      uploadQueueResetRef.current = null;
+    }
+    const queuedItems = selectedFiles.map<UploadQueueItem>((file, index) => ({
+      id: uploadQueueId(file, index),
+      filename: file.name,
+      status: 'uploading',
+    }));
+
+    setUploadQueue(queuedItems);
     setIsProcessing(true);
-    setNotice({ message: '正在导入并预处理 PDF 文件...', type: 'success' });
+    setNotice({
+      message:
+        selectedFiles.length === 1
+          ? '正在导入 PDF 文件...'
+          : `正在批量导入 ${selectedFiles.length} 个 PDF 文件...`,
+      type: 'success',
+    });
     try {
-      await api.uploadPaper(file);
-      setNotice({ message: '导入成功。', type: 'success' });
+      if (selectedFiles.length === 1) {
+        const paper = await api.uploadPaper(selectedFiles[0]);
+        setUploadQueue((current) =>
+          current.map((item) =>
+            item.id === queuedItems[0].id
+              ? {
+                  ...item,
+                  status: 'success',
+                  paper_id: paper.id,
+                  title: paper.title || item.filename,
+                }
+              : item,
+          ),
+        );
+        setNotice({ message: '导入成功。', type: 'success' });
+      } else {
+        const result = await api.uploadPapersBatch(selectedFiles);
+        setUploadQueue(
+          queuedItems.map((item, index) => {
+            const uploadResult = result.results[index];
+            if (!uploadResult) {
+              return {
+                ...item,
+                status: 'failed',
+                error: '后端未返回该文件的导入结果。',
+              };
+            }
+            if (uploadResult.status === 'success' && uploadResult.paper) {
+              return {
+                ...item,
+                status: 'success',
+                paper_id: uploadResult.paper.id,
+                title: uploadResult.paper.title || uploadResult.filename,
+              };
+            }
+            return {
+              ...item,
+              status: 'failed',
+              error: uploadResult.error || '导入失败。',
+            };
+          }),
+        );
+        setNotice({
+          message:
+            result.failed === 0
+              ? `批量导入成功：${result.succeeded}/${result.total}。`
+              : `批量导入完成：成功 ${result.succeeded}，失败 ${result.failed}。`,
+          type: result.succeeded > 0 ? 'success' : 'error',
+        });
+      }
       await loadPapers();
     } catch (err: any) {
-      setNotice({ message: err.message || '文件导入失败。', type: 'error' });
+      const detail = err.message || '文件导入失败。';
+      setUploadQueue((current) =>
+        current.map((item) =>
+          item.status === 'uploading'
+            ? { ...item, status: 'failed', error: detail }
+            : item,
+        ),
+      );
+      setNotice({ message: detail, type: 'error' });
     } finally {
       setIsProcessing(false);
+      clearUploadQueueLater();
     }
   };
 
@@ -720,5 +866,7 @@ export function usePapers(
     runDeepAnalysis,
     cancelAnalysisRun,
     backgroundTasks,
+    uploadQueue,
+    embeddingRunsByPaperId,
   };
 }

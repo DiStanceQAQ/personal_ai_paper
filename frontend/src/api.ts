@@ -2,10 +2,12 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import type {
   AgentConfig,
   AgentStatus,
+  BatchUploadResponse,
   AnalysisRun,
   DocumentElement,
   DocumentElementType,
   DocumentTable,
+  EmbeddingRun,
   KnowledgeCard,
   MinerUTestResult,
   Paper,
@@ -14,6 +16,7 @@ import type {
   ParseRun,
   Passage,
   SearchResult,
+  SearchMode,
   Space,
 } from './types';
 
@@ -98,9 +101,15 @@ export const api = {
     body.append('file', file);
     return request<Paper>('/api/papers/upload', { method: 'POST', body });
   },
+  uploadPapersBatch: (files: File[]) => {
+    const body = new FormData();
+    files.forEach((file) => body.append('files', file));
+    return request<BatchUploadResponse>('/api/papers/upload/batch', { method: 'POST', body });
+  },
   parsePaper: (paperId: string) =>
     request<ParsePaperResponse>(`/api/papers/${paperId}/parse`, { method: 'POST' }),
   listParseRuns: (paperId: string) => request<ParseRun[]>(`/api/papers/${paperId}/parse-runs`),
+  listEmbeddingRuns: (paperId: string) => request<EmbeddingRun[]>(`/api/papers/${paperId}/embedding-runs`),
   createAnalysisRun: (paperId: string) =>
     request<AnalysisRun>(`/api/papers/${paperId}/analysis-runs`, { method: 'POST' }),
   listAnalysisRuns: (paperId: string) =>
@@ -134,7 +143,10 @@ export const api = {
     request<KnowledgeCard>(`/api/papers/${paperId}/cards/${cardId}`, { method: 'PATCH', body: JSON.stringify(card) }),
   deleteCard: (paperId: string, cardId: string) =>
     request<{ status: string; card_id: string }>(`/api/papers/${paperId}/cards/${cardId}`, { method: 'DELETE' }),
-  search: (q: string) => request<SearchResult[]>(`/api/search?q=${encodeURIComponent(q)}&limit=30`),
+  search: (q: string, mode: SearchMode = 'fts') => {
+    const params = new URLSearchParams({ q, limit: '30', mode });
+    return request<SearchResult[]>(`/api/search?${params.toString()}`);
+  },
   agentStatus: () => request<AgentStatus>('/api/agent/status'),
   setAgentStatus: (enabled: boolean) =>
     request<{ enabled: boolean }>('/api/agent/status', { method: 'PUT', body: JSON.stringify({ enabled }) }),

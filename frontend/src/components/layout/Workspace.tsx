@@ -1,7 +1,7 @@
-import React from 'react';
-import { UploadCloud, Search, FileText, FolderOpen, Zap, Info } from 'lucide-react';
+import React, { useState } from 'react';
+import { CheckCircle2, Clock3, Search, UploadCloud, FileText, FolderOpen, Zap, Info, XCircle, Sparkles, ChevronDown } from 'lucide-react';
 import DOMPurify from 'dompurify';
-import type { AgentStatus, Paper, SearchResult, SearchStatus, Space } from '../../types';
+import type { AgentStatus, Paper, SearchMode, SearchResult, SearchStatus, Space, UploadQueueItem } from '../../types';
 import { PaperCard } from '../ui/PaperCard';
 
 interface WorkspaceProps {
@@ -15,14 +15,20 @@ interface WorkspaceProps {
   selectedPaper: Paper | null;
   onSelectPaper: (paper: Paper) => void;
   onDeletePaper: (e: React.MouseEvent, paperId: string) => void;
-  onUpload: (file: File) => void;
+  onUpload: (files: File[]) => void;
   query: string;
   setQuery: (query: string) => void;
+  searchMode: SearchMode;
+  setSearchMode: (mode: SearchMode) => void;
   onSearch: () => void;
   results: SearchResult[];
   searchStatus: SearchStatus;
   searchError: string;
   parseLabel: (status: string) => string;
+  embeddingLabel: (status: Paper['embedding_status']) => string;
+  uploadQueue: UploadQueueItem[];
+  selectedSearchResult: SearchResult | null;
+  onOpenSearchResult: (result: SearchResult) => void;
 }
 
 export const Workspace: React.FC<WorkspaceProps> = ({
@@ -39,13 +45,45 @@ export const Workspace: React.FC<WorkspaceProps> = ({
   onUpload,
   query,
   setQuery,
+  searchMode,
+  setSearchMode,
   onSearch,
   results,
   searchStatus,
   searchError,
   parseLabel,
+  embeddingLabel,
+  uploadQueue,
+  selectedSearchResult,
+  onOpenSearchResult,
 }) => {
   const canSearch = query.trim().length > 0 && searchStatus !== 'loading';
+  const uploadSucceeded = uploadQueue.filter((item) => item.status === 'success').length;
+  const uploadFailed = uploadQueue.filter((item) => item.status === 'failed').length;
+  const uploadInProgress = uploadQueue.some((item) => item.status === 'uploading');
+  const [isDraggingPdf, setIsDraggingPdf] = useState(false);
+  const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
+
+  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!activeSpace) return;
+    event.preventDefault();
+    setIsDraggingPdf(true);
+  };
+
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setIsDraggingPdf(false);
+    }
+  };
+
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDraggingPdf(false);
+    const files = Array.from(event.dataTransfer.files || []).filter((file) =>
+      file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'),
+    );
+    if (files.length > 0) onUpload(files);
+  };
 
   return (
     <section className="workspace">
@@ -59,6 +97,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
             className={agentStatus?.enabled ? 'status enabled' : 'status'}
             onClick={onToggleAgent}
             disabled={!activeSpace}
+            aria-label={agentStatus?.enabled ? '禁用 MCP 连接' : '启用 MCP 连接'}
           >
             <Zap size={14} fill={agentStatus?.enabled ? 'currentColor' : 'none'} />
             {agentStatus?.enabled ? 'MCP已启用' : 'MCP已禁用'}
@@ -68,6 +107,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
             className="btn-icon-secondary" 
             title="查看连接指南"
             onClick={onOpenMCPGuide}
+            aria-label="查看 MCP 连接指南"
             style={{ width: '32px', height: '32px', borderRadius: '50%', background: '#f3f4f6', color: '#6b7280' }}
           >
             <Info size={16} />
@@ -93,7 +133,12 @@ export const Workspace: React.FC<WorkspaceProps> = ({
           </div>
 
           {activeView === 'library' ? (
-            <div className="view-container library-view">
+            <div
+              className={isDraggingPdf ? 'view-container library-view drag-active' : 'view-container library-view'}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+            >
               <div className="view-header">
                 <div className="view-title">
                   <h3>我的论文</h3>
@@ -101,14 +146,52 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                 </div>
                 <label className="btn-upload">
                   <UploadCloud size={16} />
-                  <span>导入 PDF</span>
+                  <span>批量导入 PDF</span>
                   <input
                     type="file"
+                    aria-label="导入 PDF 文件"
                     accept="application/pdf,.pdf"
-                    onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])}
+                    multiple
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files || []);
+                      if (files.length > 0) onUpload(files);
+                      e.currentTarget.value = '';
+                    }}
                   />
                 </label>
               </div>
+
+              {uploadQueue.length > 0 && (
+                <section className="upload-queue-card" aria-live="polite">
+                  <div className="upload-queue-header">
+                    <div>
+                      <strong>{uploadInProgress ? '正在导入论文' : '导入结果'}</strong>
+                      <span>
+                        共 {uploadQueue.length} 个，成功 {uploadSucceeded} 个
+                        {uploadFailed > 0 ? `，失败 ${uploadFailed} 个` : ''}
+                      </span>
+                    </div>
+                    <span className={uploadFailed > 0 ? 'upload-summary failed' : 'upload-summary'}>
+                      {uploadInProgress ? '上传中' : uploadFailed > 0 ? '部分失败' : '已完成'}
+                    </span>
+                  </div>
+                  <div className="upload-queue-list">
+                    {uploadQueue.map((item) => (
+                      <div className={`upload-queue-item ${item.status}`} key={item.id}>
+                        {item.status === 'uploading' ? (
+                          <Clock3 size={14} />
+                        ) : item.status === 'success' ? (
+                          <CheckCircle2 size={14} />
+                        ) : (
+                          <XCircle size={14} />
+                        )}
+                        <span>{item.title || item.filename}</span>
+                        {item.error && <em>{item.error}</em>}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
 
               {papers.length > 0 ? (
                 <div className="paper-grid">
@@ -120,6 +203,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                       onSelect={onSelectPaper}
                       onDelete={onDeletePaper}
                       parseLabel={parseLabel}
+                      embeddingLabel={embeddingLabel}
                     />
                   ))}
                 </div>
@@ -140,9 +224,62 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                     onKeyDown={(e) => e.key === 'Enter' && canSearch && onSearch()}
                     placeholder="在海量论文中深度检索知识..."
                   />
-                  <button className="btn-search-main" onClick={onSearch} disabled={!canSearch}>
-                    <span>{searchStatus === 'loading' ? '检索中' : '立即检索'}</span>
-                  </button>
+
+                  <div className="search-btn-group">
+                    <button
+                      className="btn-search-main-combined"
+                      onClick={onSearch}
+                      disabled={!canSearch}
+                    >
+                      {searchMode === 'fts' ? <Zap size={16} /> : <Sparkles size={16} />}
+                      <span>{searchStatus === 'loading' ? '检索中' : '立即检索'}</span>
+                    </button>
+
+                    <button
+                      className="btn-search-mode-trigger"
+                      onClick={() => setIsModeMenuOpen(!isModeMenuOpen)}
+                      aria-label="切换检索模式"
+                      title="切换检索模式"
+                    >
+                      <ChevronDown size={16} style={{ transform: isModeMenuOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+                    </button>
+
+                    {isModeMenuOpen && (
+                      <>
+                        <div
+                          className="dropdown-overlay"
+                          onClick={() => setIsModeMenuOpen(false)}
+                        />
+                        <div className="search-mode-menu animation-fadeIn" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            className={searchMode === 'fts' ? 'menu-item active' : 'menu-item'}
+                            onClick={() => { setSearchMode('fts'); setIsModeMenuOpen(false); }}
+                          >
+                            <div className="menu-icon"><Zap size={14} /></div>
+                            <div className="menu-item-content">
+                              <strong>快速关键词检索</strong>
+                              <span>默认模式，速度最快，适合查明确术语。</span>
+                            </div>
+                            {searchMode === 'fts' && <CheckCircle2 size={14} className="check-mark" />}
+                          </button>
+
+                          <button
+                            type="button"
+                            className={searchMode === 'hybrid' ? 'menu-item active' : 'menu-item'}
+                            onClick={() => { setSearchMode('hybrid'); setIsModeMenuOpen(false); }}
+                          >
+                            <div className="menu-icon"><Sparkles size={14} /></div>
+                            <div className="menu-item-content">
+                              <strong>语义深度检索</strong>
+                              <span>启用 embedding 语义召回，更聪明但会慢一些。</span>
+                            </div>
+                            {searchMode === 'hybrid' && <CheckCircle2 size={14} className="check-mark" />}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="search-results-list">
@@ -180,10 +317,21 @@ export const Workspace: React.FC<WorkspaceProps> = ({
 
                 {searchStatus === 'success' && (
                   results.map((result) => (
-                    <article key={result.passage_id} className="search-result-card">
+                    <button
+                      type="button"
+                      key={result.passage_id}
+                      className={
+                        selectedSearchResult?.passage_id === result.passage_id
+                          ? 'search-result-card active'
+                          : 'search-result-card'
+                      }
+                      onClick={() => onOpenSearchResult(result)}
+                      aria-label={`打开 ${result.paper_title || result.paper_id} 第 ${result.page_number} 页的搜索来源`}
+                    >
                       <div className="result-source">
                         <FileText size={16} />
                         <span>{result.paper_title || result.paper_id}</span>
+                        <small>打开来源</small>
                       </div>
 
                       <p dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(result.snippet) }} />
@@ -193,7 +341,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                         <span className="dot">·</span>
                         <span>第 {result.page_number} 页</span>
                       </div>
-                    </article>
+                    </button>
                   ))
                 )}
               </div>

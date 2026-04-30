@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { DialogShell } from './DialogShell';
 
 interface SpaceModalProps {
   isOpen: boolean;
@@ -28,13 +29,13 @@ export const SpaceModal: React.FC<SpaceModalProps> = ({
   }, [isOpen, initialName, initialDescription]);
 
   if (!isOpen) return null;
+  const titleId = isEditing ? 'space-modal-edit-title' : 'space-modal-create-title';
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <DialogShell isOpen={isOpen} onClose={onClose} labelledBy={titleId}>
         <div className="modal-header">
           <div className="modal-title-group">
-            <h2>{isEditing ? '编辑研究空间' : '新建研究空间'}</h2>
+            <h2 id={titleId}>{isEditing ? '编辑研究空间' : '新建研究空间'}</h2>
           </div>
         </div>
         
@@ -67,7 +68,6 @@ export const SpaceModal: React.FC<SpaceModalProps> = ({
             {isEditing ? '保存修改' : '创建并进入'}
           </button>
         </div>
-      </div>
-    </div>
+    </DialogShell>
   );
 };

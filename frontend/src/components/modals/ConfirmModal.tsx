@@ -1,4 +1,5 @@
 import React from 'react';
+import { DialogShell } from './DialogShell';
 
 interface ConfirmModalProps {
   isOpen: boolean;
@@ -20,12 +21,17 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   isDanger = true,
 }) => {
   if (!isOpen) return null;
+  const titleId = `confirm-modal-title-${title.replace(/\s+/g, '-').toLowerCase()}`;
 
   return (
-    <div className="modal-overlay" onClick={onCancel}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '440px' }}>
+    <DialogShell
+      isOpen={isOpen}
+      onClose={onCancel}
+      labelledBy={titleId}
+      style={{ maxWidth: '440px' }}
+    >
         <div className="modal-header" style={{ borderBottom: 'none', paddingBottom: '0' }}>
-          <h2>{title}</h2>
+          <h2 id={titleId}>{title}</h2>
         </div>
         
         <div style={{ padding: '24px 32px 32px' }}>
@@ -45,7 +51,6 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
             {confirmText}
           </button>
         </div>
-      </div>
-    </div>
+    </DialogShell>
   );
 };

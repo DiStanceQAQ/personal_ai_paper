@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, FileText } from 'lucide-react';
 import type { Paper } from '../../types';
 import { Select } from '../ui/Select';
+import { DialogShell } from './DialogShell';
 
 interface EditPaperModalProps {
   isOpen: boolean;
@@ -34,16 +35,23 @@ export const EditPaperModal: React.FC<EditPaperModalProps> = ({ isOpen, onClose,
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal settings-modal" style={{ maxWidth: '600px' }} onClick={(e) => e.stopPropagation()}>
+    <DialogShell
+      isOpen={isOpen}
+      onClose={onClose}
+      labelledBy="edit-paper-modal-title"
+      className="settings-modal"
+      style={{ maxWidth: '600px' }}
+    >
         <div className="modal-header">
           <div className="modal-title-group">
             <div className="brand-mark" style={{ width: '28px', height: '28px', fontSize: '14px' }}>
               <FileText size={16} />
             </div>
-            <h2>编辑论文元数据</h2>
+            <h2 id="edit-paper-modal-title">编辑论文元数据</h2>
           </div>
-          <button className="btn-icon-close" onClick={onClose}><X size={20} /></button>
+          <button className="btn-icon-close" onClick={onClose} aria-label="关闭编辑论文元数据">
+            <X size={20} />
+          </button>
         </div>
 
         <div className="form-scroll-area" style={{ marginTop: '20px' }}>
@@ -120,7 +128,6 @@ export const EditPaperModal: React.FC<EditPaperModalProps> = ({ isOpen, onClose,
           <button className="btn-secondary" onClick={onClose}>取消</button>
           <button className="btn-primary" onClick={() => onSave(paper.id, formData)}>保存修改</button>
         </div>
-      </div>
-    </div>
+    </DialogShell>
   );
 };

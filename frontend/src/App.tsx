@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
-import type { Paper, SearchResult, SearchStatus } from './types';
+import type { EmbeddingStatus, Paper, SearchMode, SearchResult, SearchStatus } from './types';
 
 // Layout Components
 import { Sidebar } from './components/layout/Sidebar';
@@ -37,6 +37,17 @@ function parseLabel(status: string): string {
   return labels[status] || status;
 }
 
+function embeddingLabel(status: EmbeddingStatus): string {
+  const labels: Record<EmbeddingStatus, string> = {
+    pending: '待索引',
+    running: '索引中',
+    completed: '已就绪',
+    failed: '索引失败',
+    skipped: '未索引',
+  };
+  return labels[status] || status;
+}
+
 export default function App(): JSX.Element {
   // --- Global UI State ---
   const [initialLoadStatus, setInitialLoadStatus] = useState<'starting' | 'ready'>('starting');
@@ -53,6 +64,8 @@ export default function App(): JSX.Element {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [searchStatus, setSearchStatus] = useState<SearchStatus>('idle');
   const [searchError, setSearchError] = useState('');
+  const [searchMode, setSearchMode] = useState<SearchMode>('fts');
+  const [selectedSearchResult, setSelectedSearchResult] = useState<SearchResult | null>(null);
 
   // --- Custom Hooks (Logic Logic) ---
   const modals = useModals();
@@ -60,7 +73,7 @@ export default function App(): JSX.Element {
   const {
     papers, selectedPaper, setSelectedPaper, passages, cards, setCards, agentStatus, setAgentStatus,
     loadPapers, openPaper, deletePaper: handleDeletePaper, uploadPaper, runDeepAnalysis,
-    cancelAnalysisRun, backgroundTasks
+    cancelAnalysisRun, backgroundTasks, uploadQueue, embeddingRunsByPaperId
   } = usePapers(activeSpace?.id, setNotice, setIsProcessing);
   const {
     llmConfig,
@@ -100,6 +113,17 @@ export default function App(): JSX.Element {
     if (activeSpace) loadPapers();
   }, [activeSpace, loadPapers]);
 
+  useEffect(() => {
+    setSelectedSearchResult(null);
+  }, [activeSpace?.id]);
+
+  useEffect(() => {
+    setResults([]);
+    setSearchError('');
+    setSearchStatus('idle');
+    setSelectedSearchResult(null);
+  }, [searchMode]);
+
   // --- Common Handlers ---
   const handleToggleAgent = async () => {
     try {
@@ -122,9 +146,10 @@ export default function App(): JSX.Element {
     setActiveView('search');
     setSearchStatus('loading');
     setSearchError('');
+    setSelectedSearchResult(null);
 
     try {
-      const searchResults = await api.search(trimmedQuery);
+      const searchResults = await api.search(trimmedQuery, searchMode);
       setResults(searchResults);
       setSearchStatus(searchResults.length > 0 ? 'success' : 'empty');
     } catch {
@@ -141,7 +166,21 @@ export default function App(): JSX.Element {
       setResults([]);
       setSearchError('');
       setSearchStatus('idle');
+      setSelectedSearchResult(null);
     }
+  };
+
+  const handleOpenSearchResult = async (result: SearchResult) => {
+    const paper = papers.find((item) => item.id === result.paper_id);
+    if (!paper) {
+      setNotice({ message: '未在当前空间找到这篇论文。', type: 'error' });
+      return;
+    }
+
+    setSelectedSearchResult(result);
+    await openPaper(paper);
+    setIsInspectorOpen(true);
+    setNotice({ message: `已打开来源：第 ${result.page_number} 页。`, type: 'success' });
   };
 
   const handleUpdatePaper = async (paperId: string, data: Partial<Paper>) => {
@@ -227,11 +266,17 @@ export default function App(): JSX.Element {
           onUpload={uploadPaper}
           query={query}
           setQuery={handleQueryChange}
+          searchMode={searchMode}
+          setSearchMode={setSearchMode}
           onSearch={handleSearch}
           results={results}
           searchStatus={searchStatus}
           searchError={searchError}
           parseLabel={parseLabel}
+          embeddingLabel={embeddingLabel}
+          uploadQueue={uploadQueue}
+          selectedSearchResult={selectedSearchResult}
+          onOpenSearchResult={handleOpenSearchResult}
         />
 
         <Inspector
@@ -250,10 +295,13 @@ export default function App(): JSX.Element {
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           visibleCards={visibleCards}
+          selectedSearchResult={selectedSearchResult}
           analysisTask={selectedPaper ? backgroundTasks[selectedPaper.id] || null : null}
+          embeddingRun={selectedPaper ? embeddingRunsByPaperId[selectedPaper.id] || null : null}
           cardTabs={cardTabs}
           cardLabel={cardLabel}
           parseLabel={parseLabel}
+          embeddingLabel={embeddingLabel}
         />
       </main>
 

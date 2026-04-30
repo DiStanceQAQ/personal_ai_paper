@@ -2,6 +2,7 @@ import React from 'react';
 import { X, Cpu } from 'lucide-react';
 import { Select } from '../ui/Select';
 import type { AgentConfig, MinerUTestResult, PdfParserBackend } from '../../types';
+import { DialogShell } from './DialogShell';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -25,16 +26,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: '560px' }} onClick={(e) => e.stopPropagation()}>
+    <DialogShell
+      isOpen={isOpen}
+      onClose={onClose}
+      labelledBy="settings-modal-title"
+      style={{ maxWidth: '560px' }}
+    >
         <div className="modal-header">
           <div className="modal-title-group">
             <div className="brand-mark" style={{ width: '32px', height: '32px' }}>
               <Cpu size={18} />
             </div>
-            <h2>解析与模型配置</h2>
+            <h2 id="settings-modal-title">解析与模型配置</h2>
           </div>
-          <button className="btn-icon-close" onClick={onClose}>
+          <button className="btn-icon-close" onClick={onClose} aria-label="关闭解析与模型配置">
             <X size={20} />
           </button>
         </div>
@@ -170,7 +175,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             应用并保存配置
           </button>
         </div>
-      </div>
-    </div>
+    </DialogShell>
   );
 };

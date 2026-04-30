@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, FileText, Gauge, Globe, Server, Trash2 } from 'lucide-react';
+import { FileText, Gauge, Globe, Server, Trash2 } from 'lucide-react';
 import type { Paper } from '../../types';
 
 interface PaperCardProps {
@@ -8,6 +8,7 @@ interface PaperCardProps {
   onSelect: (paper: Paper) => void;
   onDelete: (e: React.MouseEvent, paperId: string) => void;
   parseLabel: (status: string) => string;
+  embeddingLabel: (status: Paper['embedding_status']) => string;
 }
 
 export const PaperCard: React.FC<PaperCardProps> = ({
@@ -16,6 +17,7 @@ export const PaperCard: React.FC<PaperCardProps> = ({
   onSelect,
   onDelete,
   parseLabel,
+  embeddingLabel,
 }) => {
   const diagnostics = paper.parse_diagnostics;
   const qualityScore =
@@ -31,10 +33,10 @@ export const PaperCard: React.FC<PaperCardProps> = ({
         </div>
         <div className="paper-card-content">
           <strong className="paper-card-title">{paper.title || '未命名论文'}</strong>
+          {paper.year && <span className="paper-card-year">({paper.year})</span>}
           
           <div className="paper-card-meta-line">
             <span className="paper-card-authors">{paper.authors || '作者未知'}</span>
-            {paper.year && <span className="paper-card-year">({paper.year})</span>}
           </div>
 
           <div className="paper-card-footer">
@@ -42,9 +44,11 @@ export const PaperCard: React.FC<PaperCardProps> = ({
               <Globe size={12} />
               <span>{paper.venue || '未知来源'}</span>
             </div>
-            <span className={`status-badge ${paper.parse_status}`}>
-              {parseLabel(paper.parse_status)}
-            </span>
+            <div className="paper-card-status-group">
+              <span className={`status-badge ${paper.parse_status}`}>
+                PDF {parseLabel(paper.parse_status)}
+              </span>
+            </div>
           </div>
 
           {diagnostics && (
@@ -59,13 +63,6 @@ export const PaperCard: React.FC<PaperCardProps> = ({
                   {qualityScore}
                 </span>
               )}
-              <span
-                className={diagnostics.warning_count > 0 ? 'diagnostic-chip warning' : 'diagnostic-chip'}
-                title="解析警告"
-              >
-                <AlertTriangle size={11} />
-                {diagnostics.warning_count}
-              </span>
             </div>
           )}
         </div>
@@ -75,6 +72,7 @@ export const PaperCard: React.FC<PaperCardProps> = ({
           className="btn-icon-danger"
           onClick={(e) => onDelete(e, paper.id)}
           title="删除论文"
+          aria-label={`删除论文 ${paper.title || '未命名论文'}`}
         >
           <Trash2 size={14} />
         </button>

@@ -11,7 +11,12 @@ export const Toast: React.FC<ToastProps> = ({ message, onClose, isVisible, type 
   if (!isVisible) return null;
 
   return (
-    <div className={`notice ${type}`} onClick={onClose}>
+    <div
+      className={`notice ${type}`}
+      onClick={onClose}
+      role={type === 'error' ? 'alert' : 'status'}
+      aria-live={type === 'error' ? 'assertive' : 'polite'}
+    >
       {message}
     </div>
   );

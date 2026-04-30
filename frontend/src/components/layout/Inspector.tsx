@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  AlertTriangle,
+  BrainCircuit,
   Clock3,
   Cpu,
   Database,
@@ -14,7 +14,8 @@ import {
   Table2,
   XCircle,
 } from 'lucide-react';
-import type { Paper, KnowledgeCard, AgentStatus, PaperBackgroundTask, Space } from '../../types';
+import DOMPurify from 'dompurify';
+import type { Paper, KnowledgeCard, AgentStatus, PaperBackgroundTask, Space, EmbeddingRun, SearchResult } from '../../types';
 import { api } from '../../api';
 import { KnowledgeCardFancy } from '../ui/KnowledgeCardFancy';
 
@@ -34,10 +35,13 @@ export interface InspectorProps {
   activeTab: string;
   setActiveTab: (tab: any) => void;
   visibleCards: KnowledgeCard[];
+  selectedSearchResult: SearchResult | null;
   analysisTask: PaperBackgroundTask | null;
+  embeddingRun: EmbeddingRun | null;
   cardTabs: readonly string[];
   cardLabel: (type: string) => string;
   parseLabel: (status: string) => string;
+  embeddingLabel: (status: Paper['embedding_status']) => string;
 }
 
 function relationLabel(rel: string): string {
@@ -84,6 +88,41 @@ function metadataLabel(status: Paper['metadata_status']): string {
   return labels[status] || status;
 }
 
+function embeddingStatusTone(status: Paper['embedding_status']): string {
+  if (status === 'completed') return 'ready';
+  if (status === 'failed') return 'failed';
+  if (status === 'skipped') return 'muted';
+  return 'running';
+}
+
+function embeddingRunMessage(
+  paper: Paper,
+  run: EmbeddingRun | null,
+  embeddingLabel: (status: Paper['embedding_status']) => string,
+): string {
+  if (paper.embedding_status === 'completed') {
+    const count = run?.embedded_count || run?.passage_count || paper.parse_diagnostics?.passage_count;
+    return count ? `语义索引已就绪，${count} 个切片可用于深度检索。` : '语义索引已就绪，可用于深度检索。';
+  }
+  if (paper.embedding_status === 'failed') {
+    return run?.last_error || '语义索引失败，搜索可能退回关键词匹配。';
+  }
+  if (paper.embedding_status === 'skipped') {
+    return '该论文暂未生成语义索引。';
+  }
+  if (run?.status === 'running') {
+    const total = run.passage_count || paper.parse_diagnostics?.passage_count || 0;
+    const done = run.embedded_count + run.reused_count + run.skipped_count;
+    return total > 0
+      ? `语义索引运行中，已处理 ${Math.min(done, total)}/${total} 个切片。`
+      : '语义索引正在后台运行。';
+  }
+  if (run?.status === 'queued') {
+    return '语义索引已进入队列，等待后台 worker 处理。';
+  }
+  return `语义索引${embeddingLabel(paper.embedding_status)}。`;
+}
+
 function aiStatusLabel(task: PaperBackgroundTask | null): string {
   if (!task) return 'AI 未开始';
   if (task.phase === 'parsing') return '等待 PDF';
@@ -109,10 +148,13 @@ export const Inspector: React.FC<InspectorProps> = ({
   activeTab,
   setActiveTab,
   visibleCards,
+  selectedSearchResult,
   analysisTask,
+  embeddingRun,
   cardTabs,
   cardLabel,
   parseLabel,
+  embeddingLabel,
 }) => {
   const [newCardText, setNewCardText] = useState('');
   const [isAdding, setIsAdding] = useState(false);
@@ -123,6 +165,8 @@ export const Inspector: React.FC<InspectorProps> = ({
   const canCancelAnalysis = analysisTask?.phase === 'analyzing' && !!analysisTask.analysis_run_id;
   const ToggleIcon = isOpen ? PanelRightClose : PanelRightOpen;
   const toggleLabel = isOpen ? '收起详情栏' : '展开详情栏';
+  const embeddingTone = selectedPaper ? embeddingStatusTone(selectedPaper.embedding_status) : 'muted';
+  const sourceResult = selectedPaper?.id === selectedSearchResult?.paper_id ? selectedSearchResult : null;
 
   useEffect(() => {
     if (!selectedPaperId) {
@@ -178,6 +222,9 @@ export const Inspector: React.FC<InspectorProps> = ({
                   <div className="paper-status-strip">
                     <div className={`paper-status-tag parse-${selectedPaper.parse_status}`}>
                       PDF {parseLabel(selectedPaper.parse_status)}
+                    </div>
+                    <div className={`paper-status-tag embedding-${embeddingTone}`}>
+                      索引 {embeddingLabel(selectedPaper.embedding_status)}
                     </div>
                     <div className={`paper-status-tag metadata-${selectedPaper.metadata_status}`}>
                       {metadataLabel(selectedPaper.metadata_status)}
@@ -256,6 +303,37 @@ export const Inspector: React.FC<InspectorProps> = ({
                 </div>
               )}
 
+              <div className={`embedding-status-card ${embeddingTone}`}>
+                <div className="embedding-status-icon">
+                  <BrainCircuit size={16} />
+                </div>
+                <div>
+                  <strong>语义索引 {embeddingLabel(selectedPaper.embedding_status)}</strong>
+                  <p>{embeddingRunMessage(selectedPaper, embeddingRun, embeddingLabel)}</p>
+                  {embeddingRun && (
+                    <span>
+                      {embeddingRun.provider || 'local'} / {embeddingRun.model || 'default'}
+                      {embeddingRun.batch_count > 0 ? ` · ${embeddingRun.batch_count} 批` : ''}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {sourceResult && (
+                <div className="search-source-card">
+                  <div className="search-source-header">
+                    <span>搜索命中来源</span>
+                    <strong>第 {sourceResult.page_number} 页</strong>
+                  </div>
+                  <div className="search-source-meta">
+                    <span>{sourceResult.section || '正文'}</span>
+                    <span>段落 {sourceResult.paragraph_index + 1}</span>
+                    <span>相关度 {Math.round(sourceResult.score * 100)}%</span>
+                  </div>
+                  <p dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(sourceResult.snippet) }} />
+                </div>
+              )}
+
               <div className="inspector-section">
                 <div className="section-title">解析质量</div>
                 <div className="parse-quality-grid">
@@ -272,13 +350,6 @@ export const Inspector: React.FC<InspectorProps> = ({
                       <label>质量评分</label>
                     </div>
                     <span>{formatQualityScore(parseDiagnostics?.quality_score)}</span>
-                  </div>
-                  <div className={parseDiagnostics?.warning_count ? 'parse-quality-item has-warning' : 'parse-quality-item'}>
-                    <div className="item-label-group">
-                      <AlertTriangle size={14} />
-                      <label>警告</label>
-                    </div>
-                    <span>{formatCount(parseDiagnostics?.warning_count)}</span>
                   </div>
                   <div className="parse-quality-item">
                     <div className="item-label-group">

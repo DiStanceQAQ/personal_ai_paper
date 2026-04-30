@@ -496,6 +496,56 @@ button {
   background: transparent;
 }
 
+.search-warmup-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: var(--radius-full);
+  background: rgba(239, 246, 255, 0.72);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.search-warmup-banner svg {
+  color: var(--accent);
+}
+
+.search-warmup-banner.ready {
+  border-color: #bbf7d0;
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.search-warmup-banner.ready svg {
+  color: #047857;
+}
+
+.search-warmup-banner.failed {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.search-warmup-banner.failed svg {
+  color: #c2410c;
+}
+
+.search-warmup-banner.skipped {
+  border-color: var(--border);
+  background: var(--bg-main);
+  color: var(--text-tertiary);
+}
+
+.search-warmup-banner small {
+  padding-left: 2px;
+  color: inherit;
+  opacity: 0.72;
+}
+
 .btn-search-main {
   height: 40px;
   padding: 0 20px;

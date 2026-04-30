@@ -51,10 +51,42 @@ def rebuild_fts_index(database_path: Path | None = None) -> None:
         conn.close()
 
 
-def _to_safe_fts_query(query: str) -> str:
-    """Convert user search text to a safe FTS5 query made of quoted terms."""
-    terms = TOKEN_RE.findall(query)
-    return " ".join(f'"{term}"' for term in terms)
+def _to_safe_fts_query(terms: list[str], *, match_any: bool = False) -> str:
+    """Convert tokenized search text to a safe FTS5 query made of quoted terms."""
+    separator = " OR " if match_any else " "
+    return separator.join(f'"{term}"' for term in terms)
+
+
+def _execute_fts_query(
+    conn: Any,
+    *,
+    fts_query: str,
+    space_id: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        f"""
+        SELECT
+            fts.rank AS score,
+            p.id AS passage_id,
+            p.paper_id,
+            p.section,
+            p.page_number,
+            p.paragraph_index,
+            snippet({FTS_TABLE}, 4, '<mark>', '</mark>', '...', 32) AS snippet,
+            p.original_text,
+            papers.title AS paper_title
+        FROM {FTS_TABLE} fts
+        JOIN passages p ON p.id = fts.passage_id
+        JOIN papers ON papers.id = p.paper_id
+        WHERE {FTS_TABLE} MATCH ?
+          AND fts.space_id = ?
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (fts_query, space_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def search_passages_fts(
@@ -67,36 +99,31 @@ def search_passages_fts(
 
     Returns results with paper title, section, page number, snippet, and match score.
     """
-    fts_query = _to_safe_fts_query(query)
+    terms = TOKEN_RE.findall(query)
+    fts_query = _to_safe_fts_query(terms)
     if not fts_query:
         return []
 
     conn = get_connection(database_path)
     try:
-        rows = conn.execute(
-            f"""
-            SELECT
-                fts.rank AS score,
-                p.id AS passage_id,
-                p.paper_id,
-                p.section,
-                p.page_number,
-                p.paragraph_index,
-                snippet({FTS_TABLE}, 4, '<mark>', '</mark>', '...', 32) AS snippet,
-                p.original_text,
-                papers.title AS paper_title
-            FROM {FTS_TABLE} fts
-            JOIN passages p ON p.id = fts.passage_id
-            JOIN papers ON papers.id = p.paper_id
-            WHERE {FTS_TABLE} MATCH ?
-              AND fts.space_id = ?
-            ORDER BY rank
-            LIMIT ?
-            """,
-            (fts_query, space_id, limit),
-        ).fetchall()
+        strict_results = _execute_fts_query(
+            conn,
+            fts_query=fts_query,
+            space_id=space_id,
+            limit=limit,
+        )
+        if strict_results or len(terms) <= 1:
+            return strict_results
 
-        return [dict(r) for r in rows]
+        # Natural-language searches often contain extra words. If no single
+        # passage has every term, fall back to matching any term instead of
+        # looking broken to the user.
+        return _execute_fts_query(
+            conn,
+            fts_query=_to_safe_fts_query(terms, match_any=True),
+            space_id=space_id,
+            limit=limit,
+        )
     finally:
         conn.close()
 

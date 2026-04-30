@@ -9,6 +9,7 @@ export type AnalysisRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 
 export type KnowledgeCardOrigin = 'user' | 'heuristic' | 'ai';
 export type SearchStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 export type SearchMode = 'fts' | 'hybrid';
+export type SearchWarmupStatus = 'idle' | 'warming' | 'ready' | 'failed' | 'skipped';
 export type UploadQueueStatus = 'uploading' | 'success' | 'failed';
 export type DocumentElementType =
   | 'title'
@@ -325,4 +326,13 @@ export interface SearchResult {
   snippet: string;
   original_text: string;
   paper_title: string;
+}
+
+export interface SearchWarmupState {
+  space_id: string;
+  status: SearchWarmupStatus;
+  message: string;
+  started_at: string | null;
+  completed_at: string | null;
+  elapsed_ms: number | null;
 }

@@ -1,6 +1,7 @@
 """Tests for full-text search with SQLite FTS5."""
 
 import tempfile
+import asyncio
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -206,6 +207,70 @@ def test_search_treats_fts_syntax_characters_as_plain_text() -> None:
         conn.close()
 
 
+def test_search_falls_back_to_any_term_when_strict_match_is_empty() -> None:
+    """Natural-language FTS should not look empty because one term is missing."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+
+        conn.execute("INSERT INTO spaces (id, name) VALUES ('space-1', 'A')")
+        conn.execute(
+            "INSERT INTO papers (id, space_id, title, parse_status) VALUES ('p1', 'space-1', 'P1', 'parsed')"
+        )
+        conn.execute(
+            """
+            INSERT INTO passages (id, paper_id, space_id, section, original_text)
+            VALUES
+              ('pass1', 'p1', 'space-1', 'method', 'transformer attention mechanism'),
+              ('pass2', 'p1', 'space-1', 'result', 'retrieval augmented grounding')
+            """
+        )
+        conn.commit()
+        rebuild_fts_index(database_path=db_path)
+
+        results = search_passages(
+            "transformer retrieval",
+            "space-1",
+            database_path=db_path,
+            mode="fts",
+        )
+
+        assert {row["passage_id"] for row in results} == {"pass1", "pass2"}
+        conn.close()
+
+
+def test_search_keeps_strict_results_when_all_terms_match() -> None:
+    """The any-term fallback should not dilute already precise FTS matches."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+
+        conn.execute("INSERT INTO spaces (id, name) VALUES ('space-1', 'A')")
+        conn.execute(
+            "INSERT INTO papers (id, space_id, title, parse_status) VALUES ('p1', 'space-1', 'P1', 'parsed')"
+        )
+        conn.execute(
+            """
+            INSERT INTO passages (id, paper_id, space_id, section, original_text)
+            VALUES
+              ('pass1', 'p1', 'space-1', 'method', 'transformer retrieval model'),
+              ('pass2', 'p1', 'space-1', 'result', 'transformer attention mechanism')
+            """
+        )
+        conn.commit()
+        rebuild_fts_index(database_path=db_path)
+
+        results = search_passages(
+            "transformer retrieval",
+            "space-1",
+            database_path=db_path,
+            mode="fts",
+        )
+
+        assert [row["passage_id"] for row in results] == ["pass1"]
+        conn.close()
+
+
 @pytest.mark.asyncio
 async def test_search_api_requires_active_space(client: AsyncClient) -> None:
     """Test search returns 400 without active space."""
@@ -357,6 +422,115 @@ async def test_search_api_rejects_invalid_mode(client: AsyncClient) -> None:
     )
 
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_search_warmup_skips_without_embeddings(client: AsyncClient) -> None:
+    """Warmup should be a cheap no-op before a space has semantic embeddings."""
+    space_resp = await client.post("/api/spaces", json={"name": "Warmup Empty"})
+    space_id = space_resp.json()["id"]
+    await client.put(f"/api/spaces/active/{space_id}")
+
+    resp = await client.post("/api/search/warmup")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["space_id"] == space_id
+    assert data["status"] == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_search_warmup_starts_when_embeddings_exist(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Warmup endpoint should start and expose semantic warmup state."""
+    space_resp = await client.post("/api/spaces", json={"name": "Warmup Ready"})
+    space_id = space_resp.json()["id"]
+    await client.put(f"/api/spaces/active/{space_id}")
+
+    import paper_engine.storage.database as db_module
+    from paper_engine.retrieval import service
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        conn.execute(
+            "INSERT INTO papers (id, space_id, title, parse_status) VALUES ('warm-paper', ?, 'Warm', 'parsed')",
+            (space_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO passages (id, paper_id, space_id, section, original_text)
+            VALUES ('warm-passage', 'warm-paper', ?, 'method', 'semantic warmup passage')
+            """,
+            (space_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO passage_embeddings (
+                passage_id, provider, model, dimension, embedding_json
+            )
+            VALUES ('warm-passage', 'openai', 'test-model', 2, '[1.0,0.0]')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO app_state (key, value)
+            VALUES ('embedding_provider', 'openai'),
+                   ('embedding_model', 'test-model'),
+                   ('embedding_api_key', 'test-key')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    class FastWarmupProvider:
+        provider = "openai"
+        model = "test-model"
+
+        def is_configured(self) -> bool:
+            return True
+
+        def embed_texts(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0] for _ in texts]
+
+    def run_inline(space_id: str, signature: str) -> None:
+        service._set_warmup_state(
+            signature,
+            service._warmup_state(
+                space_id=space_id,
+                status="ready",
+                message="语义检索已准备好。",
+                completed_at=service._utc_now(),
+                elapsed_ms=1,
+            ),
+        )
+
+    monkeypatch.setattr(
+        "paper_engine.retrieval.service.get_embedding_provider",
+        lambda config: FastWarmupProvider(),
+    )
+    monkeypatch.setattr(
+        "paper_engine.retrieval.service._run_search_warmup",
+        run_inline,
+    )
+    service._SEARCH_WARMUP_STATE.clear()
+
+    resp = await client.post("/api/search/warmup")
+    status_data: dict[str, Any] = {}
+    for _ in range(20):
+        status_resp = await client.get("/api/search/warmup")
+        assert status_resp.status_code == 200
+        status_data = status_resp.json()
+        if status_data["status"] == "ready":
+            break
+        await asyncio.sleep(0.01)
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] in {"warming", "ready"}
+    assert status_data["status"] == "ready"
 
 
 @pytest.mark.asyncio

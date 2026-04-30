@@ -24,3 +24,17 @@ async def search_literature(
         limit=limit,
         mode=mode,
     )
+
+
+@router.get("/warmup")
+async def get_search_warmup_status(
+    space_id: str | None = Query(None, description="Space ID (defaults to active space)"),
+) -> dict[str, Any]:
+    return service.get_search_warmup_status(space_id=space_id)
+
+
+@router.post("/warmup")
+async def start_search_warmup(
+    space_id: str | None = Query(None, description="Space ID (defaults to active space)"),
+) -> dict[str, Any]:
+    return service.start_search_warmup(space_id=space_id)

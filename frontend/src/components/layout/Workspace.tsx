@@ -1,7 +1,16 @@
 import React, { useState } from 'react';
 import { CheckCircle2, Clock3, Search, UploadCloud, FileText, FolderOpen, Zap, Info, XCircle, Sparkles, ChevronDown } from 'lucide-react';
 import DOMPurify from 'dompurify';
-import type { AgentStatus, Paper, SearchMode, SearchResult, SearchStatus, Space, UploadQueueItem } from '../../types';
+import type {
+  AgentStatus,
+  Paper,
+  SearchMode,
+  SearchResult,
+  SearchStatus,
+  SearchWarmupState,
+  Space,
+  UploadQueueItem,
+} from '../../types';
 import { PaperCard } from '../ui/PaperCard';
 
 interface WorkspaceProps {
@@ -24,6 +33,7 @@ interface WorkspaceProps {
   results: SearchResult[];
   searchStatus: SearchStatus;
   searchError: string;
+  searchWarmup: SearchWarmupState | null;
   parseLabel: (status: string) => string;
   embeddingLabel: (status: Paper['embedding_status']) => string;
   uploadQueue: UploadQueueItem[];
@@ -51,6 +61,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
   results,
   searchStatus,
   searchError,
+  searchWarmup,
   parseLabel,
   embeddingLabel,
   uploadQueue,
@@ -63,6 +74,15 @@ export const Workspace: React.FC<WorkspaceProps> = ({
   const uploadInProgress = uploadQueue.some((item) => item.status === 'uploading');
   const [isDraggingPdf, setIsDraggingPdf] = useState(false);
   const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
+  const warmupStatusLabel = (() => {
+    if (searchMode !== 'hybrid') return null;
+    if (!searchWarmup) return '语义检索将在后台预热';
+    if (searchWarmup.status === 'warming') return '语义模型准备中，首次搜索会更顺滑';
+    if (searchWarmup.status === 'ready') return '语义检索已就绪';
+    if (searchWarmup.status === 'skipped') return '当前空间暂无语义索引';
+    if (searchWarmup.status === 'failed') return '预热失败，仍可直接搜索';
+    return '语义检索尚未预热';
+  })();
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     if (!activeSpace) return;
@@ -281,6 +301,23 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                     )}
                   </div>
                 </div>
+                {warmupStatusLabel && (
+                  <div className={`search-warmup-banner ${searchWarmup?.status || 'idle'}`} aria-live="polite">
+                    {searchWarmup?.status === 'warming' ? (
+                      <div className="spinner-tiny" aria-hidden="true" />
+                    ) : searchWarmup?.status === 'ready' ? (
+                      <CheckCircle2 size={14} />
+                    ) : searchWarmup?.status === 'failed' ? (
+                      <XCircle size={14} />
+                    ) : (
+                      <Sparkles size={14} />
+                    )}
+                    <span>{warmupStatusLabel}</span>
+                    {searchWarmup?.elapsed_ms != null && searchWarmup.status === 'ready' && (
+                      <small>{Math.max(1, Math.round(searchWarmup.elapsed_ms / 1000))}s</small>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="search-results-list">
                 {searchStatus === 'idle' && (

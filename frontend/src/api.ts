@@ -17,6 +17,7 @@ import type {
   Passage,
   SearchResult,
   SearchMode,
+  SearchWarmupState,
   Space,
 } from './types';
 
@@ -147,6 +148,9 @@ export const api = {
     const params = new URLSearchParams({ q, limit: '30', mode });
     return request<SearchResult[]>(`/api/search?${params.toString()}`);
   },
+  getSearchWarmup: () => request<SearchWarmupState>('/api/search/warmup'),
+  startSearchWarmup: () =>
+    request<SearchWarmupState>('/api/search/warmup', { method: 'POST' }),
   agentStatus: () => request<AgentStatus>('/api/agent/status'),
   setAgentStatus: (enabled: boolean) =>
     request<{ enabled: boolean }>('/api/agent/status', { method: 'PUT', body: JSON.stringify({ enabled }) }),

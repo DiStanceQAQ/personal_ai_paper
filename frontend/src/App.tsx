@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
-import type { EmbeddingStatus, Paper, SearchMode, SearchResult, SearchStatus } from './types';
+import type {
+  EmbeddingStatus,
+  Paper,
+  SearchMode,
+  SearchResult,
+  SearchStatus,
+  SearchWarmupState,
+} from './types';
 
 // Layout Components
 import { Sidebar } from './components/layout/Sidebar';
@@ -66,6 +73,7 @@ export default function App(): JSX.Element {
   const [searchError, setSearchError] = useState('');
   const [searchMode, setSearchMode] = useState<SearchMode>('fts');
   const [selectedSearchResult, setSelectedSearchResult] = useState<SearchResult | null>(null);
+  const [searchWarmup, setSearchWarmup] = useState<SearchWarmupState | null>(null);
 
   // --- Custom Hooks (Logic Logic) ---
   const modals = useModals();
@@ -115,6 +123,7 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     setSelectedSearchResult(null);
+    setSearchWarmup(null);
   }, [activeSpace?.id]);
 
   useEffect(() => {
@@ -123,6 +132,66 @@ export default function App(): JSX.Element {
     setSearchStatus('idle');
     setSelectedSearchResult(null);
   }, [searchMode]);
+
+  useEffect(() => {
+    if (!activeSpace || searchMode !== 'hybrid') return;
+
+    let isCancelled = false;
+    let pollTimer: number | null = null;
+
+    const pollWarmup = async () => {
+      try {
+        const status = await api.getSearchWarmup();
+        if (isCancelled) return;
+        setSearchWarmup(status);
+        if (status.status === 'warming') {
+          pollTimer = window.setTimeout(pollWarmup, 1200);
+        }
+      } catch {
+        if (!isCancelled) {
+          setSearchWarmup({
+            space_id: activeSpace.id,
+            status: 'failed',
+            message: '语义检索状态暂时不可用。',
+            started_at: null,
+            completed_at: null,
+            elapsed_ms: null,
+          });
+        }
+      }
+    };
+
+    const startWarmup = async () => {
+      try {
+        const started = await api.startSearchWarmup();
+        if (isCancelled) return;
+        setSearchWarmup(started);
+        if (started.status === 'warming') {
+          pollTimer = window.setTimeout(pollWarmup, 1200);
+        }
+      } catch {
+        if (!isCancelled) {
+          setSearchWarmup({
+            space_id: activeSpace.id,
+            status: 'failed',
+            message: '语义检索预热失败，仍可直接尝试搜索。',
+            started_at: null,
+            completed_at: null,
+            elapsed_ms: null,
+          });
+        }
+      }
+    };
+
+    void startWarmup();
+
+    return () => {
+      isCancelled = true;
+      if (pollTimer !== null) {
+        window.clearTimeout(pollTimer);
+      }
+    };
+  }, [activeSpace, searchMode]);
 
   // --- Common Handlers ---
   const handleToggleAgent = async () => {
@@ -152,11 +221,11 @@ export default function App(): JSX.Element {
       const searchResults = await api.search(trimmedQuery, searchMode);
       setResults(searchResults);
       setSearchStatus(searchResults.length > 0 ? 'success' : 'empty');
-    } catch {
+    } catch (err: any) {
       setResults([]);
-      setSearchError('检索请求失败，请检查本地服务后重试。');
+      setSearchError(err.message || '检索请求失败，请检查本地服务后重试。');
       setSearchStatus('error');
-      setNotice({ message: '搜索请求失败。', type: 'error' });
+      setNotice({ message: `搜索请求失败: ${err.message || '请检查本地服务'}`, type: 'error' });
     }
   };
 
@@ -171,16 +240,22 @@ export default function App(): JSX.Element {
   };
 
   const handleOpenSearchResult = async (result: SearchResult) => {
-    const paper = papers.find((item) => item.id === result.paper_id);
-    if (!paper) {
-      setNotice({ message: '未在当前空间找到这篇论文。', type: 'error' });
+    try {
+      const paper =
+        papers.find((item) => item.id === result.paper_id) ||
+        await api.getPaper(result.paper_id);
+
+      setSelectedSearchResult(result);
+      await openPaper(paper);
+      setIsInspectorOpen(true);
+      setNotice({ message: `已打开来源：第 ${result.page_number} 页。`, type: 'success' });
+    } catch (err: any) {
+      setNotice({
+        message: `打开搜索来源失败: ${err.message || '未在当前空间找到这篇论文。'}`,
+        type: 'error',
+      });
       return;
     }
-
-    setSelectedSearchResult(result);
-    await openPaper(paper);
-    setIsInspectorOpen(true);
-    setNotice({ message: `已打开来源：第 ${result.page_number} 页。`, type: 'success' });
   };
 
   const handleUpdatePaper = async (paperId: string, data: Partial<Paper>) => {
@@ -272,6 +347,7 @@ export default function App(): JSX.Element {
           results={results}
           searchStatus={searchStatus}
           searchError={searchError}
+          searchWarmup={searchWarmup}
           parseLabel={parseLabel}
           embeddingLabel={embeddingLabel}
           uploadQueue={uploadQueue}

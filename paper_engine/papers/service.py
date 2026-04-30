@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 
 from paper_engine.core import config
 from paper_engine.storage.database import get_connection
@@ -444,6 +445,28 @@ async def get_paper(paper_id: str) -> dict[str, Any]:
     try:
         row = _get_paper_in_active_space(conn, paper_id)
         return _paper_row_to_dict(row)
+    finally:
+        conn.close()
+
+
+async def get_paper_pdf(paper_id: str) -> FileResponse:
+    """Stream the original PDF for a paper in the active space."""
+    conn = get_connection()
+    try:
+        row = _get_paper_in_active_space(conn, paper_id)
+        file_path = Path(str(row["file_path"]))
+        if not file_path.exists() or not file_path.is_file():
+            raise HTTPException(status_code=404, detail="PDF file not found")
+        if file_path.suffix.lower() != ".pdf":
+            raise HTTPException(status_code=415, detail="Stored file is not a PDF")
+
+        filename = f"{row['title'] or row['id']}.pdf"
+        return FileResponse(
+            file_path,
+            media_type="application/pdf",
+            filename=filename,
+            content_disposition_type="inline",
+        )
     finally:
         conn.close()
 

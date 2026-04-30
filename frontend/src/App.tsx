@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
 import type {
   EmbeddingStatus,
+  PdfReaderTarget,
   Paper,
   SearchMode,
   SearchResult,
@@ -73,7 +74,7 @@ export default function App(): JSX.Element {
   const [projectRoot, setProjectRoot] = useState<string>('');
 
   // --- View State ---
-  const [activeView, setActiveView] = useState<'library' | 'search'>('library');
+  const [activeView, setActiveView] = useState<'library' | 'search' | 'reader'>('library');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isInspectorOpen, setIsInspectorOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<(typeof cardTabs)[number]>('Method');
@@ -84,6 +85,7 @@ export default function App(): JSX.Element {
   const [searchMode, setSearchMode] = useState<SearchMode>('fts');
   const [selectedSearchResult, setSelectedSearchResult] = useState<SearchResult | null>(null);
   const [searchWarmup, setSearchWarmup] = useState<SearchWarmupState | null>(null);
+  const [pdfReaderTarget, setPdfReaderTarget] = useState<PdfReaderTarget | null>(null);
 
   // --- Custom Hooks (Logic Logic) ---
   const modals = useModals();
@@ -134,6 +136,7 @@ export default function App(): JSX.Element {
   useEffect(() => {
     setSelectedSearchResult(null);
     setSearchWarmup(null);
+    setPdfReaderTarget(null);
   }, [activeSpace?.id]);
 
   useEffect(() => {
@@ -257,6 +260,13 @@ export default function App(): JSX.Element {
 
       setSelectedSearchResult(result);
       await openPaper(paper);
+      setPdfReaderTarget({
+        paper,
+        pageNumber: Math.max(1, result.page_number),
+        sourceLabel: `搜索命中：第 ${result.page_number} 页`,
+        passageId: result.passage_id,
+      });
+      setActiveView('reader');
       setIsInspectorOpen(true);
       setNotice({ message: `已打开来源：第 ${result.page_number} 页。`, type: 'success' });
     } catch (err: any) {
@@ -266,6 +276,37 @@ export default function App(): JSX.Element {
       });
       return;
     }
+  };
+
+  const handleOpenPdfReader = (
+    paper: Paper,
+    pageNumber = 1,
+    sourceLabel = 'PDF 原文',
+    passageId?: string,
+  ) => {
+    setPdfReaderTarget({
+      paper,
+      pageNumber: Math.max(1, pageNumber),
+      sourceLabel,
+      passageId,
+    });
+    setActiveView('reader');
+  };
+
+  const handleClosePdfReader = () => {
+    setActiveView('library');
+  };
+
+  const handleReaderPageChange = (pageNumber: number) => {
+    setPdfReaderTarget((current) =>
+      current
+        ? {
+            ...current,
+            pageNumber: Math.max(1, pageNumber),
+            sourceLabel: `第 ${Math.max(1, pageNumber)} 页`,
+          }
+        : current,
+    );
   };
 
   const handleUpdatePaper = async (paperId: string, data: Partial<Paper>) => {
@@ -364,6 +405,10 @@ export default function App(): JSX.Element {
           uploadQueue={uploadQueue}
           selectedSearchResult={selectedSearchResult}
           onOpenSearchResult={handleOpenSearchResult}
+          pdfReaderTarget={pdfReaderTarget}
+          onOpenPdfReader={handleOpenPdfReader}
+          onClosePdfReader={handleClosePdfReader}
+          onReaderPageChange={handleReaderPageChange}
         />
 
         <Inspector
@@ -383,6 +428,7 @@ export default function App(): JSX.Element {
           setActiveTab={setActiveTab}
           visibleCards={visibleCards}
           selectedSearchResult={selectedSearchResult}
+          onOpenPdfReader={handleOpenPdfReader}
           analysisTask={selectedPaper ? backgroundTasks[selectedPaper.id] || null : null}
           embeddingRun={selectedPaper ? embeddingRunsByPaperId[selectedPaper.id] || null : null}
           cardTabs={cardTabs}

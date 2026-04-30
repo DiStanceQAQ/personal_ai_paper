@@ -3,6 +3,7 @@ import { CheckCircle2, Clock3, Search, UploadCloud, FileText, FolderOpen, Zap, I
 import DOMPurify from 'dompurify';
 import type {
   AgentStatus,
+  PdfReaderTarget,
   Paper,
   PaperBackgroundTask,
   SearchMode,
@@ -13,14 +14,15 @@ import type {
   UploadQueueItem,
 } from '../../types';
 import { PaperCard } from '../ui/PaperCard';
+import { PdfReader } from '../ui/PdfReader';
 
 interface WorkspaceProps {
   activeSpace: Space | null;
   agentStatus: AgentStatus | null;
   onToggleAgent: () => void;
   onOpenMCPGuide: () => void;
-  activeView: 'library' | 'search';
-  setActiveView: (view: 'library' | 'search') => void;
+  activeView: 'library' | 'search' | 'reader';
+  setActiveView: (view: 'library' | 'search' | 'reader') => void;
   papers: Paper[];
   backgroundTasks: Record<string, PaperBackgroundTask>;
   selectedPaper: Paper | null;
@@ -41,6 +43,10 @@ interface WorkspaceProps {
   uploadQueue: UploadQueueItem[];
   selectedSearchResult: SearchResult | null;
   onOpenSearchResult: (result: SearchResult) => void;
+  pdfReaderTarget: PdfReaderTarget | null;
+  onOpenPdfReader: (paper: Paper, pageNumber?: number, sourceLabel?: string, passageId?: string) => void;
+  onClosePdfReader: () => void;
+  onReaderPageChange: (pageNumber: number) => void;
 }
 
 export const Workspace: React.FC<WorkspaceProps> = ({
@@ -70,6 +76,10 @@ export const Workspace: React.FC<WorkspaceProps> = ({
   uploadQueue,
   selectedSearchResult,
   onOpenSearchResult,
+  pdfReaderTarget,
+  onOpenPdfReader,
+  onClosePdfReader,
+  onReaderPageChange,
 }) => {
   const canSearch = query.trim().length > 0 && searchStatus !== 'loading';
   const uploadSucceeded = uploadQueue.filter((item) => item.status === 'success').length;
@@ -153,9 +163,23 @@ export const Workspace: React.FC<WorkspaceProps> = ({
             >
               深度检索
             </button>
+            {pdfReaderTarget && (
+              <button
+                className={activeView === 'reader' ? 'nav-item active' : 'nav-item'}
+                onClick={() => setActiveView('reader')}
+              >
+                PDF 原文
+              </button>
+            )}
           </div>
 
-          {activeView === 'library' ? (
+          {activeView === 'reader' && pdfReaderTarget ? (
+            <PdfReader
+              target={pdfReaderTarget}
+              onClose={onClosePdfReader}
+              onPageChange={onReaderPageChange}
+            />
+          ) : activeView === 'library' ? (
             <div
               className={isDraggingPdf ? 'view-container library-view drag-active' : 'view-container library-view'}
               onDragOver={handleDragOver}
@@ -193,6 +217,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                       backgroundTask={backgroundTasks[paper.id] || null}
                       isSelected={selectedPaper?.id === paper.id}
                       onSelect={onSelectPaper}
+                      onOpenPdf={(paperToOpen) => onOpenPdfReader(paperToOpen, 1, '从资源库打开')}
                       onDelete={onDeletePaper}
                       parseLabel={parseLabel}
                       embeddingLabel={embeddingLabel}

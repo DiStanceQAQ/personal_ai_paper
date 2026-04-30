@@ -3,6 +3,7 @@
 from typing import Any
 
 from fastapi import APIRouter, Body, Query, UploadFile, status
+from fastapi.responses import FileResponse
 
 from paper_engine.papers import service
 
@@ -27,6 +28,11 @@ async def list_papers(space_id: str | None = None) -> list[dict[str, Any]]:
 @router.get("/{paper_id}")
 async def get_paper(paper_id: str) -> dict[str, Any]:
     return await service.get_paper(paper_id)
+
+
+@router.get("/{paper_id}/pdf")
+async def get_paper_pdf(paper_id: str) -> FileResponse:
+    return await service.get_paper_pdf(paper_id)
 
 
 @router.get("/{paper_id}/metadata")

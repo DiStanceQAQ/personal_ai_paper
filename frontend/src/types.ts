@@ -366,3 +366,10 @@ export interface SearchWarmupState {
   completed_at: string | null;
   elapsed_ms: number | null;
 }
+
+export interface PdfReaderTarget {
+  paper: Paper;
+  pageNumber: number;
+  sourceLabel?: string;
+  passageId?: string;
+}

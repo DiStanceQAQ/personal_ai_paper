@@ -112,6 +112,26 @@ async def test_upload_pdf_to_active_space(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_paper_pdf_streams_original_file(client: AsyncClient) -> None:
+    """The PDF reader route streams only active-space paper files."""
+    await _create_and_activate_space(client)
+
+    upload = await client.post(
+        "/api/papers/upload",
+        files={"file": ("reader.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    paper_id = upload.json()["id"]
+
+    resp = await client.get(f"/api/papers/{paper_id}/pdf")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/pdf")
+    assert resp.headers["content-disposition"].startswith("inline;")
+    assert resp.content.startswith(b"%PDF")
+
+
+@pytest.mark.asyncio
 async def test_batch_upload_pdfs_to_active_space(client: AsyncClient) -> None:
     """Batch upload stores each PDF and queues independent parse runs."""
     await _create_and_activate_space(client)

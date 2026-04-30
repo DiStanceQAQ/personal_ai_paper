@@ -7,6 +7,10 @@ const workspace = readFileSync('frontend/src/components/layout/Workspace.tsx', '
 const paperCard = readFileSync('frontend/src/components/ui/PaperCard.tsx', 'utf8');
 const styles = readFileSync('frontend/src/styles.css', 'utf8');
 const types = readFileSync('frontend/src/types.ts', 'utf8');
+const api = readFileSync('frontend/src/api.ts', 'utf8');
+const reader = readFileSync('frontend/src/components/ui/PdfReader.tsx', 'utf8');
+const inspector = readFileSync('frontend/src/components/layout/Inspector.tsx', 'utf8');
+const knowledgeCard = readFileSync('frontend/src/components/ui/KnowledgeCardFancy.tsx', 'utf8');
 
 test('search has explicit UI states and disabled empty-query feedback', () => {
   assert.match(types, /export type SearchStatus = 'idle' \| 'loading' \| 'success' \| 'empty' \| 'error';/);
@@ -53,4 +57,20 @@ test('paper card waits for AI analysis before showing the final parsed badge', (
   assert.match(paperCard, /AI 解析中/);
   assert.match(paperCard, /AI 解析失败/);
   assert.match(paperCard, /AI 已取消/);
+});
+
+test('workspace exposes an MVP PDF reader with page-level source jumps', () => {
+  assert.match(types, /interface PdfReaderTarget/);
+  assert.match(api, /getPaperPdfUrl/);
+  assert.match(api, /\/api\/papers\/\$\{paperId\}\/pdf#page=\$\{safePage\}/);
+  assert.match(app, /setPdfReaderTarget/);
+  assert.match(app, /setActiveView\('reader'\)/);
+  assert.match(workspace, /PDF 原文/);
+  assert.match(workspace, /<PdfReader/);
+  assert.match(paperCard, /onOpenPdf/);
+  assert.match(reader, /iframe/);
+  assert.match(reader, /onPageChange/);
+  assert.match(inspector, /onOpenPdfReader/);
+  assert.match(knowledgeCard, /card-source-open/);
+  assert.match(styles, /\.pdf-reader-shell/);
 });

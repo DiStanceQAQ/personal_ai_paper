@@ -32,6 +32,7 @@ export interface InspectorProps {
   onUpdateCard: (id: string, summary: string) => Promise<void>;
   onAddManualCard: (type: string, summary: string) => void;
   onOpenEditPaper: () => void;
+  onOpenPdfReader: (paper: Paper, pageNumber?: number, sourceLabel?: string, passageId?: string) => void;
   activeTab: string;
   setActiveTab: (tab: any) => void;
   visibleCards: KnowledgeCard[];
@@ -150,6 +151,7 @@ export const Inspector: React.FC<InspectorProps> = ({
   onUpdateCard,
   onAddManualCard,
   onOpenEditPaper,
+  onOpenPdfReader,
   activeTab,
   setActiveTab,
   visibleCards,
@@ -331,7 +333,20 @@ export const Inspector: React.FC<InspectorProps> = ({
                 <div className="search-source-card">
                   <div className="search-source-header">
                     <span>搜索命中来源</span>
-                    <strong>第 {sourceResult.page_number} 页</strong>
+                    <button
+                      type="button"
+                      className="search-source-open"
+                      onClick={() =>
+                        onOpenPdfReader(
+                          selectedPaper,
+                          sourceResult.page_number,
+                          `搜索命中：第 ${sourceResult.page_number} 页`,
+                          sourceResult.passage_id,
+                        )
+                      }
+                    >
+                      第 {sourceResult.page_number} 页 · 打开原文
+                    </button>
                   </div>
                   <div className="search-source-meta">
                     <span>{sourceResult.section || '正文'}</span>
@@ -419,6 +434,17 @@ export const Inspector: React.FC<InspectorProps> = ({
                       cardLabel={cardLabel} 
                       onDelete={onDeleteCard}
                       onUpdate={onUpdateCard}
+                      onOpenSource={
+                        selectedPaper
+                          ? (pageNumber, passageId) =>
+                              onOpenPdfReader(
+                                selectedPaper,
+                                pageNumber,
+                                `卡片证据：第 ${pageNumber} 页`,
+                                passageId,
+                              )
+                          : undefined
+                      }
                       sourcePageById={sourcePageById}
                     />
                   ))}

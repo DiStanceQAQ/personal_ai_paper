@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, Gauge, Globe, Server, Trash2 } from 'lucide-react';
+import { BookOpen, FileText, Gauge, Globe, Server, Trash2 } from 'lucide-react';
 import type { Paper, PaperBackgroundTask } from '../../types';
 
 interface PaperCardProps {
@@ -7,6 +7,7 @@ interface PaperCardProps {
   backgroundTask: PaperBackgroundTask | null;
   isSelected: boolean;
   onSelect: (paper: Paper) => void;
+  onOpenPdf: (paper: Paper) => void;
   onDelete: (e: React.MouseEvent, paperId: string) => void;
   parseLabel: (status: string) => string;
   embeddingLabel: (status: Paper['embedding_status']) => string;
@@ -17,6 +18,7 @@ export const PaperCard: React.FC<PaperCardProps> = ({
   backgroundTask,
   isSelected,
   onSelect,
+  onOpenPdf,
   onDelete,
   parseLabel,
   embeddingLabel,
@@ -82,6 +84,17 @@ export const PaperCard: React.FC<PaperCardProps> = ({
         </div>
       </button>
       <div className="paper-card-actions">
+        <button
+          className="btn-icon-secondary paper-open-pdf"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenPdf(paper);
+          }}
+          title="阅读 PDF 原文"
+          aria-label={`阅读论文原文 ${paper.title || '未命名论文'}`}
+        >
+          <BookOpen size={14} />
+        </button>
         <button
           className="btn-icon-danger"
           onClick={(e) => onDelete(e, paper.id)}

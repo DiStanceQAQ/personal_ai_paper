@@ -45,6 +45,11 @@ export function setBackendBaseUrl(url: string): void {
   window.localStorage.setItem('paper-engine-backend-url', cachedBackendUrl);
 }
 
+export async function backendUrl(path = ''): Promise<string> {
+  const baseUrl = await initializeBackendBaseUrl();
+  return `${baseUrl}${path}`;
+}
+
 async function request<T>(
   path: string,
   init?: RequestInit,
@@ -93,6 +98,10 @@ export const api = {
   getActiveSpace: () => request<Space>('/api/spaces/active'),
   listPapers: () => request<Paper[]>('/api/papers'),
   getPaper: (paperId: string) => request<Paper>(`/api/papers/${paperId}`),
+  getPaperPdfUrl: async (paperId: string, pageNumber?: number) => {
+    const safePage = pageNumber && pageNumber > 0 ? Math.floor(pageNumber) : 1;
+    return backendUrl(`/api/papers/${paperId}/pdf#page=${safePage}`);
+  },
   getPaperMetadata: (paperId: string) => request<PaperMetadata>(`/api/papers/${paperId}/metadata`),
   deletePaper: (paperId: string) => request<{ status: string; paper_id: string }>(`/api/papers/${paperId}`, { method: 'DELETE' }),
   updatePaper: (paperId: string, body: Partial<Paper>) =>

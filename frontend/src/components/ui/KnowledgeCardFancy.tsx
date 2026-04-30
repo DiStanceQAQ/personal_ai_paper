@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Check, Edit2 } from 'lucide-react';
+import { BookOpen, X, Check, Edit2 } from 'lucide-react';
 import type { KnowledgeCard, KnowledgeCardEvidence, KnowledgeCardOrigin } from '../../types';
 
 interface KnowledgeCardFancyProps {
@@ -7,6 +7,7 @@ interface KnowledgeCardFancyProps {
   cardLabel: (type: string) => string;
   onDelete: (cardId: string) => void;
   onUpdate?: (cardId: string, summary: string) => Promise<void>;
+  onOpenSource?: (pageNumber: number, passageId: string) => void;
   sourcePageById?: Record<string, number>;
 }
 
@@ -67,6 +68,7 @@ export const KnowledgeCardFancy: React.FC<KnowledgeCardFancyProps> = ({
   cardLabel, 
   onDelete,
   onUpdate,
+  onOpenSource,
   sourcePageById = {},
 }) => {
   const [isEditing, setIsEditing] = useState(false);
@@ -78,6 +80,7 @@ export const KnowledgeCardFancy: React.FC<KnowledgeCardFancyProps> = ({
   const primarySourceId = sourceIds[0] || null;
   const primaryPageNumber = primarySourceId ? sourcePageById[primarySourceId] : undefined;
   const hasPrimaryPage = primaryPageNumber !== undefined && primaryPageNumber !== null;
+  const canOpenSource = !!onOpenSource && !!primarySourceId && hasPrimaryPage;
   const evidenceEntries = [
     evidence.evidence_quote && { label: '证据摘录', text: evidence.evidence_quote },
     evidence.reasoning_summary && { label: '推理摘要', text: evidence.reasoning_summary },
@@ -171,6 +174,17 @@ export const KnowledgeCardFancy: React.FC<KnowledgeCardFancyProps> = ({
             <span>{formatSourceCount(sourceIds.length)}</span>
             <span>{hasPrimaryPage ? `p. ${primaryPageNumber}` : 'p. 未知'}</span>
             <span>置信 {formatConfidence(card.confidence)}</span>
+            {canOpenSource && primarySourceId && (
+              <button
+                type="button"
+                className="card-source-open"
+                onClick={() => onOpenSource(primaryPageNumber, primarySourceId)}
+                aria-label={`打开第 ${primaryPageNumber} 页原文`}
+              >
+                <BookOpen size={11} />
+                原文
+              </button>
+            )}
           </div>
           {evidenceEntries.length > 0 && (
             <details className="card-evidence-details">

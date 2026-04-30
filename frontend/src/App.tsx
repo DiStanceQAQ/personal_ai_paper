@@ -335,6 +335,7 @@ export default function App(): JSX.Element {
           activeView={activeView}
           setActiveView={setActiveView}
           papers={papers}
+          backgroundTasks={backgroundTasks}
           selectedPaper={selectedPaper}
           onSelectPaper={openPaper}
           onDeletePaper={(e, id) => { e.stopPropagation(); modals.openModal('deletePaper', { paperToDelete: id }); }}

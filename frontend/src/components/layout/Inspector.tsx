@@ -163,6 +163,7 @@ export const Inspector: React.FC<InspectorProps> = ({
   const selectedPaperId = selectedPaper?.id;
   const extractBusy = analysisTask?.phase === 'parsing' || analysisTask?.phase === 'analyzing';
   const canCancelAnalysis = analysisTask?.phase === 'analyzing' && !!analysisTask.analysis_run_id;
+  const visibleAnalysisTask = analysisTask?.phase === 'completed' ? null : analysisTask;
   const ToggleIcon = isOpen ? PanelRightClose : PanelRightOpen;
   const toggleLabel = isOpen ? '收起详情栏' : '展开详情栏';
   const embeddingTone = selectedPaper ? embeddingStatusTone(selectedPaper.embedding_status) : 'muted';
@@ -219,20 +220,6 @@ export const Inspector: React.FC<InspectorProps> = ({
             <>
               <div className="inspector-header">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div className="paper-status-strip">
-                    <div className={`paper-status-tag parse-${selectedPaper.parse_status}`}>
-                      PDF {parseLabel(selectedPaper.parse_status)}
-                    </div>
-                    <div className={`paper-status-tag embedding-${embeddingTone}`}>
-                      索引 {embeddingLabel(selectedPaper.embedding_status)}
-                    </div>
-                    <div className={`paper-status-tag metadata-${selectedPaper.metadata_status}`}>
-                      {metadataLabel(selectedPaper.metadata_status)}
-                    </div>
-                    <div className={`paper-status-tag ai-${analysisTask?.phase || 'idle'}`}>
-                      {aiStatusLabel(analysisTask)}
-                    </div>
-                  </div>
                   <button
                     className="btn-icon-secondary"
                     onClick={onOpenEditPaper}
@@ -249,7 +236,7 @@ export const Inspector: React.FC<InspectorProps> = ({
               {selectedPaper.abstract && (
                 <div className="inspector-section">
                   <div className="abstract-card">
-                    <p>{selectedPaper.abstract}</p>
+                    <p>摘要: {selectedPaper.abstract}</p>
                   </div>
                 </div>
               )}
@@ -267,18 +254,18 @@ export const Inspector: React.FC<InspectorProps> = ({
                 </button>
               </div>
 
-              {analysisTask && (
-                <div className={`task-progress-card ${analysisTask.phase}`}>
+              {visibleAnalysisTask && (
+                <div className={`task-progress-card ${visibleAnalysisTask.phase}`}>
                   <div className="task-progress-header">
                     <span>后台任务</span>
                     <div className="task-progress-actions">
-                      {canCancelAnalysis && analysisTask.analysis_run_id && (
+                      {canCancelAnalysis && visibleAnalysisTask.analysis_run_id && (
                         <button
                           type="button"
                           className="btn-task-cancel"
                           onClick={() => {
-                            if (analysisTask.analysis_run_id) {
-                              onCancelAnalysis(analysisTask.analysis_run_id);
+                            if (visibleAnalysisTask.analysis_run_id) {
+                              onCancelAnalysis(visibleAnalysisTask.analysis_run_id);
                             }
                           }}
                           title="取消 AI 深度分析"
@@ -287,37 +274,21 @@ export const Inspector: React.FC<InspectorProps> = ({
                           <XCircle size={14} />
                         </button>
                       )}
-                      <span>{analysisTask.progress}%</span>
+                      <span>{visibleAnalysisTask.progress}%</span>
                     </div>
                   </div>
                   <div className="task-progress-bar" aria-hidden="true">
                     <div
-                      className={`task-progress-fill ${analysisTask.phase}`}
-                      style={{ width: `${analysisTask.progress}%` }}
+                      className={`task-progress-fill ${visibleAnalysisTask.phase}`}
+                      style={{ width: `${visibleAnalysisTask.progress}%` }}
                     />
                   </div>
-                  <p className="task-progress-message">{analysisTask.message}</p>
-                  {analysisTask.error_detail && (
-                    <p className="task-progress-error">{analysisTask.error_detail}</p>
+                  <p className="task-progress-message">{visibleAnalysisTask.message}</p>
+                  {visibleAnalysisTask.error_detail && (
+                    <p className="task-progress-error">{visibleAnalysisTask.error_detail}</p>
                   )}
                 </div>
               )}
-
-              <div className={`embedding-status-card ${embeddingTone}`}>
-                <div className="embedding-status-icon">
-                  <BrainCircuit size={16} />
-                </div>
-                <div>
-                  <strong>语义索引 {embeddingLabel(selectedPaper.embedding_status)}</strong>
-                  <p>{embeddingRunMessage(selectedPaper, embeddingRun, embeddingLabel)}</p>
-                  {embeddingRun && (
-                    <span>
-                      {embeddingRun.provider || 'local'} / {embeddingRun.model || 'default'}
-                      {embeddingRun.batch_count > 0 ? ` · ${embeddingRun.batch_count} 批` : ''}
-                    </span>
-                  )}
-                </div>
-              </div>
 
               {sourceResult && (
                 <div className="search-source-card">
@@ -351,24 +322,10 @@ export const Inspector: React.FC<InspectorProps> = ({
                     </div>
                     <span>{formatQualityScore(parseDiagnostics?.quality_score)}</span>
                   </div>
-                  <div className="parse-quality-item">
-                    <div className="item-label-group">
-                      <Database size={14} />
-                      <label>切片</label>
-                    </div>
-                    <span>{formatCount(parseDiagnostics?.passage_count)}</span>
-                  </div>
-                  <div className="parse-quality-item">
-                    <div className="item-label-group">
-                      <Table2 size={14} />
-                      <label>表格</label>
-                    </div>
-                    <span>{formatCount(parseDiagnostics?.table_count)}</span>
-                  </div>
                   <div className="parse-quality-item wide">
                     <div className="item-label-group">
                       <Clock3 size={14} />
-                      <label>最后解析</label>
+                      <label>最后解析时间</label>
                     </div>
                     <span>{formatDateTime(parseDiagnostics?.last_parse_time)}</span>
                   </div>

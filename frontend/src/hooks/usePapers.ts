@@ -10,6 +10,8 @@ import type {
   PaperParseDiagnostics,
   ParsePaperResponse,
   ParseRun,
+  ParseRunProgress,
+  ParseRunProgressStep,
   Passage,
   UploadQueueItem,
 } from '../types';
@@ -17,6 +19,24 @@ import type {
 const PARSE_POLL_INTERVAL_MS = 1000;
 const BACKGROUND_TASK_POLL_MS = 2000;
 const UPLOAD_QUEUE_RESET_MS = 8000;
+const PARSE_PROGRESS_STEPS: ParseRunProgressStep[] = [
+  { stage: 'queued', label: '等待 worker', progress: 8 },
+  { stage: 'claimed', label: 'worker 已接收', progress: 10 },
+  { stage: 'checking_file', label: '检查文件', progress: 12 },
+  { stage: 'loading_backend', label: '加载解析器', progress: 20 },
+  { stage: 'inspecting_pdf', label: '检查结构', progress: 28 },
+  { stage: 'parsing_layout', label: '解析版面', progress: 38 },
+  { stage: 'chunking', label: '切分片段', progress: 64 },
+  { stage: 'persisting', label: '保存结果', progress: 78 },
+  { stage: 'queueing_embedding', label: '提交索引', progress: 90 },
+  { stage: 'completed', label: '完成', progress: 100 },
+  { stage: 'failed', label: '失败', progress: 100 },
+];
+
+interface PaperParseSummary {
+  diagnostics?: PaperParseDiagnostics;
+  trackedRun?: ParseRun;
+}
 
 function parseWarnings(warningsJson: string | undefined): string[] {
   if (!warningsJson) return [];
@@ -96,15 +116,22 @@ function attachDiagnostics(
   };
 }
 
-async function loadPaperParseSummary(paper: Paper): Promise<PaperParseDiagnostics | undefined> {
-  if (paper.parse_status === 'pending') return undefined;
-
+async function loadPaperParseSummary(paper: Paper): Promise<PaperParseSummary> {
   try {
     const runs = await api.listParseRuns(paper.id);
-    return diagnosticsFromRun(runs[0]);
+    const latestRun = runs[0];
+    const activeRun = findLatestActiveParseRun(runs);
+    const failedRun = paper.parse_status === 'error' && latestRun?.status === 'failed'
+      ? latestRun
+      : undefined;
+
+    return {
+      diagnostics: diagnosticsFromRun(latestRun),
+      trackedRun: activeRun || failedRun,
+    };
   } catch (err) {
     console.error(`Failed to load parse diagnostics for ${paper.id}:`, err);
-    return undefined;
+    return {};
   }
 }
 
@@ -135,6 +162,133 @@ interface AnalysisRunProgress {
 
 function numericProgressValue(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function fallbackParseStage(status: string): string {
+  if (status === 'queued') return 'queued';
+  if (status === 'running') return 'parsing_layout';
+  if (status === 'completed') return 'completed';
+  if (status === 'failed') return 'failed';
+  return status;
+}
+
+function fallbackParseRunProgress(run: ParseRun): ParseRunProgress {
+  const stage = fallbackParseStage(run.status);
+  return {
+    stage,
+    label: parseRunStageLabel(stage, run.status),
+    progress: fallbackParseProgress(run.status),
+    details: {},
+    steps: PARSE_PROGRESS_STEPS,
+  };
+}
+
+function parseRunProgress(run: ParseRun): ParseRunProgress {
+  if (!run.metadata_json) return fallbackParseRunProgress(run);
+
+  try {
+    const metadata = JSON.parse(run.metadata_json) as Record<string, unknown>;
+    const rawProgress = metadata.progress;
+    if (!rawProgress || typeof rawProgress !== 'object') return fallbackParseRunProgress(run);
+
+    const progress = rawProgress as Record<string, unknown>;
+    const rawProgressValue = numericProgressValue(progress.progress);
+    const stage = typeof progress.stage === 'string' ? progress.stage : run.status;
+    const label = typeof progress.label === 'string'
+      ? progress.label
+      : parseRunStageLabel(stage, run.status);
+    const details = progress.details && typeof progress.details === 'object' && !Array.isArray(progress.details)
+      ? progress.details as Record<string, unknown>
+      : {};
+
+    return {
+      stage,
+      label,
+      progress: Math.min(100, Math.max(0, Math.round(rawProgressValue ?? fallbackParseProgress(run.status)))),
+      details,
+      steps: PARSE_PROGRESS_STEPS,
+    };
+  } catch {
+    return fallbackParseRunProgress(run);
+  }
+}
+
+function fallbackParseProgress(status: string): number {
+  if (status === 'queued') return 8;
+  if (status === 'running') return 38;
+  if (status === 'completed') return 100;
+  if (status === 'failed') return 100;
+  return 18;
+}
+
+function parseRunStageLabel(stage: string, status: string): string {
+  const matched = PARSE_PROGRESS_STEPS.find((step) => step.stage === stage);
+  if (matched) return matched.label;
+  if (status === 'queued') return '等待后台解析';
+  if (status === 'running') return 'PDF 解析正在后台运行';
+  if (status === 'completed') return 'PDF 解析完成';
+  if (status === 'failed') return 'PDF 解析失败';
+  return 'PDF 解析任务进行中';
+}
+
+function parseRunProgressMessage(run: ParseRun): string {
+  const progress = parseRunProgress(run);
+  if (run.status === 'queued') {
+    return `${progress.label}，等待后台 worker 处理...`;
+  }
+  if (run.status === 'running') {
+    const details = progress.details || {};
+    const suffixes = [
+      typeof details.backend === 'string' ? `解析器：${details.backend}` : '',
+      typeof details.page_count === 'number' ? `页数：${details.page_count}` : '',
+      typeof details.passage_count === 'number' ? `片段：${details.passage_count}` : '',
+      typeof details.element_count === 'number' ? `元素：${details.element_count}` : '',
+    ].filter(Boolean);
+    const suffix = suffixes.length > 0 ? ` (${suffixes.join('，')})` : '';
+    if (progress.stage === 'claimed') {
+      return `${progress.label}，准备开始解析${suffix}...`;
+    }
+    if (progress.stage === 'queueing_embedding') {
+      return `${progress.label}${suffix}...`;
+    }
+    return `${progress.label}中${suffix}...`;
+  }
+  if (run.status === 'completed') return 'PDF 解析完成，准备执行 AI 深度分析...';
+  if (run.status === 'failed') {
+    const failedAfterLabel = progress.details.failed_after_label;
+    return typeof failedAfterLabel === 'string' && failedAfterLabel
+      ? `PDF 解析失败，最后停在：${failedAfterLabel}。`
+      : parseRunFailureMessage(run);
+  }
+  return 'PDF 解析任务进行中...';
+}
+
+function taskFromParseRun(
+  run: ParseRun,
+  analysisRunId: string | null = null,
+): Omit<PaperBackgroundTask, 'paper_id'> {
+  const progress = parseRunProgress(run);
+  if (run.status === 'failed') {
+    return {
+      phase: 'failed',
+      progress: 100,
+      message: parseRunProgressMessage(run),
+      parse_run_id: run.id,
+      analysis_run_id: analysisRunId,
+      error_detail: parseRunFailureMessage(run),
+      parse_progress: progress,
+    };
+  }
+
+  return {
+    phase: 'parsing',
+    progress: progress.progress,
+    message: parseRunProgressMessage(run),
+    parse_run_id: run.id,
+    analysis_run_id: analysisRunId,
+    error_detail: null,
+    parse_progress: progress,
+  };
 }
 
 function parseAnalysisRunProgress(run: AnalysisRun): AnalysisRunProgress | null {
@@ -296,15 +450,37 @@ export function usePapers(
         api.agentStatus(),
       ]);
 
-      const diagnosticsEntries = await Promise.all(
+      const parseSummaryEntries = await Promise.all(
         loadedPapers.map(async (paper) => [paper.id, await loadPaperParseSummary(paper)] as const),
       );
-      const diagnosticsByPaperId = new Map(diagnosticsEntries);
+      const parseSummaryByPaperId = new Map(parseSummaryEntries);
       const papersWithDiagnostics = loadedPapers.map((paper) =>
-        attachDiagnostics(paper, diagnosticsByPaperId.get(paper.id)),
+        attachDiagnostics(paper, parseSummaryByPaperId.get(paper.id)?.diagnostics),
       );
 
       setPapers(papersWithDiagnostics);
+      setBackgroundTasks((current) => {
+        const paperIds = new Set(papersWithDiagnostics.map((paper) => paper.id));
+        const next: Record<string, PaperBackgroundTask> = {};
+        for (const [paperId, task] of Object.entries(current)) {
+          if (paperIds.has(paperId)) next[paperId] = task;
+        }
+        for (const paper of papersWithDiagnostics) {
+          const run = parseSummaryByPaperId.get(paper.id)?.trackedRun;
+          const existing = next[paper.id];
+          const canRecoverParseTask =
+            !existing ||
+            existing.phase === 'parsing' ||
+            (existing.phase === 'failed' && existing.parse_run_id === run?.id);
+          if (run && canRecoverParseTask) {
+            next[paper.id] = {
+              paper_id: paper.id,
+              ...taskFromParseRun(run, existing?.analysis_run_id || null),
+            };
+          }
+        }
+        return next;
+      });
       setEmbeddingRunsByPaperId((current) => {
         const paperIds = new Set(papersWithDiagnostics.map((paper) => paper.id));
         const next: Record<string, EmbeddingRun | null> = {};
@@ -520,6 +696,7 @@ export function usePapers(
             parse_run_id: matchedRun.id,
             analysis_run_id: task.analysis_run_id || null,
             error_detail: null,
+            parse_progress: parseRunProgress(matchedRun),
           });
           void startBackgroundAnalysis(task.paper_id);
           continue;
@@ -527,28 +704,18 @@ export function usePapers(
 
         if (matchedRun.status === 'failed') {
           const detail = parseRunFailureMessage(matchedRun);
-          setBackgroundTask(task.paper_id, {
-            phase: 'failed',
-            progress: 100,
-            message: 'PDF 解析失败。',
-            parse_run_id: matchedRun.id,
-            analysis_run_id: task.analysis_run_id || null,
-            error_detail: detail,
-          });
+          setBackgroundTask(
+            task.paper_id,
+            taskFromParseRun(matchedRun, task.analysis_run_id || null),
+          );
           setNotice({ message: `PDF 解析失败: ${detail}`, type: 'error' });
           continue;
         }
 
-        setBackgroundTask(task.paper_id, {
-          phase: 'parsing',
-          progress: matchedRun.status === 'queued' ? 18 : 54,
-          message: matchedRun.status === 'queued'
-            ? '解析任务已进入队列，等待后台处理...'
-            : 'PDF 解析正在后台运行...',
-          parse_run_id: matchedRun.id,
-          analysis_run_id: task.analysis_run_id || null,
-          error_detail: null,
-        });
+        setBackgroundTask(
+          task.paper_id,
+          taskFromParseRun(matchedRun, task.analysis_run_id || null),
+        );
       }
 
       for (const task of analysisTasks) {
@@ -781,16 +948,7 @@ export function usePapers(
       const existingActiveRun = findLatestActiveParseRun(existingRuns);
 
       if (existingActiveRun) {
-        setBackgroundTask(paperId, {
-          phase: 'parsing',
-          progress: existingActiveRun.status === 'queued' ? 18 : 54,
-          message: existingActiveRun.status === 'queued'
-            ? '解析任务已进入队列，等待后台处理...'
-            : 'PDF 解析正在后台运行...',
-          parse_run_id: existingActiveRun.id,
-          analysis_run_id: null,
-          error_detail: null,
-        });
+        setBackgroundTask(paperId, taskFromParseRun(existingActiveRun));
         setNotice({ message: '已在后台继续等待 PDF 解析完成。', type: 'success' });
         return;
       }
@@ -823,11 +981,18 @@ export function usePapers(
       const parseResult = await api.parsePaper(paperId);
       setBackgroundTask(paperId, {
         phase: 'parsing',
-        progress: 18,
-        message: '已在后台提交 PDF 解析任务。',
+        progress: 8,
+        message: '已提交 PDF 解析任务，等待后台 worker 接收...',
         parse_run_id: parseResult.parse_run_id,
         analysis_run_id: null,
         error_detail: null,
+        parse_progress: {
+          stage: 'queued',
+          label: '等待 worker',
+          progress: 8,
+          details: {},
+          steps: PARSE_PROGRESS_STEPS,
+        },
       });
       setNotice({ message: '已在后台提交 PDF 解析任务。', type: 'success' });
       await loadPapers();

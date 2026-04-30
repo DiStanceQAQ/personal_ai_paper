@@ -26,6 +26,16 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def _json_object(value: Any) -> dict[str, Any]:
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
 def queue_parse_run(
     conn: sqlite3.Connection,
     *,
@@ -37,15 +47,30 @@ def queue_parse_run(
 ) -> str:
     """Create a queued parse run with a parser config snapshot."""
     parse_run_id = str(uuid.uuid4())
+    metadata = {
+        "progress": {
+            "stage": "queued",
+            "label": "等待后台解析",
+            "progress": 8,
+            "details": {"backend": parser_backend},
+        }
+    }
     conn.execute(
         """
         INSERT INTO parse_runs (
             id, paper_id, space_id, backend, extraction_method, status,
             warnings_json, config_json, metadata_json
         )
-        VALUES (?, ?, ?, ?, 'layout_model', 'queued', '[]', ?, '{}')
+        VALUES (?, ?, ?, ?, 'layout_model', 'queued', '[]', ?, ?)
         """,
-        (parse_run_id, paper_id, space_id, parser_backend, _json(parser_config)),
+        (
+            parse_run_id,
+            paper_id,
+            space_id,
+            parser_backend,
+            _json(parser_config),
+            _json(metadata),
+        ),
     )
     if commit:
         conn.commit()
@@ -95,6 +120,26 @@ def claim_next_parse_run(
             if result.rowcount == 1:
                 conn.execute(
                     """
+                    UPDATE parse_runs
+                    SET metadata_json = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        _json(
+                            {
+                                "progress": {
+                                    "stage": "claimed",
+                                    "label": "后台 worker 已接收任务",
+                                    "progress": 10,
+                                    "details": {"backend": row["backend"]},
+                                }
+                            }
+                        ),
+                        row["id"],
+                    ),
+                )
+                conn.execute(
+                    """
                     UPDATE papers
                     SET parse_status = 'parsing'
                     WHERE id = ? AND space_id = ?
@@ -108,7 +153,7 @@ def claim_next_parse_run(
                     space_id=str(row["space_id"]),
                     file_path=str(row["file_path"]),
                     parser_backend=str(row["backend"]),
-                    config=json.loads(row["config_json"] or "{}"),
+                    config=_json_object(row["config_json"]),
                     attempt_count=int(row["attempt_count"]) + 1,
                 )
         conn.commit()
@@ -315,6 +360,55 @@ def heartbeat_parse_run_for_worker(
     conn.commit()
 
 
+def update_parse_run_progress(
+    conn: sqlite3.Connection,
+    parse_run_id: str,
+    *,
+    worker_id: str,
+    stage: str,
+    label: str,
+    progress: int,
+    details: dict[str, Any] | None = None,
+    commit: bool = True,
+) -> None:
+    """Store fine-grained parse progress in parse_runs.metadata_json."""
+    row = conn.execute(
+        """
+        SELECT metadata_json
+        FROM parse_runs
+        WHERE id = ?
+          AND status = 'running'
+          AND worker_id = ?
+        """,
+        (parse_run_id, worker_id),
+    ).fetchone()
+    if row is None:
+        if commit:
+            conn.commit()
+        return
+
+    metadata = _json_object(row["metadata_json"])
+    metadata["progress"] = {
+        "stage": stage,
+        "label": label,
+        "progress": max(0, min(100, int(progress))),
+        "details": details or {},
+    }
+    conn.execute(
+        """
+        UPDATE parse_runs
+        SET metadata_json = ?,
+            heartbeat_at = datetime('now')
+        WHERE id = ?
+          AND status = 'running'
+          AND worker_id = ?
+        """,
+        (_json(metadata), parse_run_id, worker_id),
+    )
+    if commit:
+        conn.commit()
+
+
 def fail_parse_run(
     conn: sqlite3.Connection,
     parse_run_id: str,
@@ -327,9 +421,41 @@ def fail_parse_run(
 ) -> None:
     """Mark a parse run failed and update paper status when no parse exists."""
     worker_clause = " AND worker_id = ?" if worker_id is not None else ""
+    row = conn.execute(
+        "SELECT metadata_json FROM parse_runs WHERE id = ?",
+        (parse_run_id,),
+    ).fetchone()
+    metadata = _json_object(row["metadata_json"] if row else "")
+    previous_progress = metadata.get("progress")
+    previous_details: dict[str, Any] = {}
+    previous_stage = ""
+    previous_label = ""
+    previous_progress_value = 100
+    if isinstance(previous_progress, dict):
+        previous_details_value = previous_progress.get("details")
+        if isinstance(previous_details_value, dict):
+            previous_details = previous_details_value
+        previous_stage_value = previous_progress.get("stage")
+        previous_label_value = previous_progress.get("label")
+        previous_progress_number = previous_progress.get("progress")
+        previous_stage = previous_stage_value if isinstance(previous_stage_value, str) else ""
+        previous_label = previous_label_value if isinstance(previous_label_value, str) else ""
+        if isinstance(previous_progress_number, int | float):
+            previous_progress_value = int(previous_progress_number)
+    metadata["progress"] = {
+        "stage": "failed",
+        "label": "PDF 解析失败",
+        "progress": max(0, min(100, previous_progress_value)),
+        "details": {
+            **previous_details,
+            "failed_after_stage": previous_stage,
+            "failed_after_label": previous_label,
+        },
+    }
     params: list[Any] = ([
         error,
         _json(warnings),
+        _json(metadata),
         parse_run_id,
     ])
     if worker_id is not None:
@@ -342,7 +468,8 @@ def fail_parse_run(
             heartbeat_at = datetime('now'),
             worker_id = NULL,
             last_error = ?,
-            warnings_json = ?
+            warnings_json = ?,
+            metadata_json = ?
         WHERE id = ?
           AND status = 'running'
         """

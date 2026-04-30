@@ -1,9 +1,10 @@
 import React from 'react';
 import { FileText, Gauge, Globe, Server, Trash2 } from 'lucide-react';
-import type { Paper } from '../../types';
+import type { Paper, PaperBackgroundTask } from '../../types';
 
 interface PaperCardProps {
   paper: Paper;
+  backgroundTask: PaperBackgroundTask | null;
   isSelected: boolean;
   onSelect: (paper: Paper) => void;
   onDelete: (e: React.MouseEvent, paperId: string) => void;
@@ -13,6 +14,7 @@ interface PaperCardProps {
 
 export const PaperCard: React.FC<PaperCardProps> = ({
   paper,
+  backgroundTask,
   isSelected,
   onSelect,
   onDelete,
@@ -24,6 +26,18 @@ export const PaperCard: React.FC<PaperCardProps> = ({
     diagnostics?.quality_score == null
       ? null
       : `${Math.round((diagnostics.quality_score <= 1 ? diagnostics.quality_score * 100 : diagnostics.quality_score))}%`;
+  const displayStatus = (() => {
+    if (backgroundTask?.phase === 'parsing' || backgroundTask?.phase === 'analyzing') return 'parsing';
+    if (backgroundTask?.phase === 'failed' && backgroundTask.analysis_run_id) return 'error';
+    if (backgroundTask?.phase === 'cancelled' && backgroundTask.analysis_run_id) return 'pending';
+    return paper.parse_status;
+  })();
+  const displayLabel = (() => {
+    if (backgroundTask?.phase === 'analyzing') return 'AI 解析中';
+    if (backgroundTask?.phase === 'failed' && backgroundTask.analysis_run_id) return 'AI 解析失败';
+    if (backgroundTask?.phase === 'cancelled' && backgroundTask.analysis_run_id) return 'AI 已取消';
+    return `PDF ${parseLabel(displayStatus)}`;
+  })();
 
   return (
     <div className={isSelected ? 'paper-card-wrapper active' : 'paper-card-wrapper'}>
@@ -45,8 +59,8 @@ export const PaperCard: React.FC<PaperCardProps> = ({
               <span>{paper.venue || '未知来源'}</span>
             </div>
             <div className="paper-card-status-group">
-              <span className={`status-badge ${paper.parse_status}`}>
-                PDF {parseLabel(paper.parse_status)}
+              <span className={`status-badge ${displayStatus}`}>
+                {displayLabel}
               </span>
             </div>
           </div>

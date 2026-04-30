@@ -46,12 +46,15 @@ def test_queue_parse_run_snapshots_parser_config(tmp_path: Path) -> None:
     )
 
     row = conn.execute(
-        "SELECT status, backend, config_json FROM parse_runs WHERE id = ?",
+        "SELECT status, backend, config_json, metadata_json FROM parse_runs WHERE id = ?",
         (parse_run_id,),
     ).fetchone()
     assert row["status"] == "queued"
     assert row["backend"] == "mineru"
     assert json.loads(row["config_json"])["mineru_base_url"] == "http://mineru.test"
+    progress = json.loads(row["metadata_json"])["progress"]
+    assert progress["stage"] == "queued"
+    assert progress["progress"] == 8
 
 
 def test_claim_next_parse_run_prevents_two_running_for_same_paper(
@@ -84,6 +87,14 @@ def test_claim_next_parse_run_prevents_two_running_for_same_paper(
     }
     assert list(statuses.values()).count("running") == 1
     assert statuses[claimed.id] == "running"
+    progress = json.loads(
+        conn.execute(
+            "SELECT metadata_json FROM parse_runs WHERE id = ?",
+            (claimed.id,),
+        ).fetchone()["metadata_json"]
+    )["progress"]
+    assert progress["stage"] == "claimed"
+    assert progress["progress"] == 10
 
 
 def test_heartbeat_updates_running_parse_run(tmp_path: Path) -> None:
@@ -235,12 +246,15 @@ def test_fail_parse_run_ignores_non_owner_when_supplied(tmp_path: Path) -> None:
         warnings=["owned failure"],
     )
     row = conn.execute(
-        "SELECT status, worker_id, last_error FROM parse_runs WHERE id = ?",
+        "SELECT status, worker_id, last_error, metadata_json FROM parse_runs WHERE id = ?",
         (run_id,),
     ).fetchone()
     assert row["status"] == "failed"
     assert row["worker_id"] is None
     assert row["last_error"] == "owned failure"
+    progress = json.loads(row["metadata_json"])["progress"]
+    assert progress["stage"] == "failed"
+    assert progress["details"]["failed_after_stage"] == "claimed"
 
 
 def test_recover_stale_parse_runs_requeues_stale_running_runs(

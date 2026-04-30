@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 
 interface ToastProps {
   message: string;
@@ -8,6 +8,13 @@ interface ToastProps {
 }
 
 export const Toast: React.FC<ToastProps> = ({ message, onClose, isVisible, type = 'success' }) => {
+  useEffect(() => {
+    if (!isVisible) return undefined;
+
+    const timeoutId = window.setTimeout(onClose, 2000);
+    return () => window.clearTimeout(timeoutId);
+  }, [isVisible, message, type, onClose]);
+
   if (!isVisible) return null;
 
   return (

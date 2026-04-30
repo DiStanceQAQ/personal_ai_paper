@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const app = readFileSync('frontend/src/App.tsx', 'utf8');
 const workspace = readFileSync('frontend/src/components/layout/Workspace.tsx', 'utf8');
+const paperCard = readFileSync('frontend/src/components/ui/PaperCard.tsx', 'utf8');
 const styles = readFileSync('frontend/src/styles.css', 'utf8');
 const types = readFileSync('frontend/src/types.ts', 'utf8');
 
@@ -42,4 +43,14 @@ test('library empty state is a dedicated centered panel instead of a grid item',
   assert.match(styles, /\.library-empty-state\s*\{[^}]*display:\s*flex;/s);
   assert.match(styles, /\.library-empty-state\s*\{[^}]*justify-content:\s*center;/s);
   assert.match(styles, /\.library-empty-state\s*\{[^}]*border:\s*1px dashed var\(--border\);/s);
+});
+
+test('paper card waits for AI analysis before showing the final parsed badge', () => {
+  assert.match(workspace, /backgroundTasks: Record<string, PaperBackgroundTask>;/);
+  assert.match(workspace, /backgroundTask=\{backgroundTasks\[paper\.id\] \|\| null\}/);
+  assert.match(app, /backgroundTasks=\{backgroundTasks\}/);
+  assert.match(paperCard, /backgroundTask\?\.phase === 'analyzing'/);
+  assert.match(paperCard, /AI 解析中/);
+  assert.match(paperCard, /AI 解析失败/);
+  assert.match(paperCard, /AI 已取消/);
 });

@@ -236,14 +236,17 @@ def test_persist_parse_result_can_use_existing_queued_parse_run() -> None:
     _seed_space_and_paper(conn)
     conn.execute(
         """
-        INSERT INTO parse_runs (id, paper_id, space_id, backend, status, config_json)
+        INSERT INTO parse_runs (
+            id, paper_id, space_id, backend, status, config_json, metadata_json
+        )
         VALUES (
             'queued-run-1',
             'paper-1',
             'space-1',
             'docling',
             'running',
-            '{"parser_backend":"docling"}'
+            '{"parser_backend":"docling"}',
+            '{"progress":{"stage":"chunking","label":"切分论文片段","progress":64,"details":{"element_count":2}}}'
         )
         """
     )
@@ -266,6 +269,10 @@ def test_persist_parse_result_can_use_existing_queued_parse_run() -> None:
     assert run["backend"] == document.backend
     assert run["status"] == "running"
     assert json.loads(run["config_json"]) == {"parser_backend": "docling"}
+    metadata = json.loads(run["metadata_json"])
+    assert metadata["parser"] == "test"
+    assert metadata["progress"]["stage"] == "chunking"
+    assert metadata["progress"]["details"]["element_count"] == 2
     assert (
         conn.execute(
             "SELECT COUNT(*) FROM document_elements WHERE parse_run_id = 'queued-run-1'"

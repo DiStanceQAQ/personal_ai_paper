@@ -115,7 +115,7 @@ export const EditPaperModal: React.FC<EditPaperModalProps> = ({ isOpen, onClose,
           </div>
 
           <div className="form-group">
-            <label>一句话摘要 (TL;DR)</label>
+            <label>摘要</label>
             <textarea 
               value={formData.abstract || ''} 
               onChange={(e) => handleChange('abstract', e.target.value)}

@@ -40,6 +40,8 @@ test('frontend uses paper-scoped cards and analysis cancellation APIs', () => {
 
 test('inspector renders an inline task progress panel instead of relying on a modal blocker', () => {
   assert.match(inspector, /analysisTask/);
+  assert.match(inspector, /visibleAnalysisTask/);
+  assert.match(inspector, /analysisTask\?\.phase === 'completed' \? null : analysisTask/);
   assert.match(inspector, /task-progress-card/);
   assert.match(styles, /\.task-progress-card/);
   assert.match(styles, /\.task-progress-bar/);

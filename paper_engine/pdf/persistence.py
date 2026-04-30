@@ -66,6 +66,16 @@ def _optional_json(value: Any | None) -> str | None:
     return _json(value)
 
 
+def _json_object(value: Any) -> dict[str, Any]:
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
 def _savepoint_name() -> str:
     return f"persist_parse_result_{uuid.uuid4().hex}"
 
@@ -272,6 +282,17 @@ def _update_existing_parse_run(
     parse_run_id: str,
     parse_document: ParseDocument,
 ) -> None:
+    row = conn.execute(
+        "SELECT metadata_json FROM parse_runs WHERE id = ?",
+        (parse_run_id,),
+    ).fetchone()
+    existing_metadata = _json_object(row["metadata_json"] if row else "")
+    merged_metadata = {
+        **existing_metadata,
+        **parse_document.metadata,
+    }
+    if "progress" in existing_metadata:
+        merged_metadata["progress"] = existing_metadata["progress"]
     conn.execute(
         """
         UPDATE parse_runs
@@ -287,7 +308,7 @@ def _update_existing_parse_run(
             parse_document.extraction_method,
             parse_document.quality.quality_score,
             _json(parse_document.quality.warnings),
-            _json(parse_document.metadata),
+            _json(merged_metadata),
             parse_run_id,
         ),
     )

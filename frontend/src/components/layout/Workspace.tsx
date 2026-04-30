@@ -4,6 +4,7 @@ import DOMPurify from 'dompurify';
 import type {
   AgentStatus,
   Paper,
+  PaperBackgroundTask,
   SearchMode,
   SearchResult,
   SearchStatus,
@@ -21,6 +22,7 @@ interface WorkspaceProps {
   activeView: 'library' | 'search';
   setActiveView: (view: 'library' | 'search') => void;
   papers: Paper[];
+  backgroundTasks: Record<string, PaperBackgroundTask>;
   selectedPaper: Paper | null;
   onSelectPaper: (paper: Paper) => void;
   onDeletePaper: (e: React.MouseEvent, paperId: string) => void;
@@ -49,6 +51,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
   activeView,
   setActiveView,
   papers,
+  backgroundTasks,
   selectedPaper,
   onSelectPaper,
   onDeletePaper,
@@ -181,44 +184,13 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                 </label>
               </div>
 
-              {uploadQueue.length > 0 && (
-                <section className="upload-queue-card" aria-live="polite">
-                  <div className="upload-queue-header">
-                    <div>
-                      <strong>{uploadInProgress ? '正在导入论文' : '导入结果'}</strong>
-                      <span>
-                        共 {uploadQueue.length} 个，成功 {uploadSucceeded} 个
-                        {uploadFailed > 0 ? `，失败 ${uploadFailed} 个` : ''}
-                      </span>
-                    </div>
-                    <span className={uploadFailed > 0 ? 'upload-summary failed' : 'upload-summary'}>
-                      {uploadInProgress ? '上传中' : uploadFailed > 0 ? '部分失败' : '已完成'}
-                    </span>
-                  </div>
-                  <div className="upload-queue-list">
-                    {uploadQueue.map((item) => (
-                      <div className={`upload-queue-item ${item.status}`} key={item.id}>
-                        {item.status === 'uploading' ? (
-                          <Clock3 size={14} />
-                        ) : item.status === 'success' ? (
-                          <CheckCircle2 size={14} />
-                        ) : (
-                          <XCircle size={14} />
-                        )}
-                        <span>{item.title || item.filename}</span>
-                        {item.error && <em>{item.error}</em>}
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              )}
-
               {papers.length > 0 ? (
                 <div className="paper-grid">
                   {papers.map((paper) => (
                     <PaperCard
                       key={paper.id}
                       paper={paper}
+                      backgroundTask={backgroundTasks[paper.id] || null}
                       isSelected={selectedPaper?.id === paper.id}
                       onSelect={onSelectPaper}
                       onDelete={onDeletePaper}

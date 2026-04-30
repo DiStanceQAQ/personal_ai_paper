@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -118,7 +119,7 @@ def test_worker_executes_selected_parser_and_persists(tmp_path: Path) -> None:
 
     assert worker.run_once() is True
 
-    row = conn.execute("SELECT status FROM parse_runs").fetchone()
+    row = conn.execute("SELECT status, metadata_json FROM parse_runs").fetchone()
     embedding_run = conn.execute(
         "SELECT id, status FROM embedding_runs WHERE parse_run_id = 'run-1'"
     ).fetchone()
@@ -126,6 +127,10 @@ def test_worker_executes_selected_parser_and_persists(tmp_path: Path) -> None:
         "SELECT parse_status, embedding_status FROM papers WHERE id = 'paper-1'"
     ).fetchone()
     assert row["status"] == "completed"
+    progress = json.loads(row["metadata_json"])["progress"]
+    assert progress["stage"] == "completed"
+    assert progress["progress"] == 100
+    assert progress["details"]["passage_count"] == 1
     assert embedding_run is None
     assert paper["parse_status"] == "parsed"
     assert paper["embedding_status"] == "pending"
@@ -158,6 +163,11 @@ def test_worker_fails_missing_file(tmp_path: Path) -> None:
     )
 
     assert worker.run_once() is True
-    row = conn.execute("SELECT status, last_error FROM parse_runs").fetchone()
+    row = conn.execute(
+        "SELECT status, last_error, metadata_json FROM parse_runs"
+    ).fetchone()
     assert row["status"] == "failed"
     assert "PDF file not found" in row["last_error"]
+    progress = json.loads(row["metadata_json"])["progress"]
+    assert progress["stage"] == "failed"
+    assert progress["details"]["failed_after_stage"] == "checking_file"

@@ -182,6 +182,20 @@ export interface ParseRun {
   metadata_json: string;
 }
 
+export interface ParseRunProgressStep {
+  stage: string;
+  label: string;
+  progress: number;
+}
+
+export interface ParseRunProgress {
+  stage: string;
+  label: string;
+  progress: number;
+  details: Record<string, unknown>;
+  steps: ParseRunProgressStep[];
+}
+
 export interface EmbeddingRun {
   id: string;
   paper_id: string;
@@ -216,6 +230,7 @@ export interface PaperBackgroundTask {
   parse_run_id: string | null;
   analysis_run_id?: string | null;
   error_detail: string | null;
+  parse_progress?: ParseRunProgress | null;
 }
 
 export interface DocumentElement {

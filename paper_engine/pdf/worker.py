@@ -22,6 +22,7 @@ from paper_engine.pdf.jobs import (
     complete_parse_run,
     fail_parse_run,
     heartbeat_parse_run_for_worker,
+    update_parse_run_progress,
 )
 from paper_engine.pdf.persistence import (
     delete_parse_run_outputs,
@@ -82,6 +83,27 @@ def _merge_parse_run_metadata(
     conn.execute(
         "UPDATE parse_runs SET metadata_json = ? WHERE id = ?",
         (json.dumps(metadata, ensure_ascii=False), parse_run_id),
+    )
+
+
+def _record_parse_progress(
+    conn: sqlite3.Connection,
+    parse_run_id: str,
+    *,
+    worker_id: str,
+    stage: str,
+    label: str,
+    progress: int,
+    details: dict[str, Any] | None = None,
+) -> None:
+    update_parse_run_progress(
+        conn,
+        parse_run_id,
+        worker_id=worker_id,
+        stage=stage,
+        label=label,
+        progress=progress,
+        details=details,
     )
 
 
@@ -152,16 +174,55 @@ class ParseWorker:
             stage_timings: dict[str, float] = {}
             try:
                 heartbeat.start()
+                _record_parse_progress(
+                    conn,
+                    job.id,
+                    worker_id=self.worker_id,
+                    stage="checking_file",
+                    label="检查 PDF 文件",
+                    progress=12,
+                    details={"backend": job.parser_backend},
+                )
                 file_path = Path(job.file_path)
                 if not file_path.exists():
                     raise FileNotFoundError(f"PDF file not found on disk: {file_path}")
 
+                _record_parse_progress(
+                    conn,
+                    job.id,
+                    worker_id=self.worker_id,
+                    stage="loading_backend",
+                    label="加载解析器",
+                    progress=20,
+                    details={"backend": job.parser_backend},
+                )
                 factory = self._parser_factory or default_parser_factory(conn)
                 backend = _backend_for_job(factory, job.parser_backend, job.config)
                 inspect_started = time.perf_counter()
+                _record_parse_progress(
+                    conn,
+                    job.id,
+                    worker_id=self.worker_id,
+                    stage="inspecting_pdf",
+                    label="检查 PDF 结构",
+                    progress=28,
+                    details={"backend": job.parser_backend},
+                )
                 quality = self.inspect_pdf(file_path)
                 stage_timings["inspect_seconds"] = time.perf_counter() - inspect_started
                 parse_started = time.perf_counter()
+                _record_parse_progress(
+                    conn,
+                    job.id,
+                    worker_id=self.worker_id,
+                    stage="parsing_layout",
+                    label="解析版面与正文",
+                    progress=38,
+                    details={
+                        "backend": job.parser_backend,
+                        "page_count": quality.page_count,
+                    },
+                )
                 document = backend.parse(file_path, job.paper_id, job.space_id, quality)
                 stage_timings["parse_seconds"] = time.perf_counter() - parse_started
 
@@ -171,11 +232,33 @@ class ParseWorker:
                     worker_id=self.worker_id,
                 )
                 chunk_started = time.perf_counter()
+                _record_parse_progress(
+                    conn,
+                    job.id,
+                    worker_id=self.worker_id,
+                    stage="chunking",
+                    label="切分论文片段",
+                    progress=64,
+                    details={
+                        "element_count": len(document.elements),
+                        "table_count": len(document.tables),
+                        "asset_count": len(document.assets),
+                    },
+                )
                 passages = self.chunk_parse_document(document)
                 stage_timings["chunk_seconds"] = time.perf_counter() - chunk_started
                 if not passages:
                     raise RuntimeError("parsed document produced no passages")
 
+                _record_parse_progress(
+                    conn,
+                    job.id,
+                    worker_id=self.worker_id,
+                    stage="persisting",
+                    label="保存解析结果",
+                    progress=78,
+                    details={"passage_count": len(passages)},
+                )
                 conn.execute("BEGIN")
                 try:
                     persist_started = time.perf_counter()
@@ -195,6 +278,15 @@ class ParseWorker:
                     raise
 
                 queue_embedding_started = time.perf_counter()
+                _record_parse_progress(
+                    conn,
+                    job.id,
+                    worker_id=self.worker_id,
+                    stage="queueing_embedding",
+                    label="提交语义索引任务",
+                    progress=90,
+                    details={"passage_count": len(passages)},
+                )
                 self.queue_embedding_run(
                     conn,
                     paper_id=job.paper_id,
@@ -210,6 +302,17 @@ class ParseWorker:
                     conn,
                     storage_run_id,
                     {
+                        "progress": {
+                            "stage": "completed",
+                            "label": "PDF 解析完成",
+                            "progress": 100,
+                            "details": {
+                                "passage_count": len(passages),
+                                "element_count": len(document.elements),
+                                "table_count": len(document.tables),
+                                "asset_count": len(document.assets),
+                            },
+                        },
                         "timings": {
                             key: round(value, 4)
                             for key, value in stage_timings.items()

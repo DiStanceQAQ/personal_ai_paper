@@ -853,6 +853,55 @@ button {
   word-break: break-word;
 }
 
+.parse-progress-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.parse-progress-step {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.parse-progress-step span {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background: #d1d5db;
+}
+
+.parse-progress-step small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.parse-progress-step.done {
+  color: #047857;
+}
+
+.parse-progress-step.done span {
+  background: #10b981;
+}
+
+.parse-progress-step.current {
+  color: var(--accent);
+}
+
+.parse-progress-step.current span {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
 /* 解析质量面板优化 */
 .parse-quality-grid {
   display: grid;

@@ -32,7 +32,7 @@ function sidecarBuildForArgs(tauriArgs) {
     return null;
   }
   if (tauriArgs[0] === 'dev') {
-    const target = mcpSidecarExists() ? 'api' : 'all';
+    const target = mcpSidecarExists() ? 'desktop' : 'all';
     return {
       command: pythonCommand,
       args: ['scripts/build_sidecars.py', '--target', target],
@@ -160,13 +160,23 @@ function isProjectApiSidecarCommand(commandText) {
   );
 }
 
+function isProjectWorkerSidecarCommand(commandText) {
+  return (
+    commandText.includes(ROOT_DIR) &&
+    commandText.includes('src-tauri/target/debug/paper-engine-worker')
+  );
+}
+
 function cleanupStaleProjectSidecars() {
   if (args[0] !== 'dev' || env.PAPER_ENGINE_SKIP_SIDECAR_CLEANUP === '1') {
     return;
   }
   const rows = processRows();
   const orphanParents = rows.filter(
-    (row) => row.ppid === '1' && isProjectApiSidecarCommand(row.command),
+    (row) =>
+      row.ppid === '1' &&
+      (isProjectApiSidecarCommand(row.command) ||
+        isProjectWorkerSidecarCommand(row.command)),
   );
   if (orphanParents.length === 0) {
     return;
@@ -176,13 +186,15 @@ function cleanupStaleProjectSidecars() {
   const staleRows = [
     ...rows.filter(
       (row) =>
-        orphanParentPids.has(row.ppid) && isProjectApiSidecarCommand(row.command),
+        orphanParentPids.has(row.ppid) &&
+        (isProjectApiSidecarCommand(row.command) ||
+          isProjectWorkerSidecarCommand(row.command)),
     ),
     ...orphanParents,
   ];
 
   for (const row of staleRows) {
-    console.log(`Stopping stale API sidecar (PID ${row.pid})`);
+    console.log(`Stopping stale backend sidecar (PID ${row.pid})`);
     try {
       process.kill(Number(row.pid), 'SIGTERM');
     } catch (error) {
@@ -331,7 +343,7 @@ if (sidecarBuild) {
   });
 
   if (result.error) {
-    console.error(`Failed to build API sidecar: ${result.error.message}`);
+    console.error(`Failed to build backend sidecars: ${result.error.message}`);
     process.exit(1);
   }
   if (result.status !== 0) {

@@ -22,7 +22,7 @@ from paper_engine.storage.migrations import (
 
 
 SCHEMA_VERSION_KEY = "schema_version"
-EXPECTED_SCHEMA_VERSION = 6
+EXPECTED_SCHEMA_VERSION = 7
 
 
 def schema_version_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -293,6 +293,73 @@ def test_migration_6_adds_metadata_and_analysis_worker_state() -> None:
                 "idx_analysis_runs_paper_status": ("paper_id", "status"),
             },
         )
+        conn.close()
+
+
+def test_migration_7_adds_embedding_run_worker_state() -> None:
+    """Embedding runs are tracked separately from parse runs."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        conn = init_db(database_path=db_path)
+
+        paper_columns = table_columns(conn, "papers")
+        assert "embedding_status" in paper_columns
+        assert table_column_info(conn, "papers")["embedding_status"]["dflt_value"] == "'pending'"
+
+        assert "embedding_runs" in set(get_table_names(conn))
+        columns = table_columns(conn, "embedding_runs")
+        assert {
+            "id",
+            "paper_id",
+            "space_id",
+            "parse_run_id",
+            "status",
+            "provider",
+            "model",
+            "passage_count",
+            "embedded_count",
+            "reused_count",
+            "skipped_count",
+            "batch_count",
+            "warnings_json",
+            "metadata_json",
+            "started_at",
+            "completed_at",
+            "claimed_at",
+            "heartbeat_at",
+            "worker_id",
+            "attempt_count",
+            "last_error",
+        }.issubset(columns)
+        assert table_column_info(conn, "embedding_runs")["attempt_count"]["dflt_value"] == "0"
+
+        assert {
+            "idx_embedding_runs_status_started",
+            "idx_embedding_runs_paper_status",
+            "idx_embedding_runs_parse_run_id",
+            "idx_embedding_runs_space_id",
+        }.issubset(index_names(conn, "embedding_runs"))
+        assert_index_columns(
+            conn,
+            {
+                "idx_embedding_runs_status_started": ("status", "started_at"),
+                "idx_embedding_runs_paper_status": ("paper_id", "status"),
+                "idx_embedding_runs_parse_run_id": ("parse_run_id",),
+                "idx_embedding_runs_space_id": ("space_id",),
+            },
+        )
+        assert {
+            (
+                "papers",
+                ("paper_id", "space_id"),
+                ("id", "space_id"),
+            ),
+            (
+                "parse_runs",
+                ("parse_run_id", "paper_id", "space_id"),
+                ("id", "paper_id", "space_id"),
+            ),
+        }.issubset(foreign_key_groups(conn, "embedding_runs"))
         conn.close()
 
 

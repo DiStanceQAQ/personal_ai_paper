@@ -14,6 +14,11 @@ async def upload_paper(file: UploadFile) -> dict[str, Any]:
     return await service.upload_paper(file)
 
 
+@router.post("/upload/batch")
+async def upload_papers_batch(files: list[UploadFile]) -> dict[str, Any]:
+    return await service.upload_papers_batch(files)
+
+
 @router.get("")
 async def list_papers(space_id: str | None = None) -> list[dict[str, Any]]:
     return await service.list_papers(space_id=space_id)
@@ -32,6 +37,11 @@ async def get_paper_metadata(paper_id: str) -> dict[str, Any]:
 @router.get("/{paper_id}/parse-runs")
 async def list_parse_runs(paper_id: str) -> list[dict[str, Any]]:
     return await service.list_parse_runs(paper_id)
+
+
+@router.get("/{paper_id}/embedding-runs")
+async def list_embedding_runs(paper_id: str) -> list[dict[str, Any]]:
+    return await service.list_embedding_runs(paper_id)
 
 
 @router.post("/{paper_id}/analysis-runs", status_code=status.HTTP_202_ACCEPTED)

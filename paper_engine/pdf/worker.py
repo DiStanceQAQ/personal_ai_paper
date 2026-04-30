@@ -24,14 +24,15 @@ from paper_engine.pdf.jobs import (
     heartbeat_parse_run_for_worker,
 )
 from paper_engine.pdf.persistence import (
-    PassageEmbeddingError,
     delete_parse_run_outputs,
-    embed_passages_for_parse_run as default_embed_passages_for_parse_run,
 )
 from paper_engine.pdf.persistence import persist_parse_result as default_persist_parse_result
 from paper_engine.pdf.profile import inspect_pdf as default_inspect_pdf
 from paper_engine.papers.metadata import (
     promote_core_metadata_from_parse as default_promote_core_metadata_from_parse,
+)
+from paper_engine.retrieval.embedding_jobs import (
+    queue_embedding_run as default_queue_embedding_run,
 )
 from paper_engine.storage.database import get_connection
 from paper_engine.storage.repositories.settings import get_setting
@@ -46,9 +47,6 @@ class ParserFactory:
 
 
 def _format_exception_details(exc: BaseException) -> str:
-    if isinstance(exc, PassageEmbeddingError) and exc.warnings:
-        return "; ".join(exc.warnings)
-
     message = str(exc)
     cause = exc.__cause__
     if cause is None:
@@ -114,9 +112,7 @@ class ParseWorker:
         inspect_pdf: Callable[[Path], Any] = default_inspect_pdf,
         chunk_parse_document: Callable[[Any], Any] = default_chunk_parse_document,
         persist_parse_result: Callable[..., str] = default_persist_parse_result,
-        embed_passages_for_parse_run: Callable[
-            ..., list[str]
-        ] = default_embed_passages_for_parse_run,
+        queue_embedding_run: Callable[..., str] = default_queue_embedding_run,
         promote_core_metadata_from_parse: Callable[..., Any] = (
             default_promote_core_metadata_from_parse
         ),
@@ -129,7 +125,7 @@ class ParseWorker:
         self.inspect_pdf = inspect_pdf
         self.chunk_parse_document = chunk_parse_document
         self.persist_parse_result = persist_parse_result
-        self.embed_passages_for_parse_run = embed_passages_for_parse_run
+        self.queue_embedding_run = queue_embedding_run
         self.promote_core_metadata_from_parse = promote_core_metadata_from_parse
         self.heartbeat_interval_seconds = (
             heartbeat_interval_seconds
@@ -198,12 +194,17 @@ class ParseWorker:
                     conn.rollback()
                     raise
 
-                embed_started = time.perf_counter()
-                embedding_warnings = self.embed_passages_for_parse_run(
+                queue_embedding_started = time.perf_counter()
+                self.queue_embedding_run(
                     conn,
-                    storage_run_id,
+                    paper_id=job.paper_id,
+                    space_id=job.space_id,
+                    parse_run_id=storage_run_id,
+                    commit=False,
                 )
-                stage_timings["embed_seconds"] = time.perf_counter() - embed_started
+                stage_timings["queue_embedding_seconds"] = (
+                    time.perf_counter() - queue_embedding_started
+                )
                 stage_timings["total_worker_seconds"] = sum(stage_timings.values())
                 _merge_parse_run_metadata(
                     conn,
@@ -231,7 +232,7 @@ class ParseWorker:
                     paper_id=job.paper_id,
                     space_id=job.space_id,
                     worker_id=self.worker_id,
-                    warnings=[*document.quality.warnings, *embedding_warnings],
+                    warnings=[*document.quality.warnings],
                 )
                 return True
             except Exception as exc:

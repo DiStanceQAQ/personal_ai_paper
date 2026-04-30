@@ -6,6 +6,7 @@ import json
 import sqlite3
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from paper_engine.retrieval.embeddings import (
@@ -18,12 +19,18 @@ from paper_engine.retrieval.embeddings import (
 )
 from paper_engine.pdf.models import ParseAsset, ParseDocument, ParseElement, ParseTable, PassageRecord
 from paper_engine.retrieval.lexical import FTS_TABLE
+from paper_engine.retrieval.vector_index import (
+    delete_passage_embedding_vector_index,
+    upsert_passage_embedding_vector_index,
+)
 
 __all__ = [
     "PassageEmbeddingError",
+    "PassageEmbeddingResult",
     "delete_parse_run_outputs",
     "embed_passages_for_parse_run",
     "persist_parse_result",
+    "sync_passage_embedding_vector_index",
 ]
 
 
@@ -33,6 +40,20 @@ class PassageEmbeddingError(RuntimeError):
     def __init__(self, warnings: Sequence[str]) -> None:
         super().__init__("; ".join(warnings))
         self.warnings = list(warnings)
+
+
+@dataclass(frozen=True)
+class PassageEmbeddingResult:
+    """Summary of embedding work performed for one parse run."""
+
+    passage_count: int
+    embedded_count: int
+    reused_count: int
+    skipped_count: int
+    batch_count: int
+    warnings: list[str]
+    provider: str
+    model: str
 
 
 def _json(value: Any) -> str:
@@ -476,22 +497,21 @@ def _close_provider(provider: EmbeddingProvider) -> None:
 def embed_passages_for_parse_run(
     conn: sqlite3.Connection,
     parse_run_id: str,
-) -> list[str]:
-    """Generate embeddings for persisted passages.
-
-    Embeddings are required for parsed papers. Failures are appended to the
-    parse run and raised so the caller can roll back parse persistence.
-    """
+    *,
+    provider: EmbeddingProvider | None = None,
+    batch_size: int = 16,
+) -> PassageEmbeddingResult:
+    """Generate missing embeddings for persisted passages in batches."""
+    owns_provider = provider is None
     try:
-        config = get_embedding_config(conn)
-        provider = get_embedding_provider(config)
+        active_provider = provider or get_embedding_provider(get_embedding_config(conn))
     except Exception as exc:
         warning = _embedding_warning(exc)
         _append_parse_run_warnings(conn, parse_run_id, [warning])
         raise PassageEmbeddingError([warning]) from exc
 
     try:
-        if not provider.is_configured():
+        if not active_provider.is_configured():
             warning = _embedding_warning(
                 EmbeddingProviderUnavailable("Embedding provider is not configured.")
             )
@@ -508,53 +528,270 @@ def embed_passages_for_parse_run(
             (parse_run_id,),
         ).fetchall()
         if not rows:
-            return []
+            return PassageEmbeddingResult(
+                passage_count=0,
+                embedded_count=0,
+                reused_count=0,
+                skipped_count=0,
+                batch_count=0,
+                warnings=[],
+                provider=active_provider.provider,
+                model=active_provider.model,
+            )
 
-        texts = format_embedding_texts(
-            [str(row["original_text"]) for row in rows],
-            model=provider.model,
-            input_type="passage",
+        skipped_passage_ids = _skip_existing_embedding_rows(
+            conn,
+            rows,
+            provider=active_provider.provider,
+            model=active_provider.model,
         )
-        savepoint = _embedding_savepoint_name()
-        conn.execute(f"SAVEPOINT {savepoint}")
-        try:
-            vectors = provider.embed_texts(texts)
-            if len(vectors) != len(rows):
-                raise ValueError(
-                    f"embedding provider returned {len(vectors)} vectors "
-                    f"for {len(rows)} passages"
-                )
-
-            for row, vector in zip(rows, vectors, strict=True):
-                serialized = serialize_embedding_vector(vector)
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO passage_embeddings (
-                        passage_id, provider, model, dimension,
-                        embedding_json, content_hash, created_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-                    """,
-                    (
-                        str(row["id"]),
-                        provider.provider,
-                        provider.model,
-                        serialized.dimension,
-                        serialized.embedding_json,
-                        row["content_hash"],
-                    ),
-                )
-            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
-        except Exception as exc:
-            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
-            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
-            warning = _embedding_warning(exc)
-            _append_parse_run_warnings(conn, parse_run_id, [warning])
-            raise PassageEmbeddingError([warning]) from exc
+        reusable_by_hash = _load_reusable_embeddings_by_hash(
+            conn,
+            rows,
+            provider=active_provider.provider,
+            model=active_provider.model,
+        )
+        reused_count = _reuse_embedding_rows(
+            conn,
+            rows,
+            reusable_by_hash,
+            provider=active_provider.provider,
+            model=active_provider.model,
+            skipped_passage_ids=skipped_passage_ids,
+        )
+        rows_to_embed = [
+            row
+            for row in rows
+            if str(row["id"]) not in skipped_passage_ids
+            and not _has_reusable_hash(row, reusable_by_hash)
+        ]
+        batch_count = 0
+        embedded_count = 0
+        for batch in _batched(rows_to_embed, max(1, batch_size)):
+            batch_count += 1
+            embedded_count += _embed_passage_batch(
+                conn,
+                batch,
+                parse_run_id=parse_run_id,
+                provider=active_provider,
+            )
     finally:
-        _close_provider(provider)
+        if owns_provider:
+            _close_provider(active_provider)
 
-    return []
+    return PassageEmbeddingResult(
+        passage_count=len(rows),
+        embedded_count=embedded_count,
+        reused_count=reused_count,
+        skipped_count=len(skipped_passage_ids),
+        batch_count=batch_count,
+        warnings=[],
+        provider=active_provider.provider,
+        model=active_provider.model,
+    )
+
+
+def sync_passage_embedding_vector_index(
+    conn: sqlite3.Connection,
+    parse_run_id: str,
+) -> None:
+    """Best-effort sync of completed parse-run embeddings into sqlite-vec."""
+    rows = conn.execute(
+        """
+        SELECT passage_id, provider, model, embedding_json
+        FROM passage_embeddings
+        WHERE passage_id IN (
+            SELECT id
+            FROM passages
+            WHERE parse_run_id = ?
+        )
+        """,
+        (parse_run_id,),
+    ).fetchall()
+    for row in rows:
+        upsert_passage_embedding_vector_index(
+            conn,
+            passage_id=str(row["passage_id"]),
+            provider=str(row["provider"]),
+            model=str(row["model"]),
+            vector=_json_vector(str(row["embedding_json"])),
+        )
+
+
+def _skip_existing_embedding_rows(
+    conn: sqlite3.Connection,
+    rows: Sequence[sqlite3.Row],
+    *,
+    provider: str,
+    model: str,
+) -> set[str]:
+    if not rows:
+        return set()
+    passage_ids = [str(row["id"]) for row in rows]
+    placeholders = ",".join("?" for _ in passage_ids)
+    existing_rows = conn.execute(
+        f"""
+        SELECT passage_id
+        FROM passage_embeddings
+        WHERE provider = ?
+          AND model = ?
+          AND passage_id IN ({placeholders})
+        """,
+        (provider, model, *passage_ids),
+    ).fetchall()
+    return {str(row["passage_id"]) for row in existing_rows}
+
+
+def _load_reusable_embeddings_by_hash(
+    conn: sqlite3.Connection,
+    rows: Sequence[sqlite3.Row],
+    *,
+    provider: str,
+    model: str,
+) -> dict[str, sqlite3.Row]:
+    content_hashes = sorted(
+        {
+            str(row["content_hash"])
+            for row in rows
+            if row["content_hash"] is not None and str(row["content_hash"]).strip()
+        }
+    )
+    if not content_hashes:
+        return {}
+
+    placeholders = ",".join("?" for _ in content_hashes)
+    reusable_rows = conn.execute(
+        f"""
+        SELECT content_hash, dimension, embedding_json
+        FROM passage_embeddings
+        WHERE provider = ?
+          AND model = ?
+          AND content_hash IN ({placeholders})
+        ORDER BY created_at DESC, passage_id DESC
+        """,
+        (provider, model, *content_hashes),
+    ).fetchall()
+    reusable: dict[str, sqlite3.Row] = {}
+    for row in reusable_rows:
+        content_hash = str(row["content_hash"])
+        reusable.setdefault(content_hash, row)
+    return reusable
+
+
+def _reuse_embedding_rows(
+    conn: sqlite3.Connection,
+    rows: Sequence[sqlite3.Row],
+    reusable_by_hash: dict[str, sqlite3.Row],
+    *,
+    provider: str,
+    model: str,
+    skipped_passage_ids: set[str],
+) -> int:
+    reused_count = 0
+    for row in rows:
+        passage_id = str(row["id"])
+        if passage_id in skipped_passage_ids:
+            continue
+        reusable = _reusable_embedding_for_row(row, reusable_by_hash)
+        if reusable is None:
+            continue
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO passage_embeddings (
+                passage_id, provider, model, dimension,
+                embedding_json, content_hash, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+            """,
+            (
+                passage_id,
+                provider,
+                model,
+                int(reusable["dimension"]),
+                str(reusable["embedding_json"]),
+                row["content_hash"],
+            ),
+        )
+        reused_count += 1
+    return reused_count
+
+
+def _reusable_embedding_for_row(
+    row: sqlite3.Row,
+    reusable_by_hash: dict[str, sqlite3.Row],
+) -> sqlite3.Row | None:
+    content_hash = row["content_hash"]
+    if content_hash is None:
+        return None
+    return reusable_by_hash.get(str(content_hash))
+
+
+def _has_reusable_hash(
+    row: sqlite3.Row,
+    reusable_by_hash: dict[str, sqlite3.Row],
+) -> bool:
+    return _reusable_embedding_for_row(row, reusable_by_hash) is not None
+
+
+def _batched(
+    rows: Sequence[sqlite3.Row],
+    batch_size: int,
+) -> list[Sequence[sqlite3.Row]]:
+    return [rows[index : index + batch_size] for index in range(0, len(rows), batch_size)]
+
+
+def _embed_passage_batch(
+    conn: sqlite3.Connection,
+    rows: Sequence[sqlite3.Row],
+    *,
+    parse_run_id: str,
+    provider: EmbeddingProvider,
+) -> int:
+    if not rows:
+        return 0
+
+    texts = format_embedding_texts(
+        [str(row["original_text"]) for row in rows],
+        model=provider.model,
+        input_type="passage",
+    )
+    savepoint = _embedding_savepoint_name()
+    conn.execute(f"SAVEPOINT {savepoint}")
+    try:
+        vectors = provider.embed_texts(texts)
+        if len(vectors) != len(rows):
+            raise ValueError(
+                f"embedding provider returned {len(vectors)} vectors "
+                f"for {len(rows)} passages"
+            )
+
+        for row, vector in zip(rows, vectors, strict=True):
+            serialized = serialize_embedding_vector(vector)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO passage_embeddings (
+                    passage_id, provider, model, dimension,
+                    embedding_json, content_hash, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                (
+                    str(row["id"]),
+                    provider.provider,
+                    provider.model,
+                    serialized.dimension,
+                    serialized.embedding_json,
+                    row["content_hash"],
+                ),
+            )
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+    except Exception as exc:
+        conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        warning = _embedding_warning(exc)
+        _append_parse_run_warnings(conn, parse_run_id, [warning])
+        raise PassageEmbeddingError([warning]) from exc
+    return len(rows)
 
 
 def _delete_fts_for_passages(
@@ -567,6 +804,20 @@ def _delete_fts_for_passages(
         f"DELETE FROM {FTS_TABLE} WHERE passage_id = ?",
         [(passage_id,) for passage_id in passage_ids],
     )
+    delete_passage_embedding_vector_index(conn, passage_ids=passage_ids)
+
+
+def _json_vector(value: str) -> list[float]:
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(decoded, Sequence) or isinstance(decoded, (str, bytes)):
+        return []
+    try:
+        return [float(item) for item in decoded]
+    except (TypeError, ValueError):
+        return []
 
 
 def _parse_run_ids_for_generated_outputs(

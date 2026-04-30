@@ -29,6 +29,7 @@
     "targets": ["dmg", "app", "nsis"],
     "externalBin": [
       "binaries/paper-engine-api",
+      "binaries/paper-engine-worker",
       "binaries/paper-engine-mcp"
     ],
     "resources": {

@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from paper_engine.storage.database import init_db
 from paper_engine.core.startup import StartupTracer
 from paper_engine.api.routes.agent import router as agent_router
+from paper_engine.api.routes.cards import router as cards_router
 from paper_engine.api.routes.papers import router as papers_router
 from paper_engine.api.routes.search import router as search_router
 from paper_engine.api.routes.spaces import router as spaces_router
@@ -23,6 +24,11 @@ from paper_engine.analysis.jobs import recover_stale_analysis_runs
 from paper_engine.analysis.worker import AnalysisWorker, run_analysis_worker_loop
 from paper_engine.pdf.jobs import recover_stale_parse_runs
 from paper_engine.pdf.worker import ParseWorker, run_worker_loop
+from paper_engine.retrieval.embedding_jobs import recover_stale_embedding_runs
+from paper_engine.retrieval.embedding_worker import (
+    EmbeddingWorker,
+    run_embedding_worker_loop,
+)
 from paper_engine.storage.database import get_connection
 
 APP_IMPORTED_AT = time.perf_counter()
@@ -68,6 +74,35 @@ def run_analysis_recovery_loop(
         time.sleep(poll_interval_seconds)
 
 
+def run_embedding_recovery_loop(
+    *,
+    poll_interval_seconds: float,
+    stop: Callable[[], bool] | None = None,
+) -> None:
+    """Requeue or fail stale embedding runs while the API stays online."""
+    while stop is None or not stop():
+        conn = get_connection()
+        try:
+            recover_stale_embedding_runs(
+                conn,
+                stale_after_seconds=int(
+                    os.getenv("PAPER_ENGINE_EMBEDDING_STALE_SECONDS", "900")
+                ),
+                max_attempts=int(os.getenv("PAPER_ENGINE_EMBEDDING_MAX_ATTEMPTS", "3")),
+            )
+        finally:
+            conn.close()
+        time.sleep(poll_interval_seconds)
+
+
+def _background_worker_enabled(env_name: str) -> bool:
+    """Return whether API-process worker loops should start."""
+    explicit_value = os.getenv(env_name)
+    if explicit_value is not None:
+        return explicit_value == "1"
+    return os.getenv("PAPER_ENGINE_API_BACKGROUND_WORKERS_ENABLED", "0") == "1"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Initialize the database on startup."""
@@ -93,6 +128,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             max_attempts=int(os.getenv("PAPER_ENGINE_ANALYSIS_MAX_ATTEMPTS", "2")),
         )
         startup_trace("analysis_runs_recovered", count=str(analysis_recovered))
+        embedding_recovered = recover_stale_embedding_runs(
+            conn,
+            stale_after_seconds=int(os.getenv("PAPER_ENGINE_EMBEDDING_STALE_SECONDS", "900")),
+            max_attempts=int(os.getenv("PAPER_ENGINE_EMBEDDING_MAX_ATTEMPTS", "3")),
+        )
+        startup_trace("embedding_runs_recovered", count=str(embedding_recovered))
     finally:
         conn.close()
 
@@ -101,7 +142,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     recovery_thread: threading.Thread | None = None
     analysis_worker_thread: threading.Thread | None = None
     analysis_recovery_thread: threading.Thread | None = None
-    if os.getenv("PAPER_ENGINE_PARSE_WORKER_ENABLED", "1") == "1":
+    embedding_worker_thread: threading.Thread | None = None
+    embedding_recovery_thread: threading.Thread | None = None
+    if _background_worker_enabled("PAPER_ENGINE_PARSE_WORKER_ENABLED"):
         worker = ParseWorker(worker_id=f"api-worker-{os.getpid()}")
         worker_thread = threading.Thread(
             target=run_worker_loop,
@@ -128,7 +171,39 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         recovery_thread.start()
         startup_trace("parse_recovery_started")
-    if os.getenv("PAPER_ENGINE_ANALYSIS_WORKER_ENABLED", "1") == "1":
+    if _background_worker_enabled("PAPER_ENGINE_EMBEDDING_WORKER_ENABLED"):
+        embedding_worker = EmbeddingWorker(
+            worker_id=f"api-embedding-worker-{os.getpid()}"
+        )
+        embedding_worker_thread = threading.Thread(
+            target=run_embedding_worker_loop,
+            kwargs={
+                "worker": embedding_worker,
+                "poll_interval_seconds": float(
+                    os.getenv("PAPER_ENGINE_EMBEDDING_POLL_SECONDS", "2")
+                ),
+                "stop": stop_event.is_set,
+            },
+            daemon=True,
+        )
+        embedding_worker_thread.start()
+        startup_trace(
+            "embedding_worker_started",
+            worker_id=embedding_worker.worker_id,
+        )
+        embedding_recovery_thread = threading.Thread(
+            target=run_embedding_recovery_loop,
+            kwargs={
+                "poll_interval_seconds": float(
+                    os.getenv("PAPER_ENGINE_EMBEDDING_RECOVERY_POLL_SECONDS", "30")
+                ),
+                "stop": stop_event.is_set,
+            },
+            daemon=True,
+        )
+        embedding_recovery_thread.start()
+        startup_trace("embedding_recovery_started")
+    if _background_worker_enabled("PAPER_ENGINE_ANALYSIS_WORKER_ENABLED"):
         analysis_worker = AnalysisWorker(worker_id=f"api-analysis-worker-{os.getpid()}")
         analysis_worker_thread = threading.Thread(
             target=run_analysis_worker_loop,
@@ -173,6 +248,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if analysis_recovery_thread is not None:
             analysis_recovery_thread.join(timeout=5)
             startup_trace("analysis_recovery_stopped")
+        if embedding_worker_thread is not None:
+            embedding_worker_thread.join(timeout=5)
+            startup_trace("embedding_worker_stopped")
+        if embedding_recovery_thread is not None:
+            embedding_recovery_thread.join(timeout=5)
+            startup_trace("embedding_recovery_stopped")
 
 
 app = FastAPI(
@@ -201,6 +282,7 @@ if STATIC_DIR.exists():
 
 app.include_router(spaces_router)
 app.include_router(papers_router)
+app.include_router(cards_router)
 app.include_router(search_router)
 app.include_router(agent_router)
 

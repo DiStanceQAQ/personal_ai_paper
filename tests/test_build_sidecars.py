@@ -106,6 +106,37 @@ def test_build_onefile_passes_collected_data(
     assert "docling_parse" in command
 
 
+def test_build_onefile_passes_collected_binaries(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(
+        cmd: list[str],
+        cwd: Path,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        binary = tmp_path / "dist" / "paper-engine-api"
+        binary.parent.mkdir()
+        binary.write_text("fake binary")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(build_sidecars, "ROOT", tmp_path)
+    monkeypatch.setattr("scripts.build_sidecars.subprocess.run", fake_run)
+
+    build_sidecars.build_onefile(
+        "paper-engine-api",
+        "paper_engine/sidecar/api.py",
+        collect_binaries=("sqlite_vec",),
+    )
+
+    command = calls[0]
+    assert "--collect-binaries" in command
+    assert "sqlite_vec" in command
+
+
 def test_build_onefile_passes_copy_metadata(
     monkeypatch: Any,
     tmp_path: Path,
@@ -149,7 +180,10 @@ def test_api_sidecar_target_includes_upgraded_pdf_pipeline_modules() -> None:
         "paper_engine.analysis.prompts",
         "paper_engine.analysis.verifier",
         "paper_engine.retrieval.embeddings",
+        "paper_engine.retrieval.embedding_jobs",
+        "paper_engine.retrieval.embedding_worker",
         "paper_engine.retrieval.hybrid",
+        "paper_engine.retrieval.vector_index",
         "paper_engine.pdf.backends.base",
         "paper_engine.pdf.backends.docling",
         "paper_engine.pdf.backends.legacy",
@@ -179,6 +213,7 @@ def test_default_targets_collect_required_embeddings_and_exclude_uninstalled_pdf
             "docling_parse",
             "transformers.models.rt_detr_v2",
             "sentence_transformers",
+            "sqlite_vec",
         }:
             return None
         return importlib.util.find_spec(name)
@@ -192,6 +227,8 @@ def test_default_targets_collect_required_embeddings_and_exclude_uninstalled_pdf
         assert "docling_ibm_models" not in target.collect_submodules
         assert "transformers.models.rt_detr_v2" not in target.collect_submodules
         assert "sentence_transformers" in target.collect_submodules
+        assert "sqlite_vec" in target.collect_submodules
+        assert "sqlite_vec" in target.collect_binaries
         assert "docling_parse" not in target.collect_data
         assert "docling" in target.excluded_modules
         assert "docling_ibm_models" in target.excluded_modules
@@ -209,6 +246,7 @@ def test_installed_optional_dependencies_are_collected_when_available(
             "docling_parse",
             "transformers.models.rt_detr_v2",
             "sentence_transformers",
+            "sqlite_vec",
         }:
             return object()
         return importlib.util.find_spec(name)
@@ -223,22 +261,67 @@ def test_installed_optional_dependencies_are_collected_when_available(
     assert "docling_ibm_models" in api_target.collect_submodules
     assert "transformers.models.rt_detr_v2" in api_target.collect_submodules
     assert "sentence_transformers" in api_target.collect_submodules
+    assert "sqlite_vec" in api_target.collect_submodules
+    assert "sqlite_vec" in api_target.collect_binaries
     assert "docling_parse" in api_target.collect_data
     assert "docling" not in api_target.excluded_modules
     assert "docling_ibm_models" not in api_target.excluded_modules
     assert "transformers.models.rt_detr_v2" not in api_target.excluded_modules
     assert "sentence_transformers" not in api_target.excluded_modules
 
+    worker_target = targets_by_name["paper-engine-worker"]
+    assert "docling" in worker_target.collect_submodules
+    assert "docling_ibm_models" in worker_target.collect_submodules
+    assert "transformers.models.rt_detr_v2" in worker_target.collect_submodules
+    assert "sentence_transformers" in worker_target.collect_submodules
+    assert "sqlite_vec" in worker_target.collect_submodules
+    assert "sqlite_vec" in worker_target.collect_binaries
+    assert "docling_parse" in worker_target.collect_data
+    assert "docling" not in worker_target.excluded_modules
+    assert "docling_ibm_models" not in worker_target.excluded_modules
+    assert "transformers.models.rt_detr_v2" not in worker_target.excluded_modules
+    assert "sentence_transformers" not in worker_target.excluded_modules
+
     mcp_target = targets_by_name["paper-engine-mcp"]
     assert "docling" not in mcp_target.collect_submodules
     assert "docling_ibm_models" not in mcp_target.collect_submodules
     assert "transformers.models.rt_detr_v2" not in mcp_target.collect_submodules
     assert "sentence_transformers" in mcp_target.collect_submodules
+    assert "sqlite_vec" in mcp_target.collect_submodules
+    assert "sqlite_vec" in mcp_target.collect_binaries
     assert "docling_parse" not in mcp_target.collect_data
     assert "docling" in mcp_target.excluded_modules
     assert "docling_ibm_models" in mcp_target.excluded_modules
     assert "transformers.models.rt_detr_v2" in mcp_target.excluded_modules
     assert "sentence_transformers" not in mcp_target.excluded_modules
+
+
+def test_worker_sidecar_target_includes_background_worker_modules() -> None:
+    targets = build_sidecars.build_targets("worker")
+    worker_target = targets[0]
+
+    expected_modules = {
+        "paper_engine.sidecar.worker",
+        "paper_engine.pdf.worker",
+        "paper_engine.pdf.jobs",
+        "paper_engine.analysis.worker",
+        "paper_engine.analysis.jobs",
+        "paper_engine.retrieval.embedding_jobs",
+        "paper_engine.retrieval.embedding_worker",
+    }
+
+    assert worker_target.sidecar_name == "paper-engine-worker"
+    assert worker_target.entrypoint == "paper_engine/sidecar/worker.py"
+    assert expected_modules.issubset(set(worker_target.hidden_imports))
+
+
+def test_desktop_target_builds_api_and_worker_sidecars_only() -> None:
+    targets = build_sidecars.build_targets("desktop")
+
+    assert [target.sidecar_name for target in targets] == [
+        "paper-engine-api",
+        "paper-engine-worker",
+    ]
 
 
 def test_optional_metadata_is_copied_when_distributions_exist(
@@ -277,6 +360,7 @@ def test_sentence_transformers_is_a_required_dependency() -> None:
     pyproject = tomllib.loads((build_sidecars.ROOT / "pyproject.toml").read_text())
 
     assert "sentence-transformers>=2.7.0" in pyproject["project"]["dependencies"]
+    assert "sqlite-vec>=0.1.9" in pyproject["project"]["dependencies"]
 
 
 def test_tauri_bundle_includes_local_embedding_model_resource() -> None:

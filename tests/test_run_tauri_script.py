@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 
-def test_tauri_dev_dry_run_builds_api_sidecar_before_launch() -> None:
-    """Desktop dev should prepare the local model and packaged API sidecar."""
+def test_tauri_dev_dry_run_builds_desktop_sidecars_before_launch() -> None:
+    """Desktop dev should prepare models and packaged desktop sidecars."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is required for launcher script validation")
@@ -43,7 +43,7 @@ def test_tauri_dev_dry_run_builds_api_sidecar_before_launch() -> None:
     }
     assert dry_run["sidecarBuild"] == {
         "command": expected_python,
-        "args": ["scripts/build_sidecars.py", "--target", "api"],
+        "args": ["scripts/build_sidecars.py", "--target", "desktop"],
     }
     assert dry_run["tauri"] == {
         "command": "tauri",

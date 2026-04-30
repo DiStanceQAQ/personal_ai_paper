@@ -448,6 +448,48 @@ def _get_cards_by_type(card_type: str, space_id: str = "") -> list[dict[str, Any
 
 
 @mcp.tool()
+def list_knowledge_cards(
+    space_id: str = "",
+    card_type: str = "",
+    paper_id: str = "",
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """List knowledge cards from the active space, optionally filtered by type or paper."""
+    access_error = _check_access()
+    if access_error:
+        return [access_error]
+    sid, space_error = _resolve_active_space(space_id)
+    if space_error:
+        return [space_error]
+    if card_type and card_type not in CARD_TYPES:
+        return [{"error": f"Invalid card type: {card_type}"}]
+
+    safe_limit = min(500, max(1, int(limit)))
+    query = """
+        SELECT c.*, p.title as paper_title
+        FROM knowledge_cards c
+        JOIN papers p ON p.id = c.paper_id AND p.space_id = c.space_id
+        WHERE c.space_id = ?
+    """
+    params: list[Any] = [sid]
+    if card_type:
+        query += " AND c.card_type = ?"
+        params.append(card_type)
+    if paper_id:
+        query += " AND c.paper_id = ?"
+        params.append(paper_id)
+    query += " ORDER BY c.created_at DESC LIMIT ?"
+    params.append(safe_limit)
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(query, params).fetchall()
+        return _enrich_cards([dict(r) for r in rows], sid)
+    finally:
+        conn.close()
+
+
+@mcp.tool()
 def get_methods(space_id: str = "") -> list[dict[str, Any]]:
     """Get method cards from the active space, each with paper title and source passage."""
     access_error = _check_access()

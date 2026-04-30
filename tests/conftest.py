@@ -25,3 +25,7 @@ def _use_test_embedding_provider(monkeypatch: pytest.MonkeyPatch) -> None:
         "paper_engine.pdf.persistence.get_embedding_provider",
         lambda config: _TestEmbeddingProvider(),
     )
+    monkeypatch.setattr(
+        "paper_engine.retrieval.embedding_worker.get_embedding_provider",
+        lambda config: _TestEmbeddingProvider(),
+    )

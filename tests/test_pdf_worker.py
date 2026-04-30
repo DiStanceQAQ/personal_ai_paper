@@ -100,7 +100,7 @@ def test_worker_executes_selected_parser_and_persists(tmp_path: Path) -> None:
             docling=lambda config: FakeBackend("docling"),
         ),
         persist_parse_result=fake_persist,
-        embed_passages_for_parse_run=lambda conn_arg, parse_run_id: [],
+        queue_embedding_run=lambda *args, **kwargs: "embedding-run-1",
         inspect_pdf=lambda file_path: PdfQualityReport(page_count=1),
         chunk_parse_document=lambda document: [
             PassageRecord(
@@ -119,11 +119,16 @@ def test_worker_executes_selected_parser_and_persists(tmp_path: Path) -> None:
     assert worker.run_once() is True
 
     row = conn.execute("SELECT status FROM parse_runs").fetchone()
+    embedding_run = conn.execute(
+        "SELECT id, status FROM embedding_runs WHERE parse_run_id = 'run-1'"
+    ).fetchone()
     paper = conn.execute(
-        "SELECT parse_status FROM papers WHERE id = 'paper-1'"
+        "SELECT parse_status, embedding_status FROM papers WHERE id = 'paper-1'"
     ).fetchone()
     assert row["status"] == "completed"
+    assert embedding_run is None
     assert paper["parse_status"] == "parsed"
+    assert paper["embedding_status"] == "pending"
     assert persisted["document"].backend == "mineru"
     assert backend.calls
 

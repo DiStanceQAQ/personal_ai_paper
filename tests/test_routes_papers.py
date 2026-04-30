@@ -96,6 +96,7 @@ async def test_upload_pdf_to_active_space(client: AsyncClient) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert data["parse_status"] == "pending"
+    assert data["embedding_status"] == "pending"
     assert data["file_hash"]
     assert "paper" in data["file_path"] or data["file_path"].endswith(".pdf")
     assert data["queued_parse_run_id"]
@@ -104,6 +105,163 @@ async def test_upload_pdf_to_active_space(client: AsyncClient) -> None:
     assert runs.status_code == 200
     assert runs.json()[0]["status"] == "queued"
     assert runs.json()[0]["backend"] in {"docling", "mineru"}
+
+    embedding_runs = await client.get(f"/api/papers/{data['id']}/embedding-runs")
+    assert embedding_runs.status_code == 200
+    assert embedding_runs.json() == []
+
+
+@pytest.mark.asyncio
+async def test_batch_upload_pdfs_to_active_space(client: AsyncClient) -> None:
+    """Batch upload stores each PDF and queues independent parse runs."""
+    await _create_and_activate_space(client)
+
+    resp = await client.post(
+        "/api/papers/upload/batch",
+        files=[
+            ("files", ("first.pdf", _make_minimal_pdf(), "application/pdf")),
+            ("files", ("second.pdf", _make_text_pdf("second paper"), "application/pdf")),
+        ],
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 2
+    assert data["succeeded"] == 2
+    assert data["failed"] == 0
+    assert [item["status"] for item in data["results"]] == ["success", "success"]
+    paper_ids = [item["paper"]["id"] for item in data["results"]]
+    assert len(set(paper_ids)) == 2
+    assert all(item["paper"]["queued_parse_run_id"] for item in data["results"])
+
+    papers = await client.get("/api/papers")
+    assert papers.status_code == 200
+    assert len(papers.json()) == 2
+
+    import paper_engine.storage.database as db_module
+
+    conn = get_connection(db_module.DATABASE_PATH)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM parse_runs").fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_batch_upload_reports_per_file_failures(client: AsyncClient) -> None:
+    """Invalid files in a batch do not block valid PDFs."""
+    await _create_and_activate_space(client)
+
+    resp = await client.post(
+        "/api/papers/upload/batch",
+        files=[
+            ("files", ("paper.pdf", _make_minimal_pdf(), "application/pdf")),
+            ("files", ("notes.txt", b"not a pdf", "text/plain")),
+        ],
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 2
+    assert data["succeeded"] == 1
+    assert data["failed"] == 1
+    assert data["results"][0]["status"] == "success"
+    assert data["results"][1] == {
+        "filename": "notes.txt",
+        "status": "failed",
+        "error": "Only PDF files are accepted",
+    }
+
+
+@pytest.mark.asyncio
+async def test_batch_upload_rejects_too_many_files(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batch upload has a configurable file-count limit."""
+    await _create_and_activate_space(client)
+    monkeypatch.setenv("PAPER_ENGINE_BATCH_UPLOAD_MAX_FILES", "1")
+
+    resp = await client.post(
+        "/api/papers/upload/batch",
+        files=[
+            ("files", ("first.pdf", _make_minimal_pdf(), "application/pdf")),
+            ("files", ("second.pdf", _make_minimal_pdf(), "application/pdf")),
+        ],
+    )
+
+    assert resp.status_code == 413
+    assert resp.json()["detail"] == "Batch upload accepts at most 1 files."
+
+
+@pytest.mark.asyncio
+async def test_upload_rejects_oversized_file(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Single upload enforces a configurable PDF size limit."""
+    await _create_and_activate_space(client)
+    monkeypatch.setenv("PAPER_ENGINE_UPLOAD_MAX_BYTES", "10")
+
+    resp = await client.post(
+        "/api/papers/upload",
+        files={"file": ("large.pdf", _make_minimal_pdf(), "application/pdf")},
+    )
+
+    assert resp.status_code == 413
+    assert "Maximum allowed size is 10 bytes" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_batch_upload_reports_oversized_file_without_blocking_valid_file(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Oversized files fail per item in batch uploads."""
+    await _create_and_activate_space(client)
+    monkeypatch.setenv("PAPER_ENGINE_UPLOAD_MAX_BYTES", "100")
+
+    resp = await client.post(
+        "/api/papers/upload/batch",
+        files=[
+            ("files", ("large.pdf", _make_minimal_pdf(), "application/pdf")),
+            ("files", ("small.pdf", b"%PDF-1.4", "application/pdf")),
+        ],
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["succeeded"] == 1
+    assert data["failed"] == 1
+    assert data["results"][0]["status"] == "failed"
+    assert "Maximum allowed size is 100 bytes" in data["results"][0]["error"]
+    assert data["results"][1]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_batch_upload_duplicate_reuses_existing_paper(client: AsyncClient) -> None:
+    """Duplicate PDFs in a batch reuse the first paper and queue another parse run."""
+    await _create_and_activate_space(client)
+    pdf = _make_minimal_pdf()
+
+    resp = await client.post(
+        "/api/papers/upload/batch",
+        files=[
+            ("files", ("first.pdf", pdf, "application/pdf")),
+            ("files", ("duplicate.pdf", pdf, "application/pdf")),
+        ],
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["succeeded"] == 2
+    first = data["results"][0]["paper"]
+    second = data["results"][1]["paper"]
+    assert second["id"] == first["id"]
+    assert second["queued_parse_run_id"] != first["queued_parse_run_id"]
+
+    papers = await client.get("/api/papers")
+    assert len(papers.json()) == 1
 
 
 @pytest.mark.asyncio

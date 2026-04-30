@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import uuid
 import traceback
 from pathlib import Path
@@ -36,6 +37,11 @@ RELATION_TO_IDEA_VALUES = {
     "result_comparison",
     "unclassified",
 }
+DEFAULT_BATCH_UPLOAD_MAX_FILES = 20
+DEFAULT_UPLOAD_MAX_BYTES = 200 * 1024 * 1024
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+BATCH_UPLOAD_MAX_FILES_ENV = "PAPER_ENGINE_BATCH_UPLOAD_MAX_FILES"
+UPLOAD_MAX_BYTES_ENV = "PAPER_ENGINE_UPLOAD_MAX_BYTES"
 
 
 def _get_active_space_id_from_conn(conn: Any) -> str:
@@ -137,6 +143,25 @@ def _papers_dir(space_id: str) -> Path:
     return p
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _batch_upload_max_files() -> int:
+    return _positive_int_env(BATCH_UPLOAD_MAX_FILES_ENV, DEFAULT_BATCH_UPLOAD_MAX_FILES)
+
+
+def _upload_max_bytes() -> int:
+    return _positive_int_env(UPLOAD_MAX_BYTES_ENV, DEFAULT_UPLOAD_MAX_BYTES)
+
+
 def _parse_response(
     *,
     status: str,
@@ -159,6 +184,10 @@ def _parse_response(
 
 
 def _analysis_run_row_to_dict(row: Any) -> dict[str, Any]:
+    return dict(row)
+
+
+def _embedding_run_row_to_dict(row: Any) -> dict[str, Any]:
     return dict(row)
 
 
@@ -236,21 +265,80 @@ async def upload_paper(file: UploadFile) -> dict[str, Any]:
         )
 
     space_id = _get_active_space_id()
+    return await _store_uploaded_pdf(file, space_id=space_id)
 
-    # Read file content
-    content = await file.read()
 
-    # Save to temp file first to compute hash
+async def upload_papers_batch(files: list[UploadFile]) -> dict[str, Any]:
+    """Upload multiple PDF papers to the active space with per-file results."""
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one PDF file is required")
+    max_files = _batch_upload_max_files()
+    if len(files) > max_files:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Batch upload accepts at most {max_files} files.",
+        )
+
+    space_id = _get_active_space_id()
+    results: list[dict[str, Any]] = []
+    succeeded = 0
+    failed = 0
+
+    for file in files:
+        filename = file.filename or ""
+        if not filename.lower().endswith(".pdf"):
+            failed += 1
+            results.append(
+                {
+                    "filename": filename,
+                    "status": "failed",
+                    "error": "Only PDF files are accepted",
+                }
+            )
+            continue
+
+        try:
+            paper = await _store_uploaded_pdf(file, space_id=space_id)
+        except Exception as exc:
+            failed += 1
+            results.append(
+                {
+                    "filename": filename,
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            )
+            continue
+
+        succeeded += 1
+        results.append(
+            {
+                "filename": filename,
+                "status": "success",
+                "paper": paper,
+            }
+        )
+
+    return {
+        "total": len(files),
+        "succeeded": succeeded,
+        "failed": failed,
+        "results": results,
+    }
+
+
+async def _store_uploaded_pdf(file: UploadFile, *, space_id: str) -> dict[str, Any]:
+    """Store one uploaded PDF and queue a parse run."""
     paper_id = str(uuid.uuid4())
     papers_dir = _papers_dir(space_id)
     dest_path = papers_dir / f"{paper_id}.pdf"
-
-    with open(dest_path, "wb") as f:
-        f.write(content)
+    try:
+        await _write_upload_file(file, dest_path)
+    except Exception:
+        dest_path.unlink(missing_ok=True)
+        raise
 
     file_hash = _compute_sha256(dest_path)
-
-    # Check for duplicate by hash in the same space
     conn = get_connection()
     try:
         existing = conn.execute(
@@ -258,8 +346,7 @@ async def upload_paper(file: UploadFile) -> dict[str, Any]:
             (space_id, file_hash),
         ).fetchone()
         if existing is not None:
-            # Remove the just-saved duplicate file
-            dest_path.unlink()
+            dest_path.unlink(missing_ok=True)
             parse_run_id, _backend = _queue_parse_for_paper(
                 conn,
                 paper_id=str(existing["id"]),
@@ -281,9 +368,9 @@ async def upload_paper(file: UploadFile) -> dict[str, Any]:
         conn.execute(
             """INSERT INTO papers (
                    id, space_id, title, file_path, file_hash, parse_status,
-                   metadata_sources_json, metadata_confidence_json
+                   embedding_status, metadata_sources_json, metadata_confidence_json
                )
-               VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, 'pending', 'pending', ?, ?)""",
             (
                 paper_id,
                 space_id,
@@ -308,10 +395,30 @@ async def upload_paper(file: UploadFile) -> dict[str, Any]:
             raise HTTPException(status_code=500, detail="Failed to create paper record")
         result = _paper_row_to_dict(row)
         result["queued_parse_run_id"] = parse_run_id
+        return result
     finally:
         conn.close()
 
-    return result
+
+async def _write_upload_file(file: UploadFile, dest_path: Path) -> None:
+    """Write an upload in chunks while enforcing the per-file size limit."""
+    max_bytes = _upload_max_bytes()
+    written = 0
+    with open(dest_path, "wb") as destination:
+        while True:
+            chunk = await file.read(UPLOAD_CHUNK_BYTES)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > max_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        "PDF file is too large. "
+                        f"Maximum allowed size is {max_bytes} bytes."
+                    ),
+                )
+            destination.write(chunk)
 
 
 @router.get("")
@@ -399,6 +506,27 @@ async def list_parse_runs(paper_id: str) -> list[dict[str, Any]]:
             (paper_id, space_id),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+async def list_embedding_runs(paper_id: str) -> list[dict[str, Any]]:
+    """List embedding runs for a paper in the active space."""
+    space_id = _get_active_space_id()
+    conn = get_connection()
+    try:
+        _require_paper_in_space(conn, paper_id, space_id)
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM embedding_runs
+            WHERE paper_id = ?
+              AND space_id = ?
+            ORDER BY started_at DESC, id DESC
+            """,
+            (paper_id, space_id),
+        ).fetchall()
+        return [_embedding_run_row_to_dict(row) for row in rows]
     finally:
         conn.close()
 

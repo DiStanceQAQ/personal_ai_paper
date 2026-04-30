@@ -255,21 +255,38 @@ async def test_heuristic_extract_endpoint_is_removed(
 
 
 @pytest.mark.asyncio
-async def test_top_level_cards_routes_are_removed(
+async def test_top_level_cards_routes_are_read_only(
     client: AsyncClient,
     setup_space_and_paper: tuple[str, str],
 ) -> None:
-    """Cards are exposed only through paper-scoped routes."""
+    """Top-level card routes expose active-space reads, while writes stay paper-scoped."""
     _space_id, paper_id = setup_space_and_paper
+    create_resp = await client.post(
+        f"/api/papers/{paper_id}/cards",
+        json={"card_type": "Method", "summary": "M1"},
+    )
+    assert create_resp.status_code == 200
+    card_id = create_resp.json()["id"]
 
     get_resp = await client.get("/api/cards")
+    get_one_resp = await client.get(f"/api/cards/{card_id}")
     post_resp = await client.post(
         "/api/cards",
         json={"paper_id": paper_id, "card_type": "Method", "summary": "M1"},
     )
+    patch_resp = await client.patch(
+        f"/api/cards/{card_id}",
+        json={"summary": "Should still use paper-scoped route"},
+    )
+    delete_resp = await client.delete(f"/api/cards/{card_id}")
 
-    assert get_resp.status_code == 404
-    assert post_resp.status_code == 404
+    assert get_resp.status_code == 200
+    assert [card["id"] for card in get_resp.json()] == [card_id]
+    assert get_one_resp.status_code == 200
+    assert get_one_resp.json()["id"] == card_id
+    assert post_resp.status_code == 405
+    assert patch_resp.status_code == 405
+    assert delete_resp.status_code == 405
 
 
 @pytest.mark.asyncio

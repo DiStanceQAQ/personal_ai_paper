@@ -25,7 +25,7 @@ PDF_OPTIONAL_METADATA = (
     "docling-ibm-models",
     "docling-parse",
 )
-EMBEDDING_REQUIRED_PACKAGES = ("sentence_transformers",)
+EMBEDDING_REQUIRED_PACKAGES = ("sentence_transformers", "sqlite_vec")
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,7 @@ class SidecarTarget:
     hidden_imports: tuple[str, ...] = ()
     collect_submodules: tuple[str, ...] = ()
     collect_data: tuple[str, ...] = ()
+    collect_binaries: tuple[str, ...] = ()
     copy_metadata: tuple[str, ...] = ()
     excluded_modules: tuple[str, ...] = ()
 
@@ -65,8 +66,23 @@ ANALYSIS_PIPELINE_HIDDEN_IMPORTS = (
 )
 RETRIEVAL_HIDDEN_IMPORTS = (
     "paper_engine.retrieval.embeddings",
+    "paper_engine.retrieval.embedding_jobs",
+    "paper_engine.retrieval.embedding_worker",
     "paper_engine.retrieval.hybrid",
     "paper_engine.retrieval.lexical",
+    "paper_engine.retrieval.vector_index",
+)
+WORKER_HIDDEN_IMPORTS = (
+    "paper_engine.sidecar.worker",
+    "paper_engine.storage.database",
+    "paper_engine.storage.migrations",
+    "paper_engine.analysis.jobs",
+    "paper_engine.analysis.worker",
+    "paper_engine.pdf.jobs",
+    "paper_engine.pdf.worker",
+    *ANALYSIS_PIPELINE_HIDDEN_IMPORTS,
+    *PDF_PIPELINE_HIDDEN_IMPORTS,
+    *RETRIEVAL_HIDDEN_IMPORTS,
 )
 API_HIDDEN_IMPORTS = (
     "paper_engine.api.app",
@@ -125,6 +141,7 @@ def build_onefile(
     hidden_imports: tuple[str, ...] = (),
     collect_submodules: tuple[str, ...] = (),
     collect_data: tuple[str, ...] = (),
+    collect_binaries: tuple[str, ...] = (),
     copy_metadata: tuple[str, ...] = (),
     excluded_modules: tuple[str, ...] = (),
 ) -> Path:
@@ -144,6 +161,8 @@ def build_onefile(
         command.extend(["--collect-submodules", package])
     for package in collect_data:
         command.extend(["--collect-data", package])
+    for package in collect_binaries:
+        command.extend(["--collect-binaries", package])
     for distribution in copy_metadata:
         command.extend(["--copy-metadata", distribution])
     for module in excluded_modules:
@@ -183,10 +202,11 @@ def build_targets(target: str) -> list[SidecarTarget]:
         (*api_optional_collections, *EMBEDDING_REQUIRED_PACKAGES)
     )
     mcp_collections = EMBEDDING_REQUIRED_PACKAGES
+    embedding_binaries = ("sqlite_vec",)
     mcp_exclusions = PDF_OPTIONAL_PACKAGES
 
     targets: list[SidecarTarget] = []
-    if target in {"api", "all"}:
+    if target in {"api", "desktop", "all"}:
         targets.append(
             SidecarTarget(
                 sidecar_name="paper-engine-api",
@@ -194,6 +214,20 @@ def build_targets(target: str) -> list[SidecarTarget]:
                 hidden_imports=API_HIDDEN_IMPORTS,
                 collect_submodules=api_collections,
                 collect_data=api_optional_data,
+                collect_binaries=embedding_binaries,
+                copy_metadata=api_optional_metadata,
+                excluded_modules=api_exclusions,
+            )
+        )
+    if target in {"worker", "desktop", "all"}:
+        targets.append(
+            SidecarTarget(
+                sidecar_name="paper-engine-worker",
+                entrypoint="paper_engine/sidecar/worker.py",
+                hidden_imports=WORKER_HIDDEN_IMPORTS,
+                collect_submodules=api_collections,
+                collect_data=api_optional_data,
+                collect_binaries=embedding_binaries,
                 copy_metadata=api_optional_metadata,
                 excluded_modules=api_exclusions,
             )
@@ -205,6 +239,7 @@ def build_targets(target: str) -> list[SidecarTarget]:
                 entrypoint="paper_engine/mcp/server.py",
                 hidden_imports=MCP_HIDDEN_IMPORTS,
                 collect_submodules=mcp_collections,
+                collect_binaries=embedding_binaries,
                 excluded_modules=mcp_exclusions,
             )
         )
@@ -243,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--target",
-        choices=["api", "mcp", "all"],
+        choices=["api", "worker", "desktop", "mcp", "all"],
         default="all",
     )
     args = parser.parse_args(argv)
@@ -258,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
             sidecar_target.hidden_imports,
             sidecar_target.collect_submodules,
             sidecar_target.collect_data,
+            sidecar_target.collect_binaries,
             sidecar_target.copy_metadata,
             sidecar_target.excluded_modules,
         )

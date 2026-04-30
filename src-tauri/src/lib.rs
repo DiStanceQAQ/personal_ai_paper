@@ -13,7 +13,8 @@ const STARTUP_TRACE_ENV: &str = "PAPER_ENGINE_STARTUP_TRACE";
 
 struct BackendState {
     port: u16,
-    child: Mutex<Option<CommandChild>>,
+    api_child: Mutex<Option<CommandChild>>,
+    worker_child: Mutex<Option<CommandChild>>,
     startup_started_at: Instant,
 }
 
@@ -137,6 +138,17 @@ fn sidecar_args(port: u16, data_dir: &str, resource_dir: Option<&str>) -> Vec<St
     args
 }
 
+fn worker_sidecar_args(data_dir: &str, resource_dir: Option<&str>) -> Vec<String> {
+    let mut args = vec!["--data-dir".to_string(), data_dir.to_string()];
+
+    if let Some(path) = resource_dir {
+        args.push("--resource-dir".to_string());
+        args.push(path.to_string());
+    }
+
+    args
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -172,6 +184,7 @@ pub fn run() {
                 .to_str()
                 .ok_or("App resource dir is not valid UTF-8")?;
             let api_args = sidecar_args(port, data_dir_arg, Some(resource_dir_arg));
+            let worker_args = worker_sidecar_args(data_dir_arg, Some(resource_dir_arg));
 
             let sidecar_spawn_started_at = Instant::now();
             startup_trace(startup_started_at, "sidecar_spawn_start", &format!("port={port}"));
@@ -216,9 +229,53 @@ pub fn run() {
                 }
             });
 
+            let worker_spawn_started_at = Instant::now();
+            startup_trace(startup_started_at, "worker_sidecar_spawn_start", "");
+            let (mut worker_rx, worker_child) = app
+                .shell()
+                .sidecar("paper-engine-worker")
+                .map_err(|err| format!("Unable to resolve worker sidecar: {err}"))?
+                .env(STARTUP_TRACE_ENV, "1")
+                .args(worker_args)
+                .spawn()
+                .map_err(|err| format!("Unable to start worker sidecar: {err}"))?;
+            startup_trace(
+                startup_started_at,
+                "worker_sidecar_spawned",
+                &format!(
+                    "pid={} spawn_ms={}",
+                    worker_child.pid(),
+                    worker_spawn_started_at.elapsed().as_millis()
+                ),
+            );
+
+            tauri::async_runtime::spawn(async move {
+                while let Some(event) = worker_rx.recv().await {
+                    match event {
+                        CommandEvent::Stdout(line) => {
+                            eprint!("{}", String::from_utf8_lossy(&line));
+                        }
+                        CommandEvent::Stderr(line) => {
+                            eprint!("{}", String::from_utf8_lossy(&line));
+                        }
+                        CommandEvent::Error(error) => {
+                            eprintln!("Worker sidecar event error: {error}");
+                        }
+                        CommandEvent::Terminated(payload) => {
+                            eprintln!(
+                                "Worker sidecar terminated with code {:?} signal {:?}",
+                                payload.code, payload.signal
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            });
+
             app.manage(BackendState {
                 port,
-                child: Mutex::new(Some(child)),
+                api_child: Mutex::new(Some(child)),
+                worker_child: Mutex::new(Some(worker_child)),
                 startup_started_at,
             });
 
@@ -228,7 +285,12 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 if let Some(state) = window.try_state::<BackendState>() {
-                    if let Ok(mut child) = state.child.lock() {
+                    if let Ok(mut child) = state.worker_child.lock() {
+                        if let Some(process) = child.take() {
+                            let _ = process.kill();
+                        }
+                    }
+                    if let Ok(mut child) = state.api_child.lock() {
                         if let Some(process) = child.take() {
                             let _ = process.kill();
                         }
@@ -332,6 +394,19 @@ mod tests {
                 "127.0.0.1",
                 "--port",
                 "8765",
+                "--data-dir",
+                "/tmp/data",
+                "--resource-dir",
+                "/tmp/resources",
+            ]
+        );
+    }
+
+    #[test]
+    fn worker_sidecar_args_include_resource_dir_when_available() {
+        assert_eq!(
+            worker_sidecar_args("/tmp/data", Some("/tmp/resources")),
+            vec![
                 "--data-dir",
                 "/tmp/data",
                 "--resource-dir",

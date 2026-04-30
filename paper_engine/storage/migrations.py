@@ -13,7 +13,7 @@ __all__ = [
 ]
 
 SCHEMA_VERSION_KEY = "schema_version"
-LATEST_SCHEMA_VERSION = 6
+LATEST_SCHEMA_VERSION = 7
 
 Migration = Callable[[sqlite3.Connection], None]
 
@@ -605,6 +605,102 @@ def _add_metadata_and_analysis_worker_state(conn: sqlite3.Connection) -> None:
         )
 
 
+def _add_embedding_run_worker_state(conn: sqlite3.Connection) -> None:
+    """Track embedding jobs separately from PDF parse runs."""
+    statements = (
+        """
+        ALTER TABLE papers
+        ADD COLUMN embedding_status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(embedding_status IN (
+                'pending', 'running', 'completed', 'failed', 'skipped'
+            ))
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS embedding_runs (
+            id TEXT PRIMARY KEY,
+            paper_id TEXT NOT NULL,
+            space_id TEXT NOT NULL,
+            parse_run_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued'
+                CHECK(status IN ('queued', 'running', 'completed', 'failed')),
+            provider TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            passage_count INTEGER NOT NULL DEFAULT 0,
+            embedded_count INTEGER NOT NULL DEFAULT 0,
+            reused_count INTEGER NOT NULL DEFAULT 0,
+            skipped_count INTEGER NOT NULL DEFAULT 0,
+            batch_count INTEGER NOT NULL DEFAULT 0,
+            warnings_json TEXT NOT NULL DEFAULT '[]',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            started_at TEXT NOT NULL DEFAULT (datetime('now')),
+            completed_at TEXT,
+            claimed_at TEXT,
+            heartbeat_at TEXT,
+            worker_id TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            FOREIGN KEY (paper_id, space_id)
+                REFERENCES papers(id, space_id)
+                ON DELETE CASCADE,
+            FOREIGN KEY (parse_run_id, paper_id, space_id)
+                REFERENCES parse_runs(id, paper_id, space_id)
+                ON DELETE CASCADE,
+            FOREIGN KEY (space_id) REFERENCES spaces(id)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_embedding_runs_status_started
+            ON embedding_runs(status, started_at)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_embedding_runs_paper_status
+            ON embedding_runs(paper_id, status)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_embedding_runs_parse_run_id
+            ON embedding_runs(parse_run_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_embedding_runs_space_id
+            ON embedding_runs(space_id)
+        """,
+    )
+    for statement in statements:
+        try:
+            conn.execute(statement)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+
+    parsed_rows = conn.execute(
+        """
+        SELECT p.id, p.space_id
+        FROM papers p
+        WHERE p.parse_status = 'parsed'
+        """
+    ).fetchall()
+    for row in parsed_rows:
+        embedding_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM passage_embeddings pe
+            JOIN passages ps ON ps.id = pe.passage_id
+            WHERE ps.paper_id = ?
+              AND ps.space_id = ?
+            """,
+            (row["id"], row["space_id"]),
+        ).fetchone()[0]
+        next_status = "completed" if int(embedding_count) > 0 else "pending"
+        conn.execute(
+            """
+            UPDATE papers
+            SET embedding_status = ?
+            WHERE id = ? AND space_id = ?
+            """,
+            (next_status, row["id"], row["space_id"]),
+        )
+
+
 def _json_object(value: object) -> dict[str, object]:
     if not isinstance(value, str) or not value.strip():
         return {}
@@ -636,6 +732,7 @@ MIGRATIONS: dict[int, Migration] = {
     4: _create_passage_embedding_schema,
     5: _add_parse_run_worker_state,
     6: _add_metadata_and_analysis_worker_state,
+    7: _add_embedding_run_worker_state,
 }
 
 

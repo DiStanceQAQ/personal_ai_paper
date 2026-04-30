@@ -326,7 +326,7 @@ def test_mcp_space_isolation_cards(db_path: str) -> None:
     conn.commit()
     conn.close()
 
-    from paper_engine.mcp.server import get_methods
+    from paper_engine.mcp.server import get_methods, list_knowledge_cards
 
     # Only space-1 cards should be returned
     cards = get_methods(space_id="space-1")
@@ -334,10 +334,19 @@ def test_mcp_space_isolation_cards(db_path: str) -> None:
     assert "c1" in card_ids
     assert "c2" not in card_ids
 
+    all_cards = list_knowledge_cards(space_id="space-1")
+    all_card_ids = {c["id"] for c in all_cards}
+    assert "c1" in all_card_ids
+    assert "c2" not in all_card_ids
+
     # Explicitly querying a non-active space should be refused.
     cards2 = get_methods(space_id="space-2")
     assert len(cards2) == 1
     assert "error" in cards2[0]
+
+    all_cards2 = list_knowledge_cards(space_id="space-2")
+    assert len(all_cards2) == 1
+    assert "error" in all_cards2[0]
 
     db_module.DATABASE_PATH = orig
 
@@ -453,7 +462,7 @@ def test_agent_results_have_source_info(db_path: str) -> None:
 
     from paper_engine.mcp.server import (
         list_papers, search_literature, get_paper_summary,
-        get_citation, get_methods, get_evidence_for_claim,
+        get_citation, get_methods, list_knowledge_cards, get_evidence_for_claim,
     )
 
     # list_papers: should have id, space_id, title
@@ -488,6 +497,12 @@ def test_agent_results_have_source_info(db_path: str) -> None:
     assert "id" in methods[0]
     assert "card_type" in methods[0]
     assert "paper_title" in methods[0]
+
+    cards = list_knowledge_cards()
+    assert len(cards) >= 1
+    assert "id" in cards[0]
+    assert "card_type" in cards[0]
+    assert "paper_title" in cards[0]
 
     # get_evidence_for_claim: should have passages and evidence_cards
     evidence = get_evidence_for_claim("transformer")

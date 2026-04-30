@@ -141,11 +141,36 @@ def test_get_methods(db_path: str) -> None:
     assert result[0]["card_type"] == "Method"
 
 
+def test_list_knowledge_cards(db_path: str) -> None:
+    _setup_data(db_path)
+    from paper_engine.mcp.server import list_knowledge_cards
+
+    result = list_knowledge_cards()
+
+    assert len(result) >= 1
+    assert result[0]["id"] == "c1"
+    assert result[0]["card_type"] == "Method"
+    assert result[0]["paper_title"] == "Test Paper"
+
+
+def test_list_knowledge_cards_filters(db_path: str) -> None:
+    _setup_data(db_path)
+    from paper_engine.mcp.server import list_knowledge_cards
+
+    methods = list_knowledge_cards(card_type="Method", paper_id="paper-1")
+    invalid = list_knowledge_cards(card_type="Unknown")
+
+    assert [card["id"] for card in methods] == ["c1"]
+    assert len(invalid) == 1
+    assert "error" in invalid[0]
+
+
 def test_card_tools_include_source_passage_metadata(db_path: str) -> None:
     _setup_data(db_path)
-    from paper_engine.mcp.server import get_methods
+    from paper_engine.mcp.server import get_methods, list_knowledge_cards
 
     result = get_methods()
+    all_cards = list_knowledge_cards()
 
     assert result[0]["source_passage_ids"] == ["p1"]
     assert result[0]["quality_flags"] == ["needs_review"]
@@ -158,6 +183,7 @@ def test_card_tools_include_source_passage_metadata(db_path: str) -> None:
             "quality_flags": ["low_confidence"],
         }
     ]
+    assert all_cards[0]["source_passage_ids"] == ["p1"]
 
 
 def test_get_evidence_for_claim(db_path: str) -> None:

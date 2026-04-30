@@ -58,29 +58,42 @@ For each claimed run:
    parse.
 4. Normalize the body parser output to `ParseDocument`.
 5. Chunk the document into passages.
-6. Persist document elements, tables, assets, passages, FTS rows, and passage
-   embeddings in one transaction.
-7. Mark the run `completed` and the paper `parsed`, or mark the run `failed`
+6. Persist document elements, tables, assets, passages, and FTS rows.
+7. Queue an `embedding_runs` job for the persisted `parse_run`.
+8. Mark the run `completed` and the paper `parsed`, or mark the run `failed`
    and the paper `error` when there is no previous completed parse.
 
-Embedding generation is required for a successful parse. If embeddings fail,
-the run is marked `failed` and unembedded passages are rolled back.
+Embedding generation is decoupled from parsing. If embeddings fail, the paper
+remains parsed and `papers.embedding_status` becomes `failed`; inspect
+`GET /api/papers/{paper_id}/embedding-runs` for `last_error` and batch stats.
+
+The embedding worker batches passages (`PAPER_ENGINE_EMBEDDING_BATCH_SIZE`),
+preloads the configured provider when possible, skips already embedded
+passages, and reuses embeddings with the same `content_hash`,
+provider, and model.
 
 ## Worker Recovery
 
-The API sidecar recovers stale `running` parse runs on startup. Runs whose
-`heartbeat_at` is older than `PAPER_ENGINE_PARSE_STALE_SECONDS` are requeued
-until `PAPER_ENGINE_PARSE_MAX_ATTEMPTS` is reached; after that they are marked
-`failed`.
+The API sidecar performs lightweight stale-run recovery on startup. Heavy
+worker loops run in `paper-engine-worker` by default, not inside the API
+process. Stale `running` parse/embedding/analysis runs are requeued until their
+max attempts are reached; after that they are marked `failed`.
 
 Environment variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PAPER_ENGINE_PARSE_WORKER_ENABLED` | `1` | Start the in-process worker loop when the API starts. |
+| `PAPER_ENGINE_API_BACKGROUND_WORKERS_ENABLED` | `0` | Optional compatibility switch to run workers inside the API process. |
+| `PAPER_ENGINE_PARSE_WORKER_ENABLED` | unset | Explicitly enable/disable API-process parse worker when set to `1` or `0`. |
+| `PAPER_ENGINE_EMBEDDING_WORKER_ENABLED` | unset | Explicitly enable/disable API-process embedding worker when set to `1` or `0`. |
+| `PAPER_ENGINE_ANALYSIS_WORKER_ENABLED` | unset | Explicitly enable/disable API-process analysis worker when set to `1` or `0`. |
 | `PAPER_ENGINE_PARSE_STALE_SECONDS` | `600` | Age threshold for recovering stale `running` jobs on startup. |
 | `PAPER_ENGINE_PARSE_MAX_ATTEMPTS` | `3` | Maximum claim attempts before a stale job is failed. |
 | `PAPER_ENGINE_PARSE_POLL_SECONDS` | `2` | Worker poll interval when no queued run is available. |
+| `PAPER_ENGINE_EMBEDDING_BATCH_SIZE` | `16` | Number of passages embedded per provider call. |
+| `PAPER_ENGINE_EMBEDDING_PREWARM_ENABLED` | `1` | Preload the embedding provider in the worker process. |
+| `PAPER_ENGINE_BATCH_UPLOAD_MAX_FILES` | `20` | Maximum number of PDFs accepted by one batch upload request. |
+| `PAPER_ENGINE_UPLOAD_MAX_BYTES` | `209715200` | Maximum size of one uploaded PDF in bytes. |
 
 ## Parser Setup
 

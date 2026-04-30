@@ -14,6 +14,7 @@ from paper_engine.retrieval.hybrid import (
 
 FTS_TABLE = "passages_fts"
 TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+HYBRID_FTS_CANDIDATE_LIMIT = 200
 
 
 def ensure_fts_index(database_path: Path | None = None) -> None:
@@ -114,7 +115,7 @@ def search_passages(
     use_hybrid = mode == "hybrid" or (
         mode is None and has_semantic_embeddings(space_id, database_path)
     )
-    fts_limit = limit * 2 if use_hybrid else limit
+    fts_limit = max(limit, HYBRID_FTS_CANDIDATE_LIMIT) if use_hybrid else limit
     fts_results = search_passages_fts(
         query,
         space_id,
@@ -124,11 +125,17 @@ def search_passages(
     if not use_hybrid:
         return fts_results
 
+    candidate_passage_ids = [
+        str(row["passage_id"])
+        for row in fts_results
+        if row.get("passage_id") is not None
+    ]
     semantic_results = semantic_vector_search(
         query,
         space_id,
         limit=fts_limit,
         database_path=database_path,
+        candidate_passage_ids=candidate_passage_ids or None,
     )
     if not semantic_results:
         return fts_results[:limit]

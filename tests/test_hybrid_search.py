@@ -11,7 +11,11 @@ from typing import Any
 import pytest
 
 from paper_engine.storage.database import init_db
-from paper_engine.retrieval.hybrid import reciprocal_rank_fusion
+from paper_engine.retrieval.hybrid import (
+    clear_query_embedding_cache,
+    reciprocal_rank_fusion,
+    semantic_vector_search,
+)
 from paper_engine.retrieval.lexical import rebuild_fts_index, search_passages
 
 E5_MODEL = "intfloat/multilingual-e5-small"
@@ -149,7 +153,7 @@ def test_search_defaults_to_fts_when_no_embeddings_exist(
 def test_search_defaults_to_hybrid_when_embeddings_exist(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Auto mode should include semantic-only matches when embeddings exist."""
+    """Auto mode should semantically rerank the FTS candidate set."""
     provider = QueryEmbeddingProvider([1.0, 0.0], model=E5_MODEL)
     monkeypatch.setattr("paper_engine.retrieval.hybrid.get_embedding_provider", lambda config: provider)
 
@@ -171,6 +175,62 @@ def test_search_defaults_to_hybrid_when_embeddings_exist(
             mode="fts",
         )
 
-    assert "passage-2" in [row["passage_id"] for row in hybrid_results]
+    assert [row["passage_id"] for row in hybrid_results] == ["passage-1"]
     assert [row["passage_id"] for row in fts_results] == ["passage-1"]
+    assert provider.calls == [["query: transformer"]]
+
+
+def test_explicit_hybrid_falls_back_to_semantic_when_fts_has_no_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hybrid search should still work when keyword recall finds nothing."""
+    provider = QueryEmbeddingProvider([1.0, 0.0], model=E5_MODEL)
+    monkeypatch.setattr("paper_engine.retrieval.hybrid.get_embedding_provider", lambda config: provider)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.db"
+        _seed_search_rows(db_path, with_embeddings=True)
+
+        results = search_passages(
+            "nonmatching",
+            "space-1",
+            limit=5,
+            database_path=db_path,
+            mode="hybrid",
+        )
+
+    assert [row["passage_id"] for row in results][:1] == ["passage-2"]
+    assert provider.calls == [["query: nonmatching"]]
+
+
+def test_semantic_search_reuses_cached_query_embeddings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated semantic searches for the same query should skip re-embedding."""
+    clear_query_embedding_cache()
+    provider = QueryEmbeddingProvider([1.0, 0.0], model=E5_MODEL)
+    monkeypatch.setattr("paper_engine.retrieval.hybrid.get_embedding_provider", lambda config: provider)
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            _seed_search_rows(db_path, with_embeddings=True)
+
+            first = semantic_vector_search(
+                "transformer",
+                "space-1",
+                limit=5,
+                database_path=db_path,
+            )
+            second = semantic_vector_search(
+                "transformer",
+                "space-1",
+                limit=5,
+                database_path=db_path,
+            )
+    finally:
+        clear_query_embedding_cache()
+
+    assert [row["passage_id"] for row in first] == ["passage-2", "passage-1"]
+    assert [row["passage_id"] for row in second] == ["passage-2", "passage-1"]
     assert provider.calls == [["query: transformer"]]

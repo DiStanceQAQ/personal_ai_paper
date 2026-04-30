@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 import json
 import math
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Literal, TypeAlias
 
@@ -16,11 +18,18 @@ from paper_engine.retrieval.embeddings import (
     get_embedding_config,
     get_embedding_provider,
 )
+from paper_engine.retrieval.vector_index import semantic_search_with_sqlite_vec
 
 SearchMode: TypeAlias = Literal["fts", "hybrid"]
 
 RRF_RANK_CONSTANT = 60
 SNIPPET_LENGTH = 240
+QUERY_EMBEDDING_CACHE_MAX_SIZE = 256
+
+QueryEmbeddingCacheKey: TypeAlias = tuple[str, str, str, str, int | None, str]
+
+_QUERY_EMBEDDING_CACHE_LOCK = threading.Lock()
+_QUERY_EMBEDDING_CACHE: OrderedDict[QueryEmbeddingCacheKey, list[float]] = OrderedDict()
 
 
 def has_semantic_embeddings(
@@ -40,16 +49,36 @@ def semantic_vector_search(
     space_id: str,
     limit: int = 50,
     database_path: Path | None = None,
+    candidate_passage_ids: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Search passages by cosine similarity against stored passage embeddings."""
     if limit <= 0:
         return []
+    candidate_ids = (
+        None
+        if candidate_passage_ids is None
+        else _unique_non_empty(candidate_passage_ids)
+    )
+    if candidate_passage_ids is not None and not candidate_ids:
+        return []
 
     conn = get_connection(database_path)
     try:
-        return _semantic_vector_search_with_connection(conn, query, space_id, limit)
+        return _semantic_vector_search_with_connection(
+            conn,
+            query,
+            space_id,
+            limit,
+            candidate_passage_ids=candidate_ids,
+        )
     finally:
         conn.close()
+
+
+def clear_query_embedding_cache() -> None:
+    """Clear cached query vectors, primarily for deterministic tests."""
+    with _QUERY_EMBEDDING_CACHE_LOCK:
+        _QUERY_EMBEDDING_CACHE.clear()
 
 
 def reciprocal_rank_fusion(
@@ -119,30 +148,53 @@ def _semantic_vector_search_with_connection(
     query: str,
     space_id: str,
     limit: int,
+    *,
+    candidate_passage_ids: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     provider: EmbeddingProvider | None = None
+    provider_name = ""
+    provider_model = ""
     try:
         config = get_embedding_config(conn)
         provider = get_embedding_provider(config)
         if not provider.is_configured():
             return []
-        query_vectors = provider.embed_texts(
-            format_embedding_texts([query], model=provider.model, input_type="query")
-        )
+        provider_name = provider.provider
+        provider_model = provider.model
+        query_vector = _embed_query_with_cache(provider, query)
     except Exception:
         return []
     finally:
         if provider is not None:
             _close_provider(provider)
 
-    if not query_vectors:
-        return []
-    query_vector = _coerce_vector(query_vectors[0])
-    if not query_vector:
+    if provider is None or not query_vector:
         return []
 
+    candidate_ids = _unique_non_empty(candidate_passage_ids)
+    sqlite_vec_results = semantic_search_with_sqlite_vec(
+        conn,
+        query_vector=query_vector,
+        space_id=space_id,
+        provider=provider_name,
+        model=provider_model,
+        limit=limit,
+        candidate_passage_ids=candidate_ids
+        if candidate_passage_ids is not None
+        else None,
+    )
+    if sqlite_vec_results:
+        return sqlite_vec_results
+
+    candidate_clause = ""
+    params: tuple[Any, ...] = (space_id, provider_name, provider_model)
+    if candidate_passage_ids is not None:
+        placeholders = ",".join("?" for _ in candidate_ids)
+        candidate_clause = f"AND p.id IN ({placeholders})"
+        params = (*params, *candidate_ids)
+
     rows = conn.execute(
-        """
+        f"""
         SELECT
             pe.embedding_json,
             p.id AS passage_id,
@@ -158,8 +210,9 @@ def _semantic_vector_search_with_connection(
         WHERE p.space_id = ?
           AND pe.provider = ?
           AND pe.model = ?
+          {candidate_clause}
         """,
-        (space_id, provider.provider, provider.model),
+        params,
     ).fetchall()
 
     results: list[dict[str, Any]] = []
@@ -185,6 +238,60 @@ def _semantic_vector_search_with_connection(
 
     results.sort(key=lambda row: (-float(row["semantic_score"]), str(row["passage_id"])))
     return results[:limit]
+
+
+def _embed_query_with_cache(
+    provider: EmbeddingProvider,
+    query: str,
+) -> list[float]:
+    formatted_query = format_embedding_texts(
+        [query],
+        model=provider.model,
+        input_type="query",
+    )[0]
+    cache_key = _query_embedding_cache_key(provider, formatted_query)
+    with _QUERY_EMBEDDING_CACHE_LOCK:
+        cached = _QUERY_EMBEDDING_CACHE.get(cache_key)
+        if cached is not None:
+            _QUERY_EMBEDDING_CACHE.move_to_end(cache_key)
+            return list(cached)
+
+    vectors = provider.embed_texts([formatted_query])
+    if not vectors:
+        return []
+    vector = _coerce_vector(vectors[0])
+    if not vector:
+        return []
+
+    with _QUERY_EMBEDDING_CACHE_LOCK:
+        cached = _QUERY_EMBEDDING_CACHE.get(cache_key)
+        if cached is not None:
+            _QUERY_EMBEDDING_CACHE.move_to_end(cache_key)
+            return list(cached)
+        _QUERY_EMBEDDING_CACHE[cache_key] = list(vector)
+        while len(_QUERY_EMBEDDING_CACHE) > QUERY_EMBEDDING_CACHE_MAX_SIZE:
+            _QUERY_EMBEDDING_CACHE.popitem(last=False)
+    return vector
+
+
+def _query_embedding_cache_key(
+    provider: EmbeddingProvider,
+    formatted_query: str,
+) -> QueryEmbeddingCacheKey:
+    return (
+        provider.provider,
+        provider.model,
+        str(getattr(provider, "base_url", "")),
+        str(getattr(provider, "api_key", "")),
+        getattr(provider, "dimension", None),
+        formatted_query,
+    )
+
+
+def _unique_non_empty(values: Sequence[str] | None) -> list[str]:
+    if values is None:
+        return []
+    return list(dict.fromkeys(str(value) for value in values if str(value).strip()))
 
 
 def _close_provider(provider: EmbeddingProvider) -> None:

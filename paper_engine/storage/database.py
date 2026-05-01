@@ -117,8 +117,9 @@ def ensure_app_data_dir() -> None:
 def get_connection(database_path: Path | None = None) -> sqlite3.Connection:
     """Get a SQLite connection with foreign keys enabled."""
     path = database_path or DATABASE_PATH
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), timeout=30.0)
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 30000")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -127,6 +128,8 @@ def init_db(database_path: Path | None = None) -> sqlite3.Connection:
     """Initialize the database schema. Safe to call repeatedly (uses IF NOT EXISTS)."""
     ensure_app_data_dir()
     conn = get_connection(database_path)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     conn.executescript(SCHEMA_SQL)
     conn.commit()
 

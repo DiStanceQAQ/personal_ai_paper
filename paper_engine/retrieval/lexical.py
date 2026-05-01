@@ -74,7 +74,6 @@ def _execute_fts_query(
             p.page_number,
             p.paragraph_index,
             snippet({FTS_TABLE}, 4, '<mark>', '</mark>', '...', 32) AS snippet,
-            p.original_text,
             papers.title AS paper_title
         FROM {FTS_TABLE} fts
         JOIN passages p ON p.id = fts.passage_id

@@ -287,6 +287,8 @@ async def test_search_api_returns_results(client: AsyncClient) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) >= 1
+    assert "snippet" in data[0]
+    assert "original_text" not in data[0]
 
 
 @pytest.mark.asyncio

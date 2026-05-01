@@ -361,7 +361,7 @@ export interface SearchResult {
   page_number: number;
   paragraph_index: number;
   snippet: string;
-  original_text: string;
+  original_text?: string;
   paper_title: string;
 }
 

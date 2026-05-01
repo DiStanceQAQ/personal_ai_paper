@@ -20,8 +20,11 @@ src-tauri/binaries/paper-engine-*
 *.sqlite3
 app-data/
 .env
+.env.*
+!.env.example
 .venv/
 venv/
+reference_paper/*.pdf
 resources/models/intfloat-multilingual-e5-small/*
 !resources/models/intfloat-multilingual-e5-small/.gitkeep
 resources/models/docling-hf-cache/

@@ -83,13 +83,20 @@ export interface PaperParseDiagnostics {
   last_parse_time: string | null;
 }
 
+export interface EvidenceBackedUnderstandingField {
+  text: string;
+  source_passage_ids?: string[];
+  evidence_quote?: string;
+  reasoning_summary?: string;
+}
+
 export interface PaperUnderstandingZh {
   one_sentence: string;
-  problem: string;
-  method: string;
-  results: string;
-  conclusion: string;
-  limitations?: string;
+  problem: EvidenceBackedUnderstandingField | null;
+  method: EvidenceBackedUnderstandingField | null;
+  results: EvidenceBackedUnderstandingField | null;
+  conclusion: EvidenceBackedUnderstandingField | null;
+  limitations?: EvidenceBackedUnderstandingField | null;
   reusable_insights?: string[];
   source_passage_ids?: string[];
   confidence?: number;

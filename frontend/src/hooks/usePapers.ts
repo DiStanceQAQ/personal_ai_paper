@@ -3,6 +3,7 @@ import { api } from '../api';
 import type {
   AgentStatus,
   AnalysisRun,
+  EvidenceBackedUnderstandingField,
   EmbeddingRun,
   KnowledgeCard,
   PaperBackgroundTask,
@@ -127,6 +128,24 @@ function stringList(value: unknown): string[] {
     : [];
 }
 
+function parseEvidenceBackedUnderstandingField(value: unknown): EvidenceBackedUnderstandingField | null {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    return text ? { text } : null;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+
+  const payload = value as Record<string, unknown>;
+  const text = nonEmptyString(payload.text);
+  if (!text) return null;
+  return {
+    text,
+    source_passage_ids: stringList(payload.source_passage_ids),
+    evidence_quote: nonEmptyString(payload.evidence_quote),
+    reasoning_summary: nonEmptyString(payload.reasoning_summary),
+  };
+}
+
 function parsePaperUnderstandingZh(run: AnalysisRun | undefined): PaperUnderstandingZh | null {
   if (!run?.metadata_json) return null;
 
@@ -140,11 +159,11 @@ function parsePaperUnderstandingZh(run: AnalysisRun | undefined): PaperUnderstan
     const payload = rawUnderstanding as Record<string, unknown>;
     const understanding: PaperUnderstandingZh = {
       one_sentence: nonEmptyString(payload.one_sentence),
-      problem: nonEmptyString(payload.problem),
-      method: nonEmptyString(payload.method),
-      results: nonEmptyString(payload.results),
-      conclusion: nonEmptyString(payload.conclusion),
-      limitations: nonEmptyString(payload.limitations),
+      problem: parseEvidenceBackedUnderstandingField(payload.problem),
+      method: parseEvidenceBackedUnderstandingField(payload.method),
+      results: parseEvidenceBackedUnderstandingField(payload.results),
+      conclusion: parseEvidenceBackedUnderstandingField(payload.conclusion),
+      limitations: parseEvidenceBackedUnderstandingField(payload.limitations),
       reusable_insights: stringList(payload.reusable_insights),
       source_passage_ids: stringList(payload.source_passage_ids),
       warnings: stringList(payload.warnings),
@@ -378,6 +397,8 @@ function analysisRunProgressPercent(run: AnalysisRun, progress: AnalysisRunProgr
   if (!progress) return 92;
   if (progress.stage === 'metadata') return 84;
   if (progress.stage === 'understanding') return 88;
+  if (progress.stage === 'derive_cards') return 94;
+  if (progress.stage === 'persisting') return 98;
   if (progress.stage === 'ranking') return 98;
   if (progress.total_batches <= 0) return 92;
 
@@ -398,6 +419,8 @@ function analysisRunProgressMessage(
   if (!progress) return 'AI 深度分析正在后台运行...';
   if (progress.stage === 'metadata') return 'AI 深度分析正在识别论文元数据...';
   if (progress.stage === 'understanding') return 'AI 正在建立整篇论文的中文理解...';
+  if (progress.stage === 'derive_cards') return 'AI 正在生成论文级知识卡片...';
+  if (progress.stage === 'persisting') return 'AI 正在保存论文理解和知识卡片...';
 
   const total = progress.total_batches;
   if (progress.stage === 'ranking' && total > 0) {

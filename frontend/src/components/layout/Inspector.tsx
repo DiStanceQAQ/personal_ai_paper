@@ -241,40 +241,17 @@ export const Inspector: React.FC<InspectorProps> = ({
                 <p className="paper-authors">{selectedPaper.authors || '作者未知'}</p>
               </div>
 
-              {(understanding || selectedPaper.abstract) && (
+              {understanding && (
                 <div className="inspector-section">
-                  <div className={understanding ? 'abstract-card ai-understanding-card' : 'abstract-card'}>
-                    {understanding ? (
-                      <>
-                        <div className="ai-understanding-header">
-                          <span>AI 中文理解</span>
-                          {confidenceLabel(understanding.confidence) && (
-                            <strong>{confidenceLabel(understanding.confidence)}</strong>
-                          )}
-                        </div>
-                        {understanding.one_sentence && (
-                          <p className="ai-understanding-one">{understanding.one_sentence}</p>
-                        )}
-                        <div className="ai-understanding-grid">
-                          {understanding.problem && (
-                            <div><span>问题</span><p>{understanding.problem}</p></div>
-                          )}
-                          {understanding.method && (
-                            <div><span>方法</span><p>{understanding.method}</p></div>
-                          )}
-                          {understanding.results && (
-                            <div><span>结果</span><p>{understanding.results}</p></div>
-                          )}
-                          {understanding.conclusion && (
-                            <div><span>结论</span><p>{understanding.conclusion}</p></div>
-                          )}
-                          {understanding.limitations && (
-                            <div><span>局限</span><p>{understanding.limitations}</p></div>
-                          )}
-                        </div>
-                      </>
-                    ) : (
-                      <p>摘要: {selectedPaper.abstract}</p>
+                  <div className="abstract-card ai-understanding-card">
+                    <div className="ai-understanding-header">
+                      <span>AI 中文理解</span>
+                      {confidenceLabel(understanding.confidence) && (
+                        <strong>{confidenceLabel(understanding.confidence)}</strong>
+                      )}
+                    </div>
+                    {understanding.one_sentence && (
+                      <p className="ai-understanding-one">{understanding.one_sentence}</p>
                     )}
                   </div>
                 </div>

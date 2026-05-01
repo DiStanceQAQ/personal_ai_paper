@@ -30,20 +30,16 @@ import { useLlmConfig } from './hooks/useLlmConfig';
 const cardTabs = [
   'Problem',
   'Method',
-  'Object',
-  'Metric',
   'Result',
   'Interpretation',
   'Limitation',
-  'Practical Tip',
-  'Claim',
 ] as const;
 
 function cardLabel(type: string): string {
   const labels: Record<string, string> = {
     Method: '方法', Metric: '指标', Result: '结果', 'Failure Mode': '失败模式',
-    Limitation: '局限性', Claim: '主张', Evidence: '证据', Problem: '问题',
-    Object: '研究对象', Variable: '变量', Interpretation: '解释', 'Practical Tip': '实践建议',
+    Limitation: '局限', Claim: '主张', Evidence: '证据', Problem: '研究问题',
+    Object: '研究对象', Variable: '变量', Interpretation: '结论', 'Practical Tip': '实践建议',
   };
   return labels[type] || type;
 }

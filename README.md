@@ -1,5 +1,7 @@
 # Local Paper Knowledge Engine
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 Local Paper Knowledge Engine is a local-first desktop app for turning research
 PDFs into searchable, source-grounded paper understanding. It organizes papers
 by idea space, parses PDFs into passages, builds local retrieval indexes,

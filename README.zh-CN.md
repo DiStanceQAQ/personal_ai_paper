@@ -1,9 +1,9 @@
 <h1 align="center">Local Paper Knowledge Engine</h1>
 
 <p align="center">
-  本地优先的 AI 论文研究助手。
+  本地论文知识库
   <br />
-  PDF -> 中文理解 -> 可溯源知识卡片 -> MCP。
+  通过AI将论文拆解，并提供MCP接口，便于基于知识库进行研究开展
 </p>
 
 <p align="center">
@@ -31,14 +31,16 @@ Agent 使用。
 ## 功能
 
 - 研究空间：按主题或项目隔离论文与知识。
-- PDF 导入、批量导入、后台解析和解析诊断。
-- 本地 SQLite 存储论文、段落、知识卡片、AI 解析记录和配置。
-- 本地优先检索：支持 FTS，并可选语义检索加速。
-- 中文 AI 论文理解：生成有原文证据支撑的结构化理解。
-- 每篇论文生成 5 张稳定 AI 知识卡片：研究问题、方法、结果、结论、局限。
+- PDF论文 批量导入、向量化和AI解析知识卡片。
+- 检索：支持 FTS和语义检索。
 - PDF 原文查看：方便核对知识卡片对应的原文证据。
-- MCP Server：让外部编码/研究 Agent 读取当前活动研究空间。
-- Tauri 桌面壳：前端 UI、Python API 和后台 worker 作为本地 sidecar 运行。
+- MCP Server：让外部编码/研究 Agent 读取当前活动研究空间内容和知识卡片。
+
+## 界面截图
+
+![界面展示](docs/assets/interface.png)
+
+![检索](docs/assets/search.png)
 
 ## 架构
 
@@ -57,13 +59,6 @@ background worker sidecar
 MCP stdio server
 ```
 
-当前 AI 解析主流程是：
-
-```text
-PDF -> passages -> metadata -> paper_understanding_zh -> 5 derived cards
-```
-
-生成的知识卡片会存入 `knowledge_cards`，每张卡片都保留来源 passage 证据。
 
 ## 环境要求
 
@@ -90,26 +85,6 @@ make frontend-install
 npm install
 ```
 
-## 启动 API 开发服务
-
-```bash
-source .venv/bin/activate
-make dev
-```
-
-打开：
-
-```text
-http://127.0.0.1:8000
-```
-
-常用地址：
-
-```text
-http://127.0.0.1:8000/health
-http://127.0.0.1:8000/docs
-```
-
 ## 启动 Tauri 桌面应用
 
 ```bash
@@ -117,21 +92,7 @@ source .venv/bin/activate
 make tauri-dev
 ```
 
-桌面开发命令会启动 React/Vite 前端，并在启动前检查本地 Python sidecar。
 
-## 前端开发
-
-```bash
-npm run frontend:dev
-```
-
-Vite 开发服务地址：
-
-```text
-http://127.0.0.1:1420
-```
-
-如果直接在浏览器打开前端，也需要同时用 `make dev` 启动后端。
 
 ## 构建
 
@@ -179,50 +140,6 @@ MCP 客户端配置示例：
 MCP 访问默认关闭。连接外部 Agent 前，需要先在应用里开启 Agent Access。
 MCP 工具只暴露当前 active idea space，不会跨空间读取数据。
 
-## 数据与隐私
-
-开发环境默认数据目录：
-
-```text
-app-data/
-```
-
-可以通过环境变量覆盖：
-
-```bash
-PAPER_ENGINE_DATA_DIR=/path/to/data make dev
-```
-
-不要提交本地数据或真实 API Key。请使用 `.env.example` 作为配置模板。
-
-隐私说明见：[docs/privacy.md](docs/privacy.md)。
-
-## PDF 解析
-
-应用支持本地解析和服务型解析。Docling 在本地运行；MinerU 和 GROBID 是可选
-HTTP 服务，如果配置启用，可能会接收 PDF 内容。
-
-详见：[docs/pdf-ingestion.md](docs/pdf-ingestion.md)。
-
-## 测试与质量检查
-
-```bash
-make test
-make typecheck
-npm run frontend:typecheck
-npm run frontend:build
-```
-
-完整后端检查：
-
-```bash
-make check
-```
-
-## 样例数据
-
-本仓库不包含第三方论文 PDF。测试数据说明见：
-[docs/sample-data.md](docs/sample-data.md)。
 
 ## 许可证
 

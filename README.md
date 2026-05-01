@@ -1,9 +1,9 @@
 <h1 align="center">Local Paper Knowledge Engine</h1>
 
 <p align="center">
-  Your local-first AI research copilot.
+  A local paper knowledge base.
   <br />
-  PDFs -> Chinese understanding -> source-grounded cards -> MCP.
+  Use AI to break down papers and expose your knowledge base through MCP.
 </p>
 
 <p align="center">
@@ -32,15 +32,17 @@ MCP server.
 ## Features
 
 - Idea spaces for separating research projects.
-- PDF import, batch import, background parsing, and parse diagnostics.
-- Local SQLite storage for papers, passages, cards, analysis runs, and settings.
-- Local-first retrieval with FTS and optional semantic search acceleration.
-- AI paper understanding in Chinese with source-backed fields.
-- Five stable AI knowledge cards per paper: research problem, method, result,
-  conclusion, and limitation.
+- Batch PDF import, vectorization, and AI-generated knowledge cards.
+- Retrieval with FTS and semantic search.
 - PDF source viewer for checking original evidence.
-- MCP server for Claude Code, Codex, Cursor, and other external agents.
-- Tauri desktop shell with Python API and worker sidecars.
+- MCP server for external coding/research agents to read the active workspace
+  and its knowledge cards.
+
+## Screenshots
+
+![Main interface](docs/assets/interface.png)
+
+![Search](docs/assets/search.png)
 
 ## Architecture
 
@@ -58,15 +60,6 @@ background worker sidecar
     |
 MCP stdio server
 ```
-
-The normal AI analysis flow is:
-
-```text
-PDF -> passages -> metadata -> paper_understanding_zh -> 5 derived cards
-```
-
-The generated cards are stored in `knowledge_cards` and each card keeps source
-passage provenance.
 
 ## Requirements
 
@@ -93,49 +86,12 @@ make frontend-install
 npm install
 ```
 
-## Run the API Development Server
-
-```bash
-source .venv/bin/activate
-make dev
-```
-
-Open:
-
-```text
-http://127.0.0.1:8000
-```
-
-Useful endpoints:
-
-```text
-http://127.0.0.1:8000/health
-http://127.0.0.1:8000/docs
-```
-
 ## Run the Tauri Desktop App
 
 ```bash
 source .venv/bin/activate
 make tauri-dev
 ```
-
-The desktop dev command starts the React/Vite frontend and checks the local
-Python sidecars before launch.
-
-## Frontend Development
-
-```bash
-npm run frontend:dev
-```
-
-The Vite dev server runs on:
-
-```text
-http://127.0.0.1:1420
-```
-
-If you open the frontend in a browser, also start the backend with `make dev`.
 
 ## Build
 
@@ -182,52 +138,6 @@ Example MCP client configuration:
 
 MCP access is disabled by default. Enable Agent Access in the app before
 connecting external agents. MCP tools only expose the current active idea space.
-
-## Data and Privacy
-
-Default development data is stored in:
-
-```text
-app-data/
-```
-
-You can override it:
-
-```bash
-PAPER_ENGINE_DATA_DIR=/path/to/data make dev
-```
-
-Do not commit local data or real API keys. Use `.env.example` as a template.
-
-Privacy details: [docs/privacy.md](docs/privacy.md).
-
-## PDF Parsing
-
-The app supports local and service-backed parser modes. Docling runs locally;
-MinerU and GROBID are optional HTTP services and may receive PDF content if
-configured.
-
-See [docs/pdf-ingestion.md](docs/pdf-ingestion.md).
-
-## Test and Quality Checks
-
-```bash
-make test
-make typecheck
-npm run frontend:typecheck
-npm run frontend:build
-```
-
-Full backend check:
-
-```bash
-make check
-```
-
-## Sample Data
-
-This repository does not include third-party research PDFs. See
-[docs/sample-data.md](docs/sample-data.md) for local testing guidance.
 
 ## License
 

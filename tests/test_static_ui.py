@@ -79,13 +79,13 @@ def test_react_app_gates_shell_until_initial_data_loads() -> None:
 def test_paper_hook_clears_detail_state_when_active_space_changes() -> None:
     """Switching spaces should not leave the inspector showing stale paper details."""
     source = Path("frontend/src/hooks/usePapers.ts").read_text(encoding="utf-8")
-    expected_effect = """useEffect(() => {
-    setSelectedPaper(null);
-    setPassages([]);
-    setCards([]);
-  }, [activeSpaceId]);"""
 
-    assert expected_effect in source
+    assert "setSelectedPaper(null);" in source
+    assert "setPassages([]);" in source
+    assert "setCards([]);" in source
+    assert "setUploadQueue([]);" in source
+    assert "setEmbeddingRunsByPaperId({});" in source
+    assert "}, [activeSpaceId]);" in source
 
 
 def test_react_card_ui_surfaces_source_grounding() -> None:

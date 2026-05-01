@@ -396,7 +396,7 @@ button {
 
 .paper-card-actions {
   position: absolute;
-  top: 8px;
+  bottom: 8px;
   right: 8px;
   display: flex;
   gap: 6px;
@@ -426,13 +426,13 @@ button {
 }
 
 .btn-icon-secondary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
   background: white;
-  color: var(--text-secondary);
-  transition: all 0.2s;
+  color: var(--text-tertiary);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
 }
 
 /* 侧边栏底部 LLM 配置按钮优化 */
@@ -1226,11 +1226,17 @@ button {
 .btn-cancel-minimal { width: 32px; height: 32px; background: var(--bg-main); color: var(--text-secondary); border-radius: 6px; }
 
 /* 选项卡 */
-.tabs { display: flex; background: #f3f4f6; padding: 3px; border-radius: var(--radius-md); width: 100%; overflow: hidden; }
+.tabs { 
+  display: flex; 
+  background: #f3f4f6; 
+  padding: 3px; 
+  border-radius: var(--radius-md); 
+  width: 100%; 
+  overflow: hidden; 
+}
 .tabs-list {
-  display: flex;
-  gap: 4px;
   width: 100%;
+  justify-content: space-between;
   overflow-x: auto;          /* 允许横向滚动 */
   scrollbar-width: none;     /* 隐藏滚动条 (Firefox) */
   flex-wrap: nowrap;         /* 禁止换行 */

@@ -283,14 +283,7 @@ export default function App(): JSX.Element {
 
       setSelectedSearchResult(result);
       await openPaper(paper);
-      setPdfReaderTarget({
-        paper,
-        pageNumber: Math.max(1, result.page_number),
-        sourceLabel: `搜索命中：第 ${result.page_number} 页`,
-        passageId: result.passage_id,
-      });
-      setActiveView('reader');
-      setIsInspectorOpen(true);
+      handleOpenPdfReader(paper, result.page_number, `搜索命中：第 ${result.page_number} 页`, result.passage_id);
       showNotice(`已打开来源：第 ${result.page_number} 页。`);
     } catch (err: any) {
       showNotice(`打开搜索来源失败: ${err.message || '未在当前空间找到这篇论文。'}`, 'error');
@@ -298,19 +291,37 @@ export default function App(): JSX.Element {
     }
   };
 
-  const handleOpenPdfReader = (
+  const handleOpenPdfReader = async (
     paper: Paper,
     pageNumber = 1,
     sourceLabel = 'PDF 原文',
     passageId?: string,
   ) => {
-    setPdfReaderTarget({
-      paper,
-      pageNumber: Math.max(1, pageNumber),
-      sourceLabel,
-      passageId,
-    });
-    setActiveView('reader');
+    const targetUrl = `/?pdfPaperId=${paper.id}&pdfPage=${Math.max(1, pageNumber)}`;
+    const label = `pdf-reader-${paper.id.replace(/[^a-zA-Z0-9_-]/g, '')}`;
+
+    try {
+      const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+      
+      const existing = await WebviewWindow.getByLabel(label);
+      if (existing) {
+        await existing.setFocus();
+        return;
+      }
+
+      const webview = new WebviewWindow(label, {
+        url: targetUrl,
+        title: `${paper.title || 'PDF'} - 论文阅读`,
+        width: 1200,
+        height: 800,
+      });
+
+      webview.once('tauri://error', () => {
+        window.open(targetUrl, '_blank');
+      });
+    } catch (err) {
+      window.open(targetUrl, '_blank');
+    }
   };
 
   const handleClosePdfReader = () => {

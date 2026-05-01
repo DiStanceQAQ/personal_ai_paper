@@ -119,7 +119,7 @@ export const EditPaperModal: React.FC<EditPaperModalProps> = ({ isOpen, onClose,
             <textarea 
               value={formData.abstract || ''} 
               onChange={(e) => handleChange('abstract', e.target.value)}
-              rows={3}
+              style={{ minHeight: '150px' }}
             />
           </div>
         </div>

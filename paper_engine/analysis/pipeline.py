@@ -19,6 +19,8 @@ from paper_engine.analysis.models import (
     AnalysisQualityReport,
     CardExtraction,
     CardExtractionBatch,
+    CardType,
+    EvidenceBackedField,
     MergedAnalysisResult,
     PaperMetadataExtraction,
     PaperUnderstandingExtraction,
@@ -35,6 +37,7 @@ from paper_engine.analysis.prompts import (
 from paper_engine.analysis.verifier import (
     RejectedCardDiagnostic,
     SourceVerificationResult,
+    verify_card_sources,
     verify_extraction_batch_sources,
 )
 from paper_engine.papers.metadata import (
@@ -91,6 +94,13 @@ REFERENCE_LABELS = {
     "literature cited",
 }
 KEY_RANKING_SECTIONS = {"method", "result", "limitation"}
+UNDERSTANDING_CARD_FIELDS: tuple[tuple[str, CardType], ...] = (
+    ("problem", "Problem"),
+    ("method", "Method"),
+    ("results", "Result"),
+    ("conclusion", "Interpretation"),
+    ("limitations", "Limitation"),
+)
 SUMMARY_STOPWORDS = {
     "a",
     "an",
@@ -834,6 +844,75 @@ async def extract_paper_understanding_stage(
     return await _llm_paper_understanding(selected_passages)
 
 
+def derive_cards_from_understanding(
+    understanding: PaperUnderstandingExtraction | None,
+    *,
+    paper_id: str,
+    space_id: str,
+    passages: Sequence[PipelineInput],
+) -> SourceVerificationResult:
+    """Convert whole-paper understanding fields into stable knowledge cards."""
+    if understanding is None:
+        return SourceVerificationResult(accepted_cards=[], rejected_cards=[])
+
+    candidate_cards = [
+        _understanding_field_card(
+            field_name=field_name,
+            card_type=card_type,
+            field_value=getattr(understanding, field_name),
+        )
+        for field_name, card_type in UNDERSTANDING_CARD_FIELDS
+        if getattr(understanding, field_name) is not None
+    ]
+    verification = verify_card_sources(
+        candidate_cards,
+        passages,
+        paper_id=paper_id,
+        space_id=space_id,
+    )
+    return SourceVerificationResult(
+        accepted_cards=verification.accepted_cards,
+        rejected_cards=[
+            RejectedCardDiagnostic(
+                card_index=diagnostic.card_index,
+                reason=diagnostic.reason,
+                message=diagnostic.message,
+                source_passage_ids=diagnostic.source_passage_ids,
+                evidence_quote=diagnostic.evidence_quote,
+                batch_index=diagnostic.batch_index,
+                metadata={
+                    **diagnostic.metadata,
+                    "stage": "derive_cards_from_understanding",
+                },
+            )
+            for diagnostic in verification.rejected_cards
+        ],
+    )
+
+
+def _understanding_field_card(
+    *,
+    field_name: str,
+    card_type: CardType,
+    field_value: EvidenceBackedField | None,
+) -> CardExtraction:
+    if field_value is None:
+        raise ValueError(f"understanding field {field_name} is missing")
+    return CardExtraction(
+        card_type=card_type,
+        summary=field_value.text,
+        source_passage_ids=field_value.source_passage_ids,
+        evidence_quote=field_value.evidence_quote,
+        confidence=0.9,
+        reasoning_summary=field_value.reasoning_summary,
+        quality_flags=["derived_from_paper_understanding"],
+        metadata={
+            "source": "paper_understanding_zh",
+            "understanding_field": field_name,
+        },
+    )
+
+
 async def extract_card_batches_stage(
     paper_id: str,
     space_id: str,
@@ -1202,7 +1281,7 @@ async def run_paper_analysis(
     *,
     analysis_run_id: str | None = None,
 ) -> PaperAnalysisRunResult:
-    """Run metadata extraction, card extraction, ranking, and persistence."""
+    """Run metadata extraction, whole-paper understanding, card derivation, and persistence."""
     timings: dict[str, float] = {}
     load_started = time.perf_counter()
     conn = get_connection()
@@ -1250,55 +1329,42 @@ async def run_paper_analysis(
     timings["understanding_seconds"] = time.perf_counter() - understanding_started
     _raise_if_analysis_cancelled(analysis_run_id)
 
-    batch_select_started = time.perf_counter()
-    batches = select_analysis_passage_batches(passages)
-    timings["batch_selection_seconds"] = time.perf_counter() - batch_select_started
     _record_analysis_progress(
         analysis_run_id,
-        stage="card_extraction",
-        total_batches=len(batches),
+        stage="derive_cards",
+        total_batches=0,
         completed_batches=0,
-        current_batch_index=batches[0].batch_index if batches else None,
+        current_batch_index=None,
         accepted_card_count=0,
         rejected_card_count=0,
-        batch_progress=[],
     )
-    card_extraction_started = time.perf_counter()
-    card_result = await extract_card_batches_stage(
-        paper_id,
-        space_id,
-        batches,
-        analysis_run_id=analysis_run_id,
-        paper_understanding=paper_understanding,
+    derive_cards_started = time.perf_counter()
+    card_result = derive_cards_from_understanding(
+        paper_understanding,
+        paper_id=paper_id,
+        space_id=space_id,
+        passages=passages,
     )
-    timings["card_extraction_seconds"] = (
-        time.perf_counter() - card_extraction_started
-    )
+    timings["derive_cards_seconds"] = time.perf_counter() - derive_cards_started
     _raise_if_analysis_cancelled(analysis_run_id)
     _record_analysis_progress(
         analysis_run_id,
-        stage="ranking",
-        total_batches=len(batches),
-        completed_batches=len(batches),
+        stage="persisting",
+        total_batches=0,
+        completed_batches=0,
         current_batch_index=None,
         accepted_card_count=len(card_result.accepted_cards),
         rejected_card_count=len(card_result.rejected_cards),
     )
-    ranking_started = time.perf_counter()
-    ranked_cards = deduplicate_and_rank_cards_stage(
-        card_result.accepted_cards,
-        rejected_cards=card_result.rejected_cards,
-        batches=batches,
-    )
-    timings["ranking_seconds"] = time.perf_counter() - ranking_started
     result = _merged_analysis_result(
         paper_id=paper_id,
         space_id=space_id,
         metadata=metadata,
         understanding=paper_understanding,
         passages=passages,
-        batches=batches,
-        ranked_cards=ranked_cards,
+        cards=card_result.accepted_cards,
+        rejected_cards=card_result.rejected_cards,
+        diagnostics=_derived_card_diagnostics(card_result, passages),
         provider=provider,
         model=model,
     )
@@ -1569,32 +1635,32 @@ def _merged_analysis_result(
     metadata: PaperMetadataExtraction,
     understanding: PaperUnderstandingExtraction | None,
     passages: Sequence[PipelineInput],
-    batches: Sequence[AnalysisPassageBatch],
-    ranked_cards: CardRankingResult,
+    cards: Sequence[CardExtraction],
+    rejected_cards: Sequence[RejectedCardDiagnostic],
+    diagnostics: Mapping[str, Any],
     provider: str,
     model: str,
 ) -> MergedAnalysisResult:
     diagnostics = {
-        **ranked_cards.diagnostics,
-        "analysis_batch_count": len(batches),
+        **dict(diagnostics),
         "source_passage_count": len(passages),
     }
     warnings: list[str] = []
-    if not batches:
-        warnings.append("no_analysis_batches_selected")
-    if ranked_cards.rejected_cards:
-        warnings.append(f"{len(ranked_cards.rejected_cards)} rejected cards omitted")
+    if understanding is None:
+        warnings.append("no_paper_understanding_generated")
+    if rejected_cards:
+        warnings.append(f"{len(rejected_cards)} derived cards rejected")
 
     return MergedAnalysisResult(
         paper_id=paper_id,
         space_id=space_id,
         metadata=metadata,
         understanding=understanding,
-        cards=ranked_cards.cards,
+        cards=list(cards),
         quality=AnalysisQualityReport(
-            accepted_card_count=len(ranked_cards.cards),
-            rejected_card_count=len(ranked_cards.rejected_cards),
-            source_coverage=_analysis_source_coverage(ranked_cards.cards, passages),
+            accepted_card_count=len(cards),
+            rejected_card_count=len(rejected_cards),
+            source_coverage=_analysis_source_coverage(cards, passages),
             warnings=warnings,
             diagnostics=diagnostics,
         ),
@@ -1602,7 +1668,7 @@ def _merged_analysis_result(
         provider=provider,
         extractor_version="analysis-v2",
         metadata_extra={
-            "analysis_batch_count": len(batches),
+            "analysis_card_strategy": "derived_from_paper_understanding",
             "source_passage_count": len(passages),
             **(
                 {"paper_understanding_zh": understanding.model_dump()}
@@ -1611,6 +1677,23 @@ def _merged_analysis_result(
             ),
         },
     )
+
+
+def _derived_card_diagnostics(
+    verification: SourceVerificationResult,
+    passages: Sequence[PipelineInput],
+) -> dict[str, Any]:
+    return {
+        "analysis_card_strategy": "derived_from_paper_understanding",
+        "expected_card_count": len(UNDERSTANDING_CARD_FIELDS),
+        "accepted_card_count": len(verification.accepted_cards),
+        "rejected_card_count": len(verification.rejected_cards),
+        "rejected_cards": [
+            _diagnostic_payload(diagnostic)
+            for diagnostic in verification.rejected_cards
+        ],
+        "source_passage_count": len(passages),
+    }
 
 
 def _analysis_source_coverage(
@@ -2435,6 +2518,7 @@ __all__ = [
     "CardRankingResult",
     "PaperAnalysisRunResult",
     "deduplicate_and_rank_cards_stage",
+    "derive_cards_from_understanding",
     "extract_card_batches_stage",
     "extract_metadata_stage",
     "persist_analysis_result",

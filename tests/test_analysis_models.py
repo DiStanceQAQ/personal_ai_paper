@@ -14,6 +14,7 @@ from paper_engine.analysis.models import (
     AnalysisQualityReport,
     CardExtraction,
     CardExtractionBatch,
+    EvidenceBackedField,
     MergedAnalysisResult,
     PaperMetadataExtraction,
     PaperUnderstandingExtraction,
@@ -31,6 +32,15 @@ def _card_payload(**overrides: Any) -> dict[str, Any]:
     }
     payload.update(overrides)
     return payload
+
+
+def _evidence_field(text: str = "论文使用来源切片。") -> EvidenceBackedField:
+    return EvidenceBackedField(
+        text=text,
+        source_passage_ids=["passage-1"],
+        evidence_quote="We introduce a retrieval-augmented parser.",
+        reasoning_summary="引用段落直接支持该字段。",
+    )
 
 
 def test_analysis_models_is_in_packaged_runtime_modules() -> None:
@@ -164,10 +174,10 @@ def test_metadata_extraction_and_merged_result_contract() -> None:
         metadata=metadata,
         understanding=PaperUnderstandingExtraction(
             one_sentence="这篇论文提出了一个有来源约束的 PDF 分析流程。",
-            problem="本地论文解析缺少可追溯的结构化理解。",
-            method="论文使用来源切片和结构化模型抽取知识。",
-            results="系统生成了可验证的知识卡片。",
-            conclusion="来源约束可以提升论文知识库的可信度。",
+            problem=_evidence_field("本地论文解析缺少可追溯的结构化理解。"),
+            method=_evidence_field("论文使用来源切片和结构化模型抽取知识。"),
+            results=_evidence_field("系统生成了可验证的知识卡片。"),
+            conclusion=_evidence_field("来源约束可以提升论文知识库的可信度。"),
             source_passage_ids=["passage-1"],
             confidence=0.8,
         ),
@@ -186,18 +196,37 @@ def test_paper_understanding_extraction_requires_grounded_chinese_summary() -> N
     """Whole-paper understanding requires core Chinese reader-facing fields."""
     understanding = PaperUnderstandingExtraction(
         one_sentence="这篇论文研究本地论文解析如何生成可追溯知识。",
-        problem="现有流程难以把 PDF 内容转成可信知识卡片。",
-        method="论文使用来源切片、结构化输出和证据校验。",
-        results="系统能够生成带来源的论文级知识卡片。",
-        conclusion="证据约束有助于减少 AI 摘要幻觉。",
-        limitations="测试集中扫描件仍可能受 OCR 质量影响。",
+        problem=_evidence_field("现有流程难以把 PDF 内容转成可信知识卡片。"),
+        method=_evidence_field("论文使用来源切片、结构化输出和证据校验。"),
+        results=_evidence_field("系统能够生成带来源的论文级知识卡片。"),
+        conclusion=_evidence_field("证据约束有助于减少 AI 摘要幻觉。"),
+        limitations=_evidence_field("测试集中扫描件仍可能受 OCR 质量影响。"),
         reusable_insights=["先建立全局理解，再生成局部卡片。"],
         source_passage_ids=["passage-1"],
         confidence=0.82,
     )
 
-    assert understanding.method.startswith("论文使用")
+    assert understanding.method.text.startswith("论文使用")
     assert understanding.reusable_insights == ["先建立全局理解，再生成局部卡片。"]
+
+
+def test_paper_understanding_accepts_legacy_flat_fields() -> None:
+    """Old stored understanding payloads remain readable."""
+    understanding = PaperUnderstandingExtraction(
+        one_sentence="这篇论文研究本地论文解析。",
+        problem="问题是论文理解不够结构化。",
+        method="方法是结构化抽取。",
+        results="结果是生成知识卡片。",
+        conclusion="结论是流程可用。",
+        limitations="局限是扫描件质量。",
+        source_passage_ids=["passage-1"],
+        confidence=0.8,
+    )
+
+    assert understanding.problem.text == "问题是论文理解不够结构化。"
+    assert understanding.problem.source_passage_ids == ["passage-1"]
+    assert understanding.limitations is not None
+    assert understanding.limitations.text == "局限是扫描件质量。"
 
 
 @pytest.mark.parametrize(
@@ -215,9 +244,9 @@ def test_paper_understanding_extraction_rejects_invalid_values(
     payload: dict[str, Any] = {
         "one_sentence": "这篇论文研究本地论文解析。",
         "problem": "问题是论文理解不够结构化。",
-        "method": "方法是结构化抽取。",
-        "results": "结果是生成知识卡片。",
-        "conclusion": "结论是流程可用。",
+        "method": _evidence_field("方法是结构化抽取。").model_dump(),
+        "results": _evidence_field("结果是生成知识卡片。").model_dump(),
+        "conclusion": _evidence_field("结论是流程可用。").model_dump(),
         "source_passage_ids": ["passage-1"],
         "confidence": 0.8,
     }

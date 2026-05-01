@@ -167,6 +167,17 @@ def build_paper_understanding_prompt(
                 "reusable insights."
             ),
             (
+                "For problem, method, results, conclusion, and limitations, return "
+                "an object with text, source_passage_ids, evidence_quote, and "
+                "reasoning_summary. The text and reasoning_summary must be "
+                "Simplified Chinese; evidence_quote must be copied verbatim from "
+                "one cited source passage."
+            ),
+            (
+                "These five fields will become stable knowledge cards, so each "
+                "field should be paper-level, concise, and independently supported."
+            ),
+            (
                 "If a field is weakly supported, write the most conservative Chinese "
                 "statement and add a warning instead of guessing."
             ),

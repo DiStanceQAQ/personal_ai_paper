@@ -9,6 +9,7 @@ from typing import Any
 from paper_engine.analysis.models import (
     AnalysisQualityReport,
     CardExtraction,
+    EvidenceBackedField,
     MergedAnalysisResult,
     PaperMetadataExtraction,
     PaperUnderstandingExtraction,
@@ -110,6 +111,15 @@ def _insert_card(
     )
 
 
+def _understanding_field(text: str, source_id: str) -> EvidenceBackedField:
+    return EvidenceBackedField(
+        text=text,
+        source_passage_ids=[source_id],
+        evidence_quote=f"Source text {source_id.removeprefix('passage-')}",
+        reasoning_summary=f"{source_id} directly supports this card.",
+    )
+
+
 def _analysis_result() -> MergedAnalysisResult:
     return MergedAnalysisResult(
         paper_id="paper-1",
@@ -121,10 +131,22 @@ def _analysis_result() -> MergedAnalysisResult:
         ),
         understanding=PaperUnderstandingExtraction(
             one_sentence="这篇论文展示了如何持久化有来源约束的知识卡片。",
-            problem="AI 生成的论文卡片需要可追溯来源。",
-            method="系统把通过校验的卡片和来源一起写入数据库。",
-            results="持久化层会记录每张卡片引用的 passage。",
-            conclusion="来源约束让后续检索和复核更可靠。",
+            problem=_understanding_field(
+                "AI 生成的论文卡片需要可追溯来源。",
+                "passage-1",
+            ),
+            method=_understanding_field(
+                "系统把通过校验的卡片和来源一起写入数据库。",
+                "passage-2",
+            ),
+            results=_understanding_field(
+                "持久化层会记录每张卡片引用的 passage。",
+                "passage-3",
+            ),
+            conclusion=_understanding_field(
+                "来源约束让后续检索和复核更可靠。",
+                "passage-1",
+            ),
             source_passage_ids=["passage-1", "passage-2"],
             confidence=0.9,
         ),
@@ -202,7 +224,7 @@ def test_persist_analysis_result_replaces_only_unedited_ai_cards() -> None:
     metadata_json = json.loads(analysis_run["metadata_json"])
     assert metadata_json["metadata_extra"]["route"] == "unit"
     assert metadata_json["paper_understanding_zh"]["one_sentence"].startswith("这篇论文")
-    assert metadata_json["paper_understanding_zh"]["problem"] == "AI 生成的论文卡片需要可追溯来源。"
+    assert metadata_json["paper_understanding_zh"]["problem"]["text"] == "AI 生成的论文卡片需要可追溯来源。"
 
     card_rows = conn.execute(
         """

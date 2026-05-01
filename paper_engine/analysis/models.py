@@ -91,20 +91,60 @@ class PaperMetadataExtraction(_AnalysisContractModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class EvidenceBackedField(_AnalysisContractModel):
+    """A reader-facing understanding field with source-grounded evidence."""
+
+    text: NonBlankString
+    source_passage_ids: SourcePassageIds = Field(min_length=1)
+    evidence_quote: NonBlankString
+    reasoning_summary: NonBlankString
+
+
 class PaperUnderstandingExtraction(_AnalysisContractModel):
     """Whole-paper Chinese understanding synthesized from cited evidence."""
 
     one_sentence: NonBlankString
-    problem: NonBlankString
-    method: NonBlankString
-    results: NonBlankString
-    conclusion: NonBlankString
-    limitations: StrippedString = ""
+    problem: EvidenceBackedField
+    method: EvidenceBackedField
+    results: EvidenceBackedField
+    conclusion: EvidenceBackedField
+    limitations: EvidenceBackedField | None = None
     reusable_insights: list[NonBlankString] = Field(default_factory=list)
     source_passage_ids: SourcePassageIds = Field(min_length=1)
     confidence: float = Field(ge=0.0, le=1.0)
     warnings: list[NonBlankString] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_legacy_flat_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        payload = dict(data)
+        source_ids = payload.get("source_passage_ids")
+        if not isinstance(source_ids, list):
+            source_ids = []
+        for field_name in (
+            "problem",
+            "method",
+            "results",
+            "conclusion",
+            "limitations",
+        ):
+            value = payload.get(field_name)
+            if value is None or value == "":
+                if field_name == "limitations":
+                    payload[field_name] = None
+                continue
+            if isinstance(value, str):
+                payload[field_name] = {
+                    "text": value,
+                    "source_passage_ids": source_ids,
+                    "evidence_quote": value,
+                    "reasoning_summary": "Legacy flat understanding field.",
+                }
+        return payload
 
 
 class CardExtraction(_AnalysisContractModel):
@@ -184,6 +224,7 @@ __all__ = [
     "AnalysisQualityReport",
     "CardExtraction",
     "CardExtractionBatch",
+    "EvidenceBackedField",
     "MergedAnalysisResult",
     "PaperMetadataExtraction",
     "PaperUnderstandingExtraction",

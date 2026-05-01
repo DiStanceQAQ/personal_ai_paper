@@ -1,6 +1,23 @@
-# Local Paper Knowledge Engine
+<h1 align="center">Local Paper Knowledge Engine</h1>
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+<p align="center">
+  本地优先的 AI 论文研究助手。
+  <br />
+  PDF -> 中文理解 -> 可溯源知识卡片 -> MCP。
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-0f766e"></a>
+  <img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-3776AB">
+  <img alt="FastAPI" src="https://img.shields.io/badge/api-FastAPI-009688">
+  <img alt="React" src="https://img.shields.io/badge/frontend-React%20%2B%20Vite-61DAFB">
+  <img alt="Tauri" src="https://img.shields.io/badge/desktop-Tauri-FFC131">
+  <img alt="MCP" src="https://img.shields.io/badge/MCP-ready-111827">
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a>
+</p>
 
 Local Paper Knowledge Engine 是一个本地优先的桌面应用，用来把论文 PDF
 变成可检索、可溯源、可被 AI 理解的研究知识库。它支持按研究主题划分空间，

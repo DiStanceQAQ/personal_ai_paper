@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CheckCircle2, Clock3, Search, UploadCloud, FileText, FolderOpen, Zap, Info, XCircle, Sparkles, ChevronDown } from 'lucide-react';
+import { CheckCircle2, Clock3, Search, UploadCloud, FileText, FolderOpen, Zap, Info, XCircle, Sparkles, ChevronDown, PanelLeft, PanelRight } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import type {
   AgentStatus,
@@ -15,6 +15,8 @@ import type {
 } from '../../types';
 import { PaperCard } from '../ui/PaperCard';
 import { PdfReader } from '../ui/PdfReader';
+import { useOutsideClick } from '../../hooks/useOutsideClick';
+import { useUIStore } from '../../store/uiStore';
 
 interface WorkspaceProps {
   activeSpace: Space | null;
@@ -81,12 +83,15 @@ export const Workspace: React.FC<WorkspaceProps> = ({
   onClosePdfReader,
   onReaderPageChange,
 }) => {
+  const { isSidebarOpen, setIsSidebarOpen, isInspectorOpen, setIsInspectorOpen } = useUIStore();
   const canSearch = query.trim().length > 0 && searchStatus !== 'loading';
   const uploadSucceeded = uploadQueue.filter((item) => item.status === 'success').length;
   const uploadFailed = uploadQueue.filter((item) => item.status === 'failed').length;
   const uploadInProgress = uploadQueue.some((item) => item.status === 'uploading');
   const [isDraggingPdf, setIsDraggingPdf] = useState(false);
   const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
+  const menuRef = useOutsideClick(() => setIsModeMenuOpen(false));
+
   const warmupStatusLabel = (() => {
     if (searchMode !== 'hybrid') return null;
     if (!searchWarmup) return '语义检索将在后台预热';
@@ -121,9 +126,22 @@ export const Workspace: React.FC<WorkspaceProps> = ({
   return (
     <section className="workspace">
       <header className="topbar">
-        <div>
-          <p className="eyebrow">当前工作空间</p>
-          <h2>{activeSpace?.name || '未选择空间'}</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {!isSidebarOpen && (
+            <button
+              className="btn-icon-secondary"
+              onClick={() => setIsSidebarOpen(true)}
+              aria-label="展开侧边栏"
+              title="展开侧边栏"
+              style={{ width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0 }}
+            >
+              <PanelLeft size={16} />
+            </button>
+          )}
+          <div>
+            <p className="eyebrow">当前工作空间</p>
+            <h2>{activeSpace?.name || '未选择空间'}</h2>
+          </div>
         </div>
         <div className="topbar-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button
@@ -145,6 +163,18 @@ export const Workspace: React.FC<WorkspaceProps> = ({
           >
             <Info size={16} />
           </button>
+
+          {!isInspectorOpen && (
+            <button
+              className="btn-icon-secondary"
+              onClick={() => setIsInspectorOpen(true)}
+              aria-label="展开详情栏"
+              title="展开详情栏"
+              style={{ width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0 }}
+            >
+              <PanelRight size={16} />
+            </button>
+          )}
         </div>
       </header>
 
@@ -242,7 +272,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                     placeholder="在海量论文中深度检索知识..."
                   />
 
-                  <div className="search-btn-group">
+                  <div className="search-btn-group" ref={menuRef}>
                     <button
                       className="btn-search-main-combined"
                       onClick={onSearch}
@@ -262,39 +292,33 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                     </button>
 
                     {isModeMenuOpen && (
-                      <>
-                        <div
-                          className="dropdown-overlay"
-                          onClick={() => setIsModeMenuOpen(false)}
-                        />
-                        <div className="search-mode-menu animation-fadeIn" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            type="button"
-                            className={searchMode === 'fts' ? 'menu-item active' : 'menu-item'}
-                            onClick={() => { setSearchMode('fts'); setIsModeMenuOpen(false); }}
-                          >
-                            <div className="menu-icon"><Zap size={14} /></div>
-                            <div className="menu-item-content">
-                              <strong>快速关键词检索</strong>
-                              <span>默认模式，速度最快，适合查明确术语。</span>
-                            </div>
-                            {searchMode === 'fts' && <CheckCircle2 size={14} className="check-mark" />}
-                          </button>
+                      <div className="search-mode-menu animation-fadeIn">
+                        <button
+                          type="button"
+                          className={searchMode === 'fts' ? 'menu-item active' : 'menu-item'}
+                          onClick={() => { setSearchMode('fts'); setIsModeMenuOpen(false); }}
+                        >
+                          <div className="menu-icon"><Zap size={14} /></div>
+                          <div className="menu-item-content">
+                            <strong>快速关键词检索</strong>
+                            <span>默认模式，速度最快，适合查明确术语。</span>
+                          </div>
+                          {searchMode === 'fts' && <CheckCircle2 size={14} className="check-mark" />}
+                        </button>
 
-                          <button
-                            type="button"
-                            className={searchMode === 'hybrid' ? 'menu-item active' : 'menu-item'}
-                            onClick={() => { setSearchMode('hybrid'); setIsModeMenuOpen(false); }}
-                          >
-                            <div className="menu-icon"><Sparkles size={14} /></div>
-                            <div className="menu-item-content">
-                              <strong>语义深度检索</strong>
-                              <span>启用 embedding 语义召回，更聪明但会慢一些。</span>
-                            </div>
-                            {searchMode === 'hybrid' && <CheckCircle2 size={14} className="check-mark" />}
-                          </button>
-                        </div>
-                      </>
+                        <button
+                          type="button"
+                          className={searchMode === 'hybrid' ? 'menu-item active' : 'menu-item'}
+                          onClick={() => { setSearchMode('hybrid'); setIsModeMenuOpen(false); }}
+                        >
+                          <div className="menu-icon"><Sparkles size={14} /></div>
+                          <div className="menu-item-content">
+                            <strong>语义深度检索</strong>
+                            <span>启用 embedding 语义召回，更聪明但会慢一些。</span>
+                          </div>
+                          {searchMode === 'hybrid' && <CheckCircle2 size={14} className="check-mark" />}
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -326,11 +350,26 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                 )}
 
                 {searchStatus === 'loading' && (
-                  <div className="search-state">
-                    <div className="spinner" aria-hidden="true" />
-                    <h3>正在检索</h3>
-                    <p>正在匹配论文片段和相关上下文。</p>
-                  </div>
+                  <>
+                    <div className="skeleton-card">
+                      <div className="skeleton-line title"></div>
+                      <div className="skeleton-line medium"></div>
+                      <div className="skeleton-line short"></div>
+                      <div className="skeleton-line meta"></div>
+                    </div>
+                    <div className="skeleton-card" style={{ opacity: 0.7 }}>
+                      <div className="skeleton-line title"></div>
+                      <div className="skeleton-line medium"></div>
+                      <div className="skeleton-line short"></div>
+                      <div className="skeleton-line meta"></div>
+                    </div>
+                    <div className="skeleton-card" style={{ opacity: 0.4 }}>
+                      <div className="skeleton-line title"></div>
+                      <div className="skeleton-line medium"></div>
+                      <div className="skeleton-line short"></div>
+                      <div className="skeleton-line meta"></div>
+                    </div>
+                  </>
                 )}
 
                 {searchStatus === 'empty' && (

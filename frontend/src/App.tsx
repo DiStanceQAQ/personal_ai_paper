@@ -9,6 +9,7 @@ import type {
   SearchStatus,
   SearchWarmupState,
 } from './types';
+import { useUIStore } from './store/uiStore';
 
 // Layout Components
 import { Sidebar } from './components/layout/Sidebar';
@@ -64,15 +65,12 @@ function embeddingLabel(status: EmbeddingStatus): string {
 
 export default function App(): JSX.Element {
   // --- Global UI State ---
+  const { notice, setNotice, showNotice, activeView, setActiveView, isSidebarOpen, setIsSidebarOpen, isInspectorOpen, setIsInspectorOpen } = useUIStore();
   const [initialLoadStatus, setInitialLoadStatus] = useState<'starting' | 'ready'>('starting');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [notice, setNotice] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
   const [projectRoot, setProjectRoot] = useState<string>('');
 
   // --- View State ---
-  const [activeView, setActiveView] = useState<'library' | 'search' | 'reader'>('library');
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [isInspectorOpen, setIsInspectorOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<(typeof cardTabs)[number]>('Method');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -107,6 +105,35 @@ export default function App(): JSX.Element {
     !isSidebarOpen ? 'sidebar-collapsed' : '',
     !isInspectorOpen ? 'inspector-collapsed' : '',
   ].filter(Boolean).join(' ');
+
+  // --- Global Keyboard Shortcuts ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd/Ctrl + K to search
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setActiveView('search');
+        const searchInput = document.querySelector('.search-input-wrapper input') as HTMLInputElement;
+        if (searchInput) searchInput.focus();
+      }
+      
+      // Cmd/Ctrl + \ to toggle sidebar
+      if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
+        e.preventDefault();
+        setIsSidebarOpen((prev) => !prev);
+      }
+
+      // Esc to close pdf reader or modals (modals usually have their own Esc handler, but for Reader view:)
+      if (e.key === 'Escape') {
+        if (activeView === 'reader') {
+          setActiveView('library');
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeView, setActiveView, setIsSidebarOpen]);
 
   // --- Initial Mount ---
   useEffect(() => {
@@ -209,7 +236,7 @@ export default function App(): JSX.Element {
       await api.setAgentStatus(enabled);
       const newStatus = await api.agentStatus();
       setAgentStatus(newStatus);
-    } catch { setNotice({ message: '智能代理状态切换失败。', type: 'error' }); }
+    } catch { showNotice('智能代理状态切换失败。', 'error'); }
   };
 
   const handleSearch = async () => {
@@ -234,7 +261,7 @@ export default function App(): JSX.Element {
       setResults([]);
       setSearchError(err.message || '检索请求失败，请检查本地服务后重试。');
       setSearchStatus('error');
-      setNotice({ message: `搜索请求失败: ${err.message || '请检查本地服务'}`, type: 'error' });
+      showNotice(`搜索请求失败: ${err.message || '请检查本地服务'}`, 'error');
     }
   };
 
@@ -264,12 +291,9 @@ export default function App(): JSX.Element {
       });
       setActiveView('reader');
       setIsInspectorOpen(true);
-      setNotice({ message: `已打开来源：第 ${result.page_number} 页。`, type: 'success' });
+      showNotice(`已打开来源：第 ${result.page_number} 页。`);
     } catch (err: any) {
-      setNotice({
-        message: `打开搜索来源失败: ${err.message || '未在当前空间找到这篇论文。'}`,
-        type: 'error',
-      });
+      showNotice(`打开搜索来源失败: ${err.message || '未在当前空间找到这篇论文。'}`, 'error');
       return;
     }
   };
@@ -308,21 +332,21 @@ export default function App(): JSX.Element {
   const handleUpdatePaper = async (paperId: string, data: Partial<Paper>) => {
     try {
       const updated = await api.updatePaper(paperId, data);
-      setNotice({ message: '论文元数据已更新。', type: 'success' });
+      showNotice('论文元数据已更新。');
       setSelectedPaper(updated);
       modals.closeModal('editPaper');
       await loadPapers();
-    } catch { setNotice({ message: '更新失败。', type: 'error' }); }
+    } catch { showNotice('更新失败。', 'error'); }
   };
 
   const handleDeleteCard = async (cardId: string) => {
     if (!selectedPaper) return;
     try {
       await api.deleteCard(selectedPaper.id, cardId);
-      setNotice({ message: '卡片已移除。', type: 'success' });
+      showNotice('卡片已移除。');
       const paperCards = await api.listCards(selectedPaper.id);
       setCards(paperCards);
-    } catch { setNotice({ message: '移除卡片失败。', type: 'error' }); }
+    } catch { showNotice('移除卡片失败。', 'error'); }
   };
 
   const handleUpdateCard = async (cardId: string, summary: string) => {
@@ -332,7 +356,7 @@ export default function App(): JSX.Element {
       const paperCards = await api.listCards(selectedPaper.id);
       setCards(paperCards);
     } catch {
-      setNotice({ message: '更新卡片失败。', type: 'error' });
+      showNotice('更新卡片失败。', 'error');
       throw new Error('Update failed');
     }
   };
@@ -341,10 +365,10 @@ export default function App(): JSX.Element {
     if (!selectedPaper) return;
     try {
       await api.createCard(selectedPaper.id, { card_type: type, summary, confidence: 1.0 });
-      setNotice({ message: '已手动添加知识卡片。', type: 'success' });
+      showNotice('已手动添加知识卡片。');
       const paperCards = await api.listCards(selectedPaper.id);
       setCards(paperCards);
-    } catch { setNotice({ message: '添加卡片失败。', type: 'error' }); }
+    } catch { showNotice('添加卡片失败。', 'error'); }
   };
 
   // --- Render Helpers ---

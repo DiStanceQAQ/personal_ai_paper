@@ -1226,10 +1226,64 @@ button {
 .btn-cancel-minimal { width: 32px; height: 32px; background: var(--bg-main); color: var(--text-secondary); border-radius: 6px; }
 
 /* 选项卡 */
-.tabs { display: flex; background: #f3f4f6; padding: 3px; border-radius: var(--radius-md); width: 100%; }
-.tabs-list { display: flex; gap: 2px; width: 100%; }
-.tab-btn { flex: 1; height: 30px; font-size: 11px; font-weight: 700; border-radius: var(--radius-sm); color: var(--text-tertiary); text-transform: uppercase; }
+.tabs { display: flex; background: #f3f4f6; padding: 3px; border-radius: var(--radius-md); width: 100%; overflow: hidden; }
+.tabs-list {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+  overflow-x: auto;          /* 允许横向滚动 */
+  scrollbar-width: none;     /* 隐藏滚动条 (Firefox) */
+  flex-wrap: nowrap;         /* 禁止换行 */
+}
+.tabs-list::-webkit-scrollbar {
+  display: none;             /* 隐藏滚动条 (Chrome/Safari) */
+}
+.tab-btn {
+  flex: 0 0 auto;            /* 不允许压缩，根据内容撑开 */
+  padding: 0 12px;
+  height: 30px; font-size: 11px; font-weight: 700; border-radius: var(--radius-sm); color: var(--text-tertiary); text-transform: uppercase;
+}
 .tab-btn.active { background: white; color: var(--accent); box-shadow: var(--shadow-sm); }
+
+/* Focus styles improvement */
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+/* Skeleton Loading */
+@keyframes shimmer {
+  0% { background-position: -1000px 0; }
+  100% { background-position: 1000px 0; }
+}
+
+.skeleton-card {
+  width: 100%;
+  padding: 24px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.skeleton-line {
+  height: 16px;
+  border-radius: 4px;
+  background: #f6f7f8;
+  background-image: linear-gradient(to right, #f6f7f8 0%, #edeef1 20%, #f6f7f8 40%, #f6f7f8 100%);
+  background-repeat: no-repeat;
+  background-size: 1000px 100%;
+  animation: shimmer 2s infinite linear forwards;
+}
+
+.skeleton-line.short { width: 40%; }
+.skeleton-line.medium { width: 70%; }
+.skeleton-line.title { height: 20px; width: 60%; margin-bottom: 8px; }
+.skeleton-line.meta { height: 12px; width: 30%; margin-top: 8px; }
 
 /* 模态框与通用样式 */
 .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.4); backdrop-filter: blur(12px); display: grid; place-items: center; z-index: 9999; }
